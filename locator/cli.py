@@ -173,6 +173,11 @@ def parse_args():
         action="store_true",
         help="Print prediction metrics",
     )
+    parser.add_argument(
+        "--disable_gpu",
+        action="store_true",
+        help="Disable GPU usage even if available",
+    )
 
     return parser.parse_args()
 

@@ -16,6 +16,38 @@ from .models import create_network
 from .utils import normalize_locs, filter_snps
 
 
+def setup_gpu():
+    """Configure GPU settings for optimal usage.
+
+    This function:
+    1. Lists available GPUs
+    2. If GPUs are available, selects the first one
+    3. Enables memory growth to prevent TensorFlow from allocating all GPU memory
+
+    Returns:
+        bool: True if GPU is available and configured, False otherwise
+    """
+    gpus = tf.config.list_physical_devices("GPU")
+    if not gpus:
+        print("No GPU devices available. Running on CPU.")
+        return False
+
+    try:
+        # Only use the first GPU
+        tf.config.set_visible_devices(gpus[0], "GPU")
+
+        # Enable memory growth
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+
+        print(f"Using GPU: {gpus[0].name}")
+        return True
+    except RuntimeError as e:
+        print(f"GPU configuration error: {e}")
+        print("Falling back to CPU.")
+        return False
+
+
 class Locator:
     """A class for predicting geographic locations from genetic data.
 
@@ -176,6 +208,25 @@ class Locator:
         self.meanlat = None
         self.sdlat = None
         self.positions = None  # For windowed analysis
+
+        # Setup GPU if not explicitly disabled
+        if not self.config.get("disable_gpu", False):
+            # Only set CUDA_VISIBLE_DEVICES if gpu_number is explicitly specified
+            if self.config.get("gpu_number") is not None:
+                import os
+
+                os.environ["CUDA_VISIBLE_DEVICES"] = str(self.config["gpu_number"])
+            else:
+                setup_gpu()
+
+        # Set memory growth for better GPU memory management
+        gpus = tf.config.list_physical_devices("GPU")
+        if gpus:
+            try:
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+            except RuntimeError as e:
+                print(f"GPU memory growth setting failed: {e}")
 
     def _load_from_zarr(self, zarr_path):
         """Load genotypes from zarr file.
@@ -898,7 +949,7 @@ class Locator:
         ac = genotypes.to_allele_counts()[:, :, 1]  # Get counts of alternate allele
 
         # Calculate allele frequencies
-        for i in tqdm(range(ac.shape[0])):
+        for i in range(ac.shape[0]):
             freq = np.sum(ac[i, :]) / (ac.shape[1] * 2)
             af.append(freq)
         af = np.array(af)
