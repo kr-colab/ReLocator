@@ -8,7 +8,7 @@ The easiest way to install `locator` is to download the github repo and run the 
 ```
 conda create --name locator
 conda activate locator
-git clone https://github.com/kr-colab/locator.git
+git clone https://github.com/kr-colab/relocator.git
 cd locator
 pip install .
 ```
