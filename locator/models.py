@@ -19,15 +19,8 @@ def euclidean_distance_loss(y_true, y_pred):
     return K.sqrt(K.sum(K.square(y_pred - y_true), axis=-1))
 
 
-def create_network(input_shape, width=256, n_layers=8, dropout_prop=0.25):
+def create_network(input_shape, width=256, n_layers=8, dropout_prop=0.25, optimizer_config=None):
     """Create a neural network model for geographic location prediction.
-
-    This function creates a deep neural network with the following architecture:
-    - Input normalization layer
-    - First half of dense layers with ELU activation
-    - Middle dropout layer
-    - Second half of dense layers with ELU activation
-    - Two final dense layers for coordinate prediction
 
     Args:
         input_shape (int): Number of input features (SNPs)
@@ -36,6 +29,12 @@ def create_network(input_shape, width=256, n_layers=8, dropout_prop=0.25):
             Defaults to 8.
         dropout_prop (float, optional): Dropout proportion for middle dropout layer.
             Defaults to 0.25.
+        optimizer_config (dict, optional): Configuration for the optimizer.
+            Should contain:
+                - algo: str, "adam" or "adamw"
+                - learning_rate: float
+                - weight_decay: float (only for adamw)
+            Defaults to None (uses Adam with default settings).
 
     Returns:
         keras.Model: Compiled Keras model ready for training
@@ -68,8 +67,22 @@ def create_network(input_shape, width=256, n_layers=8, dropout_prop=0.25):
     # Create model with explicit inputs/outputs
     model = keras.Model(inputs=inputs, outputs=outputs, name="locator_network")
 
-    # Compile model with same optimizer and loss as original
-    model.compile(optimizer="Adam", loss=euclidean_distance_loss)
+    # Configure optimizer
+    if optimizer_config is None:
+        optimizer = "Adam"
+    else:
+        if optimizer_config["algo"].lower() == "adam":
+            optimizer = keras.optimizers.Adam(learning_rate=optimizer_config["learning_rate"])
+        elif optimizer_config["algo"].lower() == "adamw":
+            optimizer = keras.optimizers.AdamW(
+                learning_rate=optimizer_config["learning_rate"],
+                weight_decay=optimizer_config["weight_decay"]
+            )
+        else:
+            raise ValueError(f"Unsupported optimizer: {optimizer_config['algo']}")
+
+    # Compile model with configured optimizer and loss
+    model.compile(optimizer=optimizer, loss=euclidean_distance_loss)
 
     return model
 

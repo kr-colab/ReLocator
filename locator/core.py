@@ -141,6 +141,8 @@ class Locator:
                 - min_delta (float): Minimum change in validation loss
                 - restore_best_weights (bool): Whether to restore best weights
                 - prediction_frequency (int): Frequency of predictions during training
+                - optimizer_algo (str): Optimizer algorithm ("adam" or "adamw")
+                - weight_decay (float): Weight decay for AdamW optimizer
         """
         # Set default configuration
         self.config = {
@@ -161,6 +163,9 @@ class Locator:
             "min_epochs": 10,
             "min_delta": 1e-4,
             "restore_best_weights": True,
+            # Optimizer parameters
+            "optimizer_algo": "adam",
+            "weight_decay": 0.004,
             # Output control
             "keras_verbose": 1,
             "prediction_frequency": 1,
@@ -630,6 +635,11 @@ class Locator:
                 width=self.config.get("width", 256),
                 n_layers=self.config.get("nlayers", 8),
                 dropout_prop=self.config.get("dropout_prop", 0.25),
+                optimizer_config={
+                    "algo": self.config.get("optimizer_algo", "adam"),
+                    "learning_rate": self.config.get("learning_rate", 0.001),
+                    "weight_decay": self.config.get("weight_decay", 0.004)
+                }
             )
 
         # Return early if setup_only
@@ -1200,6 +1210,11 @@ class Locator:
             width=self.config.get("width", 256),
             n_layers=self.config.get("nlayers", 8),
             dropout_prop=self.config.get("dropout_prop", 0.25),
+            optimizer_config={
+                "algo": self.config.get("optimizer_algo", "adam"),
+                "learning_rate": self.config.get("learning_rate", 0.001),
+                "weight_decay": self.config.get("weight_decay", 0.004)
+            }
         )
 
         callbacks = self._create_callbacks()
@@ -1210,7 +1225,7 @@ class Locator:
             epochs=self.config.get("max_epochs", 5000),
             batch_size=self.config.get("batch_size", 32),
             shuffle=True,
-            verbose=False,  # self.config.get("keras_verbose", 1),
+            verbose=self.config.get("keras_verbose", 0),
             validation_data=(self.testgen, self.testlocs),
             callbacks=callbacks,
         )
@@ -1256,6 +1271,8 @@ class Locator:
         # Denormalize predictions
         pred_df["x"] = pred_df["x"] * self.sdlong + self.meanlong
         pred_df["y"] = pred_df["y"] * self.sdlat + self.meanlat
+        pred_df["x_pred"] = pred_df["x"]
+        pred_df["y_pred"] = pred_df["y"]
 
         if save_preds_to_disk:
             pred_df.to_csv(f"{self.config['out']}_holdout_predlocs.csv", index=False)
@@ -1655,6 +1672,11 @@ class Locator:
                     width=self.config.get("width", 256),
                     n_layers=self.config.get("nlayers", 8),
                     dropout_prop=self.config.get("dropout_prop", 0.25),
+                    optimizer_config={
+                        "algo": self.config.get("optimizer_algo", "adam"),
+                        "learning_rate": self.config.get("learning_rate", 0.001),
+                        "weight_decay": self.config.get("weight_decay", 0.004)
+                    }
                 )
 
                 # Train model using only SNPs in current window
@@ -1748,6 +1770,9 @@ class Locator:
             "nlayers",
             "dropout_prop",
             "max_epochs",
+            "optimizer_algo",
+            "learning_rate",
+            "weight_decay",
         ]
 
         for param in key_params:
