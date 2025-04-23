@@ -247,6 +247,7 @@ def plot_error_summary(
     height=10,
     dpi=300,
     use_geodesic=True,
+    include_training_locs=True,
 ):
     """Plot summary of prediction errors from holdout analysis
 
@@ -260,6 +261,8 @@ def plot_error_summary(
         dpi: Figure resolution
         use_geodesic: Whether to calculate errors using geodesic distance (km)
                      instead of Euclidean distance in coordinate space
+        include_training_locs: Whether to use full sample_data extent for map bounds
+                             and plot all training locations (default: True)
     """
     # Validate inputs
     if predictions.empty or sample_data.empty:
@@ -308,7 +311,6 @@ def plot_error_summary(
 
     # Merge predictions with true locations
     merged = predictions.merge(samples[["sampleID", "x_true", "y_true"]], on="sampleID")
-
     # Check if merge was successful
     if merged.empty:
         raise ValueError(
@@ -336,26 +338,41 @@ def plot_error_summary(
 
     # Create figure
     if plot_map:
-        # Create figure with gridspec to have more control over the layout
         fig = plt.figure(figsize=(width, height), dpi=dpi)
-        # Make the map panel twice as wide as the histogram
-        gs = fig.add_gridspec(1, 3)  # Using 3 units total width
+        gs = fig.add_gridspec(1, 3)
 
-        # Create left panel (map + colorbar) without frame - spans 2 units
         ax1 = fig.add_subplot(gs[0:2], projection=ccrs.PlateCarree())
-        # ax1.set_frame_on(False)  # Remove outer frame
         ax1.set_xticks([])
         ax1.set_yticks([])
 
         ax1.add_feature(cfeature.LAND, facecolor="lightgray")
         ax1.add_feature(cfeature.COASTLINE, linewidth=0.5)
 
-        # Add frame back to the map itself
-        ax1.spines["geo"].set_visible(True)
+        # Calculate bounds based on include_training_locs setting
+        if include_training_locs:
+            # Use all sample locations (including training) for bounds
+            x_min, x_max = samples["x_true"].min(), samples["x_true"].max()
+            y_min, y_max = samples["y_true"].min(), samples["y_true"].max()
+            
+            # Plot all training locations
+            training_mask = ~samples["sampleID"].isin(predictions["sampleID"])
+            training_locs = samples[training_mask]
+            if not training_locs.empty:
+                ax1.scatter(
+                    training_locs["x_true"],
+                    training_locs["y_true"],
+                    c="gray",
+                    marker="o",
+                    s=20,
+                    alpha=0.5,
+                    label="Training locations"
+                )
+        else:
+            # Use only prediction locations for bounds
+            x_min, x_max = merged["x_true"].min(), merged["x_true"].max()
+            y_min, y_max = merged["y_true"].min(), merged["y_true"].max()
 
-        # Calculate bounds with some padding
-        x_min, x_max = merged["x_true"].min(), merged["x_true"].max()
-        y_min, y_max = merged["y_true"].min(), merged["y_true"].max()
+        # Add padding to bounds
         padding = 0.1
         x_range = x_max - x_min
         y_range = y_max - y_min
@@ -370,21 +387,19 @@ def plot_error_summary(
             ]
         )
 
-        # Plot scatter and get colorbar
+        # Plot predictions scatter with error colors
         scatter = ax1.scatter(
             merged["x_true"],
             merged["y_true"],
             c=merged["error"],
             cmap="RdYlBu_r",
             s=20,
+            label="Test locations"
         )
 
-        # Add colorbar without frame
+        # Add colorbar
         cbar = plt.colorbar(scatter, ax=ax1, label=f"Error ({error_units})")
         cbar.outline.set_visible(False)
-
-        # Create right panel (histogram) - spans 1 unit
-        ax2 = fig.add_subplot(gs[2])
 
         # Plot error connections
         for _, row in merged.iterrows():
@@ -395,6 +410,13 @@ def plot_error_summary(
                 linewidth=0.5,
                 alpha=0.5,
             )
+
+        # Add legend if including training locations
+        if include_training_locs:
+            ax1.legend(loc='upper right')
+
+        # Create right panel (histogram) - spans 1 unit
+        ax2 = fig.add_subplot(gs[2])
 
         # Plot error histogram with larger fonts
         sns.histplot(data=merged, x="error", ax=ax2)
