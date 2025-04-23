@@ -535,6 +535,40 @@ class Locator:
 
         return [checkpointer, earlystop, reducelr]
 
+    def _create_dataset(self, features, labels, batch_size, is_training=True):
+        """Create a tf.data.Dataset with optimal performance settings.
+        
+        Args:
+            features: Genotype data array
+            labels: Location data array
+            batch_size: Batch size for training
+            is_training: Whether this is a training dataset (enables shuffling)
+            
+        Returns:
+            tf.data.Dataset: Optimized dataset for training/validation
+        """
+        # Convert to tensors
+        features = tf.convert_to_tensor(features, dtype=tf.float32)
+        labels = tf.convert_to_tensor(labels, dtype=tf.float32)
+        
+        # Create dataset
+        dataset = tf.data.Dataset.from_tensor_slices((features, labels))
+        
+        # Cache the data in memory since we'll be reusing it
+        dataset = dataset.cache()
+        
+        if is_training:
+            # Shuffle with a reasonably sized buffer for training
+            dataset = dataset.shuffle(buffer_size=len(features))
+        
+        # Batch the data
+        dataset = dataset.batch(batch_size)
+        
+        # Prefetch next batch while GPU is working
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+        
+        return dataset
+
     def train(
         self,
         *,  # Force keyword arguments
@@ -1091,6 +1125,10 @@ class Locator:
     ):
         """Train the model while holding out samples with known locations.
 
+        This function trains a model while excluding a subset of samples, either randomly
+        selected or specifically provided. These held-out samples can then be used for
+        unbiased evaluation of model performance.
+
         Args:
             genotypes: Array of genotype data
             samples: Sample IDs corresponding to genotypes
@@ -1099,7 +1137,14 @@ class Locator:
 
         Returns:
             keras.callbacks.History object from model training
+
+        Raises:
+            ValueError: If k >= number of samples with known locations or if
+                holdout_indices contains invalid indices
         """
+        # Clean up any existing model before starting new training
+        self._cleanup_model()
+
         # Store samples
         self.samples = samples
 
@@ -1194,7 +1239,22 @@ class Locator:
         self.holdout_gen = np.transpose(filtered_genotypes[:, holdout_idx])
         self.holdout_locs = normalized_holdout_locs
 
-        # Create new model (force recreation)
+        # Create training and validation datasets using tf.data
+        train_dataset = self._create_dataset(
+            self.traingen,
+            self.trainlocs,
+            self.config.get("batch_size", 32),
+            is_training=True
+        )
+        
+        val_dataset = self._create_dataset(
+            self.testgen,
+            self.testlocs,
+            self.config.get("batch_size", 32),
+            is_training=False
+        )
+
+        # Create new model
         self.model = create_network(
             input_shape=self.traingen.shape[1],
             width=self.config.get("width", 256),
@@ -1204,21 +1264,19 @@ class Locator:
 
         callbacks = self._create_callbacks()
 
+        # Train the model using tf.data.Dataset
         self.history = self.model.fit(
-            self.traingen,
-            self.trainlocs,
+            train_dataset,
             epochs=self.config.get("max_epochs", 5000),
-            batch_size=self.config.get("batch_size", 32),
-            shuffle=True,
-            verbose=False,  # self.config.get("keras_verbose", 1),
-            validation_data=(self.testgen, self.testlocs),
+            validation_data=val_dataset,
             callbacks=callbacks,
+            verbose=True
         )
 
         # Save training history
         hist_df = pd.DataFrame(self.history.history)
         hist_df.to_csv(f"{self.config['out']}_history.txt", sep="\t", index=False)
-
+        
         return self.history
 
     def predict_holdout(
@@ -1306,6 +1364,21 @@ class Locator:
         and predicts their locations. This provides unbiased predictions for all samples
         with known locations since each prediction is made without using that sample in training.
 
+        The process works as follows:
+        1. Identifies all samples with known locations
+        2. Divides these samples into groups of size k
+        3. For each group:
+            - Holds out the group from training
+            - Trains a new model without these samples using tf.data pipeline
+            - Predicts locations for the held-out samples
+        4. Optionally combines all predictions into a single DataFrame
+
+        The training process uses tf.data.Dataset for efficient data loading and GPU utilization:
+        - Data is cached in memory to avoid reloading
+        - Training data is shuffled for each epoch
+        - Batches are prefetched while GPU is computing
+        - Automatic memory cleanup between iterations
+
         Args:
             genotypes: Array of genotype data
             samples: Sample IDs corresponding to genotypes
@@ -1316,72 +1389,89 @@ class Locator:
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame containing
                 all predictions. Row index contains sample IDs.
+
+        Raises:
+            ValueError: If sample_data file path not provided in config when needed
+            
+        Example:
+            >>> loc = Locator(config)
+            >>> predictions = loc.run_holdouts(genotypes, samples, k=10, return_df=True)
+            >>> predictions.head()
+               sampleID         x         y
+            0  sample1  -120.45   45.23
+            1  sample2  -118.78   43.91
+            ...
         """
-        # Store samples
-        self.samples = samples
+        try:
+            # Store samples
+            self.samples = samples
 
-        # Get sample data and locations
-        if hasattr(self, "_sample_data_df"):
-            # Use stored DataFrame
-            sample_data, locs = self.sort_samples(samples)
-        else:
-            # Use file path
-            sample_data_path = self.config.get("sample_data")
-            if not sample_data_path:
-                raise ValueError("sample_data file path must be provided in config")
-            sample_data, locs = self.sort_samples(samples, sample_data_path)
+            # Get sample data and locations
+            if hasattr(self, "_sample_data_df"):
+                # Use stored DataFrame
+                sample_data, locs = self.sort_samples(samples)
+            else:
+                # Use file path
+                sample_data_path = self.config.get("sample_data")
+                if not sample_data_path:
+                    raise ValueError("sample_data file path must be provided in config")
+                sample_data, locs = self.sort_samples(samples, sample_data_path)
 
-        # Get indices of samples with known locations
-        known_idx = np.argwhere(~np.isnan(locs[:, 0]))
-        known_idx = np.array([x[0] for x in known_idx])
+            # Get indices of samples with known locations
+            known_idx = np.argwhere(~np.isnan(locs[:, 0]))
+            known_idx = np.array([x[0] for x in known_idx])
 
-        # Create list to store prediction DataFrames
-        pred_dfs = []
+            # Calculate number of iterations needed
+            n_iterations = len(known_idx) // k
+            if len(known_idx) % k != 0:
+                n_iterations += 1
 
-        # Calculate number of iterations needed
-        n_iterations = len(known_idx) // k
-        if len(known_idx) % k != 0:
-            n_iterations += 1
+            print(f"Running {n_iterations} iterations, holding out {k} samples at a time")
+            pred_dfs = []
 
-        print(f"Running {n_iterations} iterations, holding out {k} samples at a time")
+            # Iterate through samples in groups of size k
+            for i in tqdm(range(n_iterations)):
+                try:
+                    start_idx = i * k
+                    end_idx = min(start_idx + k, len(known_idx))
+                    holdout_indices = known_idx[start_idx:end_idx]
 
-        # Iterate through samples in groups of size k
-        for i in tqdm(range(n_iterations)):
-            start_idx = i * k
-            end_idx = min(start_idx + k, len(known_idx))
-            holdout_indices = known_idx[start_idx:end_idx]
+                    # Train model without holdout samples
+                    self.train_holdout(
+                        genotypes=genotypes, samples=samples, holdout_indices=holdout_indices
+                    )
 
-            # Train model without holdout samples
-            self.train_holdout(
-                genotypes=genotypes, samples=samples, holdout_indices=holdout_indices
-            )
+                    # Get predictions for holdout samples
+                    preds = self.predict_holdout(
+                        return_df=True,
+                        save_preds_to_disk=not save_full_pred_matrix,
+                        plot_summary=False,
+                        verbose=self.config.get("keras_verbose", 1),
+                    )
 
-            # Get predictions for holdout samples
-            preds = self.predict_holdout(
-                return_df=True,
-                save_preds_to_disk=not save_full_pred_matrix,
-                plot_summary=False,
-                verbose=self.config.get("keras_verbose", 1),
-            )
+                    if return_df:
+                        pred_dfs.append(preds)
+
+                finally:
+                    # Clean up after each iteration
+                    self._cleanup_model()
 
             if return_df:
-                pred_dfs.append(preds)
+                # Concatenate all predictions
+                all_predictions = pd.concat(pred_dfs, axis=0)
 
-            # Clear keras session to free memory
-            keras.backend.clear_session()
+                if save_full_pred_matrix:
+                    all_predictions.to_csv(
+                        f"{self.config['out']}_allholdouts_predlocs.csv", index=False
+                    )
 
-        if return_df:
-            # Concatenate all predictions
-            all_predictions = pd.concat(pred_dfs, axis=0)
+                return all_predictions
 
-            if save_full_pred_matrix:
-                all_predictions.to_csv(
-                    f"{self.config['out']}_allholdouts_predlocs.csv", index=False
-                )
-
-            return all_predictions
-
-        return None
+            return None
+        
+        finally:
+            # Final cleanup
+            self._cleanup_model()
 
     def run_jacknife_holdouts(
         self,
@@ -1728,6 +1818,20 @@ class Locator:
             return all_predictions
 
         return preds
+
+    def _cleanup_model(self):
+        """Clean up model and TensorFlow session to prevent memory leaks.
+        
+        This method ensures proper cleanup of GPU memory by:
+        1. Deleting the current model if it exists
+        2. Clearing the Keras backend session
+        3. Resetting the TensorFlow graph
+        """
+        if self.model is not None:
+            del self.model
+            self.model = None
+        keras.backend.clear_session()
+        tf.compat.v1.reset_default_graph()
 
     def _repr_html_(self):
         """Return HTML representation of Locator instance for Jupyter notebooks."""

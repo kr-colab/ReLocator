@@ -1,5 +1,5 @@
 numpy
-tensorflow
+tf-nightly
 h5py
 scikit-allel
 matplotlib
