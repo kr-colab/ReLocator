@@ -261,6 +261,30 @@ def plot_error_summary(
         use_geodesic: Whether to calculate errors using geodesic distance (km)
                      instead of Euclidean distance in coordinate space
     """
+    # Validate inputs
+    if predictions.empty or sample_data.empty:
+        raise ValueError("Predictions and sample data cannot be empty DataFrames")
+
+    # Check for required columns
+    required_pred_cols = ["sampleID", "x_pred", "y_pred"]
+    required_sample_cols = ["sampleID", "x", "y"]
+
+    missing_pred_cols = [
+        col for col in required_pred_cols if col not in predictions.columns
+    ]
+    missing_sample_cols = [
+        col for col in required_sample_cols if col not in sample_data.columns
+    ]
+
+    if missing_pred_cols:
+        raise ValueError(
+            f"Missing required columns in predictions: {missing_pred_cols}"
+        )
+    if missing_sample_cols:
+        raise ValueError(
+            f"Missing required columns in sample data: {missing_sample_cols}"
+        )
+
     # Set larger font sizes globally
     plt.rcParams.update(
         {
@@ -279,10 +303,17 @@ def plot_error_summary(
     else:
         samples = pd.read_csv(sample_data, sep="\t")
 
+    # Rename columns in sample data to avoid conflicts
+    samples = samples.rename(columns={"x": "x_true", "y": "y_true"})
+
     # Merge predictions with true locations
-    merged = predictions.merge(
-        samples[["sampleID", "x", "y"]], on="sampleID", suffixes=("_pred", "_true")
-    )
+    merged = predictions.merge(samples[["sampleID", "x_true", "y_true"]], on="sampleID")
+
+    # Check if merge was successful
+    if merged.empty:
+        raise ValueError(
+            "No matching samples found between predictions and sample data"
+        )
 
     # Calculate errors
     if use_geodesic:

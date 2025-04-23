@@ -423,7 +423,6 @@ class Locator:
         # Get indices of samples with known locations
         train = np.argwhere(~np.isnan(locations[:, 0]))
         train = np.array([x[0] for x in train])
-
         # Get indices of samples with unknown locations
         pred = np.array([x for x in range(len(locations)) if x not in train])
 
@@ -875,7 +874,10 @@ class Locator:
         # Set up prediction indices if not already done
         if not hasattr(self, "pred_indices"):
             # Get sample data
-            sample_data = pd.read_csv(self.config["sample_data"], sep="\t")
+            if isinstance(self.config["sample_data"], pd.DataFrame):
+                sample_data = self.config["sample_data"]
+            else:
+                sample_data = pd.read_csv(self.config["sample_data"], sep="\t")
             # Find samples without locations (NA in x or y)
             pred = sample_data.index[sample_data.x.isna() | sample_data.y.isna()].values
             # Convert to indices in the samples array
