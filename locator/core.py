@@ -143,6 +143,12 @@ class Locator:
                 - prediction_frequency (int): Frequency of predictions during training
                 - optimizer_algo (str): Optimizer algorithm ("adam" or "adamw")
                 - weight_decay (float): Weight decay for AdamW optimizer
+                - augmentation: Dictionary containing augmentation parameters
+                    - enabled (bool): Whether to use data augmentation
+                    - flip_rate (float): Rate at which to flip genotypes
+                - use_range_penalty (bool): Whether to use range penalty in loss function
+                - penalty_weight (float): Weight for the range penalty term
+                - species_range_geom: Shapely geometry object defining valid species range
         """
         # Set default configuration
         self.config = {
@@ -171,11 +177,26 @@ class Locator:
             "prediction_frequency": 1,
             # Validation
             "validation_split": 0.1,
+            # Data augmentation parameters
+            "augmentation": {
+                "enabled": False,  # Whether to use data augmentation
+                "flip_rate": 0.05  # Rate at which to flip genotypes
+            },
+            # Range penalty parameters
+            "use_range_penalty": False,
+            "species_range_shapefile": None,
+            "resolution": 0.05,
+            "penalty_weight": 1.0,
         }
 
         # Update with user config
         if config is not None:
             self.config.update(config)
+
+        # If using range penalty and a species_range_geom is provided, set it in models
+        if self.config.get("use_range_penalty") and self.config.get("species_range_geom") is not None:
+            from .models import set_species_range_geom
+            set_species_range_geom(self.config["species_range_geom"])
 
         # Handle sample_data DataFrame input
         if isinstance(self.config.get("sample_data"), pd.DataFrame):
@@ -630,6 +651,26 @@ class Locator:
 
         # Create and train model if not already created
         if self.model is None:
+            # Decide which loss function to use based on the config
+            loss_fn = None
+            if self.config.get("use_range_penalty"):
+                from .models import loss_with_range_penalty
+                assert self.config.get("species_range_shapefile") is not None, "species_range_shapefile must be provided if use_range_penalty is True"
+                assert self.config.get("resolution") is not None, "resolution must be provided if use_range_penalty is True"    
+                # Rasterize the species range from the provided shapefile.
+                mask_tensor, mask_transform = rasterize_species_range(
+                    self.config["species_range_shapefile"],
+                    resolution=self.config.get("raster_resolution", 0.1)
+                )
+                
+                loss_fn = lambda y_true, y_pred: loss_with_range_penalty(
+                    y_true, y_pred, 
+                    mask_tensor=mask_tensor, 
+                    transform=mask_transform, 
+                    resolution=self.config.get("resolution", 0.05), 
+                    penalty_weight=self.config.get("penalty_weight", 1.0)
+                )
+
             self.model = create_network(
                 input_shape=self.traingen.shape[1],
                 width=self.config.get("width", 256),
@@ -639,7 +680,8 @@ class Locator:
                     "algo": self.config.get("optimizer_algo", "adam"),
                     "learning_rate": self.config.get("learning_rate", 0.001),
                     "weight_decay": self.config.get("weight_decay", 0.004)
-                }
+                },
+                loss_fn=loss_fn
             )
 
         # Return early if setup_only
@@ -1205,6 +1247,24 @@ class Locator:
         self.holdout_locs = normalized_holdout_locs
 
         # Create new model (force recreation)
+        loss_fn = None
+        if self.config.get("use_range_penalty"):
+            from .models import loss_with_range_penalty, rasterize_species_range
+            assert self.config.get("species_range_shapefile") is not None, \
+                "species_range_shapefile must be provided if use_range_penalty is True"
+            assert self.config.get("resolution") is not None, \
+                "resolution must be provided if use_range_penalty is True"
+            mask_tensor, mask_transform = rasterize_species_range(
+                self.config["species_range_shapefile"],
+                resolution=self.config.get("raster_resolution", 0.1)
+            )
+            loss_fn = lambda y_true, y_pred: loss_with_range_penalty(
+                y_true, y_pred,
+                mask_tensor=mask_tensor,
+                transform=mask_transform,
+                resolution=self.config.get("resolution", 0.05),
+                penalty_weight=self.config.get("penalty_weight", 1.0)
+            )
         self.model = create_network(
             input_shape=self.traingen.shape[1],
             width=self.config.get("width", 256),
@@ -1214,19 +1274,41 @@ class Locator:
                 "algo": self.config.get("optimizer_algo", "adam"),
                 "learning_rate": self.config.get("learning_rate", 0.001),
                 "weight_decay": self.config.get("weight_decay", 0.004)
-            }
+            },
+            loss_fn=loss_fn
         )
 
         callbacks = self._create_callbacks()
 
+        def flip_genotypes(genotypes, locations, mask_rate=0.05):
+            """Randomly flip genotype values with probability mask_rate"""
+            mask = tf.random.uniform(tf.shape(genotypes)) < mask_rate
+            return tf.where(mask, 1 - genotypes, genotypes), locations
+        
+        train_dataset = tf.data.Dataset.from_tensor_slices((self.traingen, self.trainlocs))
+        train_dataset = train_dataset.cache()
+        train_dataset = train_dataset.shuffle(buffer_size=1000)
+
+        # Apply augmentation only if enabled in config
+        if self.config.get("augmentation", {}).get("enabled", False):
+            flip_rate = self.config.get("augmentation", {}).get("flip_rate", 0.05)
+            train_dataset = train_dataset.map(
+                lambda x, y: flip_genotypes(x, y, mask_rate=flip_rate),
+                num_parallel_calls=tf.data.AUTOTUNE
+            )
+
+        train_dataset = train_dataset.batch(self.config.get("batch_size", 32))
+        train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
+
+        validation_dataset = tf.data.Dataset.from_tensor_slices((self.testgen, self.testlocs))  
+        validation_dataset = validation_dataset.batch(self.config.get("batch_size", 32))
+        validation_dataset = validation_dataset.prefetch(tf.data.AUTOTUNE)
+
         self.history = self.model.fit(
-            self.traingen,
-            self.trainlocs,
+            train_dataset,
             epochs=self.config.get("max_epochs", 5000),
-            batch_size=self.config.get("batch_size", 32),
-            shuffle=True,
             verbose=self.config.get("keras_verbose", 0),
-            validation_data=(self.testgen, self.testlocs),
+            validation_data=validation_dataset,
             callbacks=callbacks,
         )
 
@@ -1457,8 +1539,7 @@ class Locator:
             # Replace masked sites with random draws from allele frequencies
             for site in sites_to_mask:
                 masked_gen[:, site] = np.random.binomial(
-                    2, af[site], size=masked_gen.shape[0]
-                )
+                    2, af[site], size=masked_gen.shape[0])
 
             # Get predictions for masked data
             predictions = self.model.predict(masked_gen, verbose=False)
@@ -1773,6 +1854,11 @@ class Locator:
             "optimizer_algo",
             "learning_rate",
             "weight_decay",
+            "use_range_penalty",
+            "species_range_shapefile",
+            "resolution",
+            "penalty_weight",
+            "species_range_geom",
         ]
 
         for param in key_params:
