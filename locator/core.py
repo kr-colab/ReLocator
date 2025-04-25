@@ -16,13 +16,12 @@ from .models import create_network
 from .utils import normalize_locs, filter_snps
 
 
-def setup_gpu():
+def setup_gpu(gpu_number=None):
     """Configure GPU settings for optimal usage.
 
-    This function:
-    1. Lists available GPUs
-    2. If GPUs are available, selects the first one
-    3. Enables memory growth to prevent TensorFlow from allocating all GPU memory
+    Args:
+        gpu_number: Optional int or str specifying which GPU to use (0-based index).
+                   If None, uses the first available GPU.
 
     Returns:
         bool: True if GPU is available and configured, False otherwise
@@ -33,17 +32,30 @@ def setup_gpu():
         return False
 
     try:
-        # Only use the first GPU
-        tf.config.set_visible_devices(gpus[0], "GPU")
+        if gpu_number is not None:
+            # Convert to int if string
+            gpu_number = int(gpu_number)
+            if gpu_number < 0 or gpu_number >= len(gpus):
+                raise ValueError(f"GPU {gpu_number} not available. Found {len(gpus)} GPUs.")
+            # Set visible devices to only the specified GPU
+            tf.config.set_visible_devices(gpus[gpu_number], "GPU")
+            print(f"Using GPU {gpu_number}: {gpus[gpu_number].name}")
+        else:
+            # Use first GPU by default
+            tf.config.set_visible_devices(gpus[0], "GPU")
+            print(f"Using GPU 0: {gpus[0].name}")
 
-        # Enable memory growth
-        for gpu in gpus:
+        # Enable memory growth for all visible GPUs
+        for gpu in tf.config.get_visible_devices("GPU"):
             tf.config.experimental.set_memory_growth(gpu, True)
 
-        print(f"Using GPU: {gpus[0].name}")
         return True
     except RuntimeError as e:
         print(f"GPU configuration error: {e}")
+        print("Falling back to CPU.")
+        return False
+    except ValueError as e:
+        print(f"GPU selection error: {e}")
         print("Falling back to CPU.")
         return False
 
@@ -141,6 +153,14 @@ class Locator:
                 - min_delta (float): Minimum change in validation loss
                 - restore_best_weights (bool): Whether to restore best weights
                 - prediction_frequency (int): Frequency of predictions during training
+                - optimizer_algo (str): Optimizer algorithm ("adam" or "adamw")
+                - weight_decay (float): Weight decay for AdamW optimizer
+                - augmentation: Dictionary containing augmentation parameters
+                    - enabled (bool): Whether to use data augmentation
+                    - flip_rate (float): Rate at which to flip genotypes
+                - use_range_penalty (bool): Whether to use range penalty in loss function
+                - penalty_weight (float): Weight for the range penalty term
+                - species_range_geom: Shapely geometry object defining valid species range
         """
         # Set default configuration
         self.config = {
@@ -161,16 +181,34 @@ class Locator:
             "min_epochs": 10,
             "min_delta": 1e-4,
             "restore_best_weights": True,
+            # Optimizer parameters
+            "optimizer_algo": "adam",
+            "weight_decay": 0.004,
             # Output control
             "keras_verbose": 1,
             "prediction_frequency": 1,
             # Validation
             "validation_split": 0.1,
+            # Data augmentation parameters
+            "augmentation": {
+                "enabled": False,  # Whether to use data augmentation
+                "flip_rate": 0.05  # Rate at which to flip genotypes
+            },
+            # Range penalty parameters
+            "use_range_penalty": False,
+            "species_range_shapefile": None,
+            "resolution": 0.05,
+            "penalty_weight": 1.0,
         }
 
         # Update with user config
         if config is not None:
             self.config.update(config)
+
+        # If using range penalty and a species_range_geom is provided, set it in models
+        if self.config.get("use_range_penalty") and self.config.get("species_range_geom") is not None:
+            from .models import set_species_range_geom
+            set_species_range_geom(self.config["species_range_geom"])
 
         # Handle sample_data DataFrame input
         if isinstance(self.config.get("sample_data"), pd.DataFrame):
@@ -211,13 +249,17 @@ class Locator:
 
         # Setup GPU if not explicitly disabled
         if not self.config.get("disable_gpu", False):
-            # Only set CUDA_VISIBLE_DEVICES if gpu_number is explicitly specified
-            if self.config.get("gpu_number") is not None:
-                import os
-
-                os.environ["CUDA_VISIBLE_DEVICES"] = str(self.config["gpu_number"])
-            else:
-                setup_gpu()
+            gpu_number = self.config.get("gpu_number")
+            if gpu_number is not None:
+                # Convert to int if string
+                try:
+                    gpu_number = int(gpu_number)
+                except ValueError:
+                    print(f"Invalid GPU number: {gpu_number}. Using default GPU.")
+                    gpu_number = None
+            setup_gpu(gpu_number)
+        else:
+            print("GPU usage disabled by configuration.")
 
         # Set memory growth for better GPU memory management
         gpus = tf.config.list_physical_devices("GPU")
@@ -625,11 +667,37 @@ class Locator:
 
         # Create and train model if not already created
         if self.model is None:
+            # Decide which loss function to use based on the config
+            loss_fn = None
+            if self.config.get("use_range_penalty"):
+                from .models import loss_with_range_penalty
+                assert self.config.get("species_range_shapefile") is not None, "species_range_shapefile must be provided if use_range_penalty is True"
+                assert self.config.get("resolution") is not None, "resolution must be provided if use_range_penalty is True"    
+                # Rasterize the species range from the provided shapefile.
+                mask_tensor, mask_transform = rasterize_species_range(
+                    self.config["species_range_shapefile"],
+                    resolution=self.config.get("raster_resolution", 0.1)
+                )
+                
+                loss_fn = lambda y_true, y_pred: loss_with_range_penalty(
+                    y_true, y_pred, 
+                    mask_tensor=mask_tensor, 
+                    transform=mask_transform, 
+                    resolution=self.config.get("resolution", 0.05), 
+                    penalty_weight=self.config.get("penalty_weight", 1.0)
+                )
+
             self.model = create_network(
                 input_shape=self.traingen.shape[1],
                 width=self.config.get("width", 256),
                 n_layers=self.config.get("nlayers", 8),
                 dropout_prop=self.config.get("dropout_prop", 0.25),
+                optimizer_config={
+                    "algo": self.config.get("optimizer_algo", "adam"),
+                    "learning_rate": self.config.get("learning_rate", 0.001),
+                    "weight_decay": self.config.get("weight_decay", 0.004)
+                },
+                loss_fn=loss_fn
             )
 
         # Return early if setup_only
@@ -1195,23 +1263,68 @@ class Locator:
         self.holdout_locs = normalized_holdout_locs
 
         # Create new model (force recreation)
+        loss_fn = None
+        if self.config.get("use_range_penalty"):
+            from .models import loss_with_range_penalty, rasterize_species_range
+            assert self.config.get("species_range_shapefile") is not None, \
+                "species_range_shapefile must be provided if use_range_penalty is True"
+            assert self.config.get("resolution") is not None, \
+                "resolution must be provided if use_range_penalty is True"
+            mask_tensor, mask_transform = rasterize_species_range(
+                self.config["species_range_shapefile"],
+                resolution=self.config.get("raster_resolution", 0.1)
+            )
+            loss_fn = lambda y_true, y_pred: loss_with_range_penalty(
+                y_true, y_pred,
+                mask_tensor=mask_tensor,
+                transform=mask_transform,
+                resolution=self.config.get("resolution", 0.05),
+                penalty_weight=self.config.get("penalty_weight", 1.0)
+            )
         self.model = create_network(
             input_shape=self.traingen.shape[1],
             width=self.config.get("width", 256),
             n_layers=self.config.get("nlayers", 8),
             dropout_prop=self.config.get("dropout_prop", 0.25),
+            optimizer_config={
+                "algo": self.config.get("optimizer_algo", "adam"),
+                "learning_rate": self.config.get("learning_rate", 0.001),
+                "weight_decay": self.config.get("weight_decay", 0.004)
+            },
+            loss_fn=loss_fn
         )
 
         callbacks = self._create_callbacks()
 
+        def flip_genotypes(genotypes, locations, mask_rate=0.05):
+            """Randomly flip genotype values with probability mask_rate"""
+            mask = tf.random.uniform(tf.shape(genotypes)) < mask_rate
+            return tf.where(mask, 1 - genotypes, genotypes), locations
+        
+        train_dataset = tf.data.Dataset.from_tensor_slices((self.traingen, self.trainlocs))
+        train_dataset = train_dataset.cache()
+        train_dataset = train_dataset.shuffle(buffer_size=1000)
+
+        # Apply augmentation only if enabled in config
+        if self.config.get("augmentation", {}).get("enabled", False):
+            flip_rate = self.config.get("augmentation", {}).get("flip_rate", 0.05)
+            train_dataset = train_dataset.map(
+                lambda x, y: flip_genotypes(x, y, mask_rate=flip_rate),
+                num_parallel_calls=tf.data.AUTOTUNE
+            )
+
+        train_dataset = train_dataset.batch(self.config.get("batch_size", 32))
+        train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
+
+        validation_dataset = tf.data.Dataset.from_tensor_slices((self.testgen, self.testlocs))  
+        validation_dataset = validation_dataset.batch(self.config.get("batch_size", 32))
+        validation_dataset = validation_dataset.prefetch(tf.data.AUTOTUNE)
+
         self.history = self.model.fit(
-            self.traingen,
-            self.trainlocs,
+            train_dataset,
             epochs=self.config.get("max_epochs", 5000),
-            batch_size=self.config.get("batch_size", 32),
-            shuffle=True,
-            verbose=False,  # self.config.get("keras_verbose", 1),
-            validation_data=(self.testgen, self.testlocs),
+            verbose=self.config.get("keras_verbose", 0),
+            validation_data=validation_dataset,
             callbacks=callbacks,
         )
 
@@ -1256,6 +1369,8 @@ class Locator:
         # Denormalize predictions
         pred_df["x"] = pred_df["x"] * self.sdlong + self.meanlong
         pred_df["y"] = pred_df["y"] * self.sdlat + self.meanlat
+        pred_df["x_pred"] = pred_df["x"]
+        pred_df["y_pred"] = pred_df["y"]
 
         if save_preds_to_disk:
             pred_df.to_csv(f"{self.config['out']}_holdout_predlocs.csv", index=False)
@@ -1440,8 +1555,7 @@ class Locator:
             # Replace masked sites with random draws from allele frequencies
             for site in sites_to_mask:
                 masked_gen[:, site] = np.random.binomial(
-                    2, af[site], size=masked_gen.shape[0]
-                )
+                    2, af[site], size=masked_gen.shape[0])
 
             # Get predictions for masked data
             predictions = self.model.predict(masked_gen, verbose=False)
@@ -1655,6 +1769,11 @@ class Locator:
                     width=self.config.get("width", 256),
                     n_layers=self.config.get("nlayers", 8),
                     dropout_prop=self.config.get("dropout_prop", 0.25),
+                    optimizer_config={
+                        "algo": self.config.get("optimizer_algo", "adam"),
+                        "learning_rate": self.config.get("learning_rate", 0.001),
+                        "weight_decay": self.config.get("weight_decay", 0.004)
+                    }
                 )
 
                 # Train model using only SNPs in current window
@@ -1748,6 +1867,14 @@ class Locator:
             "nlayers",
             "dropout_prop",
             "max_epochs",
+            "optimizer_algo",
+            "learning_rate",
+            "weight_decay",
+            "use_range_penalty",
+            "species_range_shapefile",
+            "resolution",
+            "penalty_weight",
+            "species_range_geom",
         ]
 
         for param in key_params:
@@ -1865,4 +1992,352 @@ class Locator:
         html.append("</ul>")
         html.append("</div>")
 
+        return "".join(html)
+
+
+class EnsembleLocator:
+    """A class for managing an ensemble of Locator models."""
+    
+    def __init__(self, base_config=None, k_folds=5, training_set_indices=None):
+        """Initialize EnsembleLocator with configuration parameters.
+        
+        Args:
+            base_config (dict, optional): Base configuration shared by all models.
+                Each model will get a copy of this config.
+            k_folds (int, optional): Number of folds for cross-validation.
+                Defaults to 5.
+            training_set_indices (array-like, optional): Indices of samples to use for 
+                training and validation. If provided, only these samples will be used 
+                to create k-folds, while others will automatically be assigned to 
+                prediction set.
+        """
+        self.base_config = base_config or {}
+        self.k_folds = k_folds
+        self.training_set_indices = (
+            np.array(training_set_indices) if training_set_indices is not None else None
+        )
+        self.models = []
+        self.fold_indices = {}
+        
+        # Initialize attributes that will be set during training
+        self.samples = None
+        self.meanlong = None
+        self.sdlong = None
+        self.meanlat = None
+        self.sdlat = None
+        
+    def train(self, genotypes, samples, sample_data_file=None):
+        """Train k models on different folds of the data.
+        
+        Args:
+            genotypes: GenotypeArray containing genetic data
+            samples: Array of sample IDs
+            sample_data_file: Optional path to sample data file
+            
+        Returns:
+            list: Training histories for each fold
+        """
+        self.samples = samples
+        
+        # Get sample data and locations
+        locator = Locator(self.base_config)
+        if hasattr(locator, "_sample_data_df"):
+            sample_data, locs = locator.sort_samples(samples)
+        else:
+            sample_data_path = sample_data_file or self.base_config.get("sample_data")
+            if not sample_data_path:
+                raise ValueError("sample_data file path must be provided")
+            sample_data, locs = locator.sort_samples(samples, sample_data_path)
+        
+        # Create folds if not already done
+        if not self.fold_indices:
+            self.create_folds(
+                genotypes, 
+                samples, 
+                locs, 
+                training_set_indices=self.training_set_indices
+            )
+        
+        # Filter SNPs once before creating folds
+        filtered_genotypes = filter_snps(
+            genotypes,
+            min_mac=self.base_config.get("min_mac", 2),
+            max_snps=self.base_config.get("max_SNPs"),
+            impute=self.base_config.get("impute_missing", False),
+        )
+        
+        # Initialize lists to store normalization parameters
+        all_meanlongs = []
+        all_sdlongs = []
+        all_meanlats = []
+        all_sdlats = []
+        
+        # Train a model for each fold
+        histories = []
+        for fold in range(self.k_folds):
+            print(f"\nTraining fold {fold + 1}/{self.k_folds}")
+            
+            # Create new model for this fold
+            fold_config = self.base_config.copy()
+            fold_config['out'] = f"{self.base_config['out']}_fold{fold}"
+            model = Locator(fold_config)
+            
+            # Get indices for this fold
+            fold_indices = self.fold_indices[fold]
+            train_idx = fold_indices['train']
+            val_idx = fold_indices['val']
+            pred_idx = fold_indices['pred']
+            
+            # Store prediction indices for later use
+            model.pred_indices = pred_idx
+            
+            # Prepare data for this fold using pre-filtered genotypes
+            model.traingen = np.transpose(filtered_genotypes[:, train_idx])
+            model.testgen = np.transpose(filtered_genotypes[:, val_idx])
+            model.predgen = np.transpose(filtered_genotypes[:, pred_idx])
+            
+            # Normalize locations using only training data
+            train_locs = locs[train_idx]
+            model.meanlong, model.sdlong, model.meanlat, model.sdlat, normalized_train_locs = normalize_locs(train_locs)
+            
+            # Store normalization parameters
+            all_meanlongs.append(model.meanlong)
+            all_sdlongs.append(model.sdlong)
+            all_meanlats.append(model.meanlat)
+            all_sdlats.append(model.sdlat)
+            
+            # Normalize validation locations
+            val_locs = locs[val_idx]
+            normalized_val_locs = np.array([
+                [
+                    (x[0] - model.meanlong) / model.sdlong,
+                    (x[1] - model.meanlat) / model.sdlat,
+                ]
+                for x in val_locs
+            ])
+            
+            # Store locations
+            model.trainlocs = normalized_train_locs
+            model.testlocs = normalized_val_locs
+            
+            # Create TensorFlow datasets with caching
+            train_dataset = tf.data.Dataset.from_tensor_slices(
+                (model.traingen, normalized_train_locs)
+            )
+            train_dataset = train_dataset.cache()
+            train_dataset = train_dataset.shuffle(buffer_size=len(train_idx))
+            
+            # Apply augmentation if enabled
+            if model.config.get("augmentation", {}).get("enabled", False):
+                flip_rate = model.config.get("augmentation", {}).get("flip_rate", 0.05)
+                train_dataset = train_dataset.map(
+                    lambda x, y: flip_genotypes(x, y, mask_rate=flip_rate),
+                    num_parallel_calls=tf.data.AUTOTUNE
+                )
+            
+            train_dataset = train_dataset.batch(model.config.get("batch_size", 32))
+            train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
+            
+            # Create validation dataset
+            validation_dataset = tf.data.Dataset.from_tensor_slices(
+                (model.testgen, normalized_val_locs)
+            )
+            validation_dataset = validation_dataset.cache()
+            validation_dataset = validation_dataset.batch(model.config.get("batch_size", 32))
+            validation_dataset = validation_dataset.prefetch(tf.data.AUTOTUNE)
+            
+            # Set up model and train
+            model.model = create_network(
+                input_shape=model.traingen.shape[1],
+                width=model.config.get("width", 256),
+                n_layers=model.config.get("nlayers", 8),
+                dropout_prop=model.config.get("dropout_prop", 0.25),
+                optimizer_config={
+                    "algo": model.config.get("optimizer_algo", "adam"),
+                    "learning_rate": model.config.get("learning_rate", 0.001),
+                    "weight_decay": model.config.get("weight_decay", 0.004)
+                }
+            )
+            
+            # Create callbacks
+            callbacks = [
+                keras.callbacks.ModelCheckpoint(
+                    filepath=f"{fold_config['out']}.weights.h5",
+                    verbose=model.config.get("keras_verbose", 1),
+                    save_best_only=True,
+                    save_weights_only=True,
+                    monitor="val_loss",
+                    save_freq="epoch",
+                ),
+                keras.callbacks.EarlyStopping(
+                    monitor="val_loss",
+                    min_delta=0,
+                    patience=model.config.get("patience", 100),
+                ),
+                keras.callbacks.ReduceLROnPlateau(
+                    monitor="val_loss",
+                    factor=0.5,
+                    patience=model.config.get("patience", 100) // 6,
+                    verbose=model.config.get("keras_verbose", 1),
+                    mode="auto",
+                    min_delta=0,
+                    cooldown=0,
+                    min_lr=0,
+                )
+            ]
+            
+            # Train model
+            history = model.model.fit(
+                train_dataset,
+                epochs=model.config.get("max_epochs", 5000),
+                verbose=model.config.get("keras_verbose", 1),
+                validation_data=validation_dataset,
+                callbacks=callbacks,
+            )
+            
+            histories.append(history)
+            self.models.append(model)
+            
+            # Clear session to free memory
+            keras.backend.clear_session()
+        
+        # Store average normalization parameters
+        self.meanlong = np.mean(all_meanlongs)
+        self.sdlong = np.mean(all_sdlongs)
+        self.meanlat = np.mean(all_meanlats)
+        self.sdlat = np.mean(all_sdlats)
+        
+        return histories
+    
+    def predict(self, return_df=True, save_preds_to_disk=True):
+        """Make predictions using the ensemble of models.
+        
+        For samples with unknown locations, this averages predictions across
+        all models in the ensemble. For samples used in validation, it uses
+        the predictions from models where that sample was in the validation set.
+        
+        Args:
+            return_df (bool): Whether to return predictions as DataFrame
+            save_preds_to_disk (bool): Whether to save predictions to file
+            
+        Returns:
+            pandas.DataFrame: DataFrame with predictions if return_df=True
+        """
+        if not self.models:
+            raise ValueError("No trained models in ensemble")
+        
+        # Initialize dictionary to store predictions
+        all_predictions = {}
+        
+        # Get predictions for unknown locations from all models
+        pred_predictions = []
+        for model in self.models:
+            preds = model.predict(return_df=True, save_preds_to_disk=False)
+            pred_predictions.append(preds[['x', 'y']].values)
+        
+        # Average predictions across models
+        mean_predictions = np.mean(pred_predictions, axis=0)
+        
+        # Create DataFrame with predictions
+        pred_df = pd.DataFrame(mean_predictions, columns=['x', 'y'])
+        if hasattr(self.models[0], 'samples') and hasattr(self.models[0], 'pred_indices'):
+            pred_df.insert(0, 'sampleID', self.models[0].samples[self.models[0].pred_indices])
+        
+        # Get validation predictions for each fold
+        val_predictions = {}
+        for fold, model in enumerate(self.models):
+            val_idx = self.fold_indices[fold]['val']
+            
+            # Make predictions on validation set
+            val_preds = model.model.predict(model.testgen)
+            
+            # Denormalize predictions
+            val_preds = np.array([
+                [x[0] * model.sdlong + model.meanlong, x[1] * model.sdlat + model.meanlat]
+                for x in val_preds
+            ])
+            
+            # Store predictions with sample IDs
+            for idx, pred in zip(val_idx, val_preds):
+                sample_id = self.samples[idx]
+                val_predictions[sample_id] = pred
+        
+        # Create DataFrame with validation predictions
+        val_df = pd.DataFrame.from_dict(val_predictions, orient='index', columns=['x', 'y'])
+        val_df.index.name = 'sampleID'
+        val_df.reset_index(inplace=True)
+        
+        # Combine predictions
+        all_predictions = pd.concat([pred_df, val_df], ignore_index=True)
+        
+        # Save predictions if requested
+        if save_preds_to_disk:
+            all_predictions.to_csv(f"{self.base_config['out']}_ensemble_predlocs.csv", index=False)
+        
+        if return_df:
+            return all_predictions
+        
+        return all_predictions.values[:, 1:]  # Return just x,y coordinates
+    
+    def _repr_html_(self):
+        """Return HTML representation for Jupyter notebooks."""
+        html = [
+            "<div style='font-family: monospace'>",
+            "<h3>EnsembleLocator</h3>",
+            "<table>",
+            "<tr><th style='text-align:left; padding:5px'>Configuration</th><th style='text-align:left; padding:5px'>Value</th></tr>",
+        ]
+        
+        # Add number of folds and models
+        html.append(f"<tr><td style='padding:5px'>Number of folds</td><td style='padding:5px'>{self.k_folds}</td></tr>")
+        html.append(f"<tr><td style='padding:5px'>Trained models</td><td style='padding:5px'>{len(self.models)}</td></tr>")
+        
+        # Add key configuration parameters from base config
+        key_params = [
+            "train_split",
+            "training_set_indices",
+            "batch_size",
+            "min_mac",
+            "max_SNPs",
+            "width",
+            "nlayers",
+            "dropout_prop",
+            "max_epochs",
+        ]
+        
+        for param in key_params:
+            if param in self.base_config:
+                html.append(
+                    f"<tr><td style='padding:5px'>{param}</td>"
+                    f"<td style='padding:5px'>{self.base_config[param]}</td></tr>"
+                )
+        
+        html.append("</table>")
+        
+        # Add model status
+        html.append("<h4>Status:</h4>")
+        html.append("<ul>")
+        
+        if self.models:
+            html.append(f"<li>Models trained: {len(self.models)} / {self.k_folds}</li>")
+            if hasattr(self.models[0], "traingen"):
+                html.append(f"<li>Training samples per fold: ~{self.models[0].traingen.shape[0]}</li>")
+                html.append(f"<li>Features: {self.models[0].traingen.shape[1]}</li>")
+            
+            # Add validation metrics if available
+            val_losses = []
+            for model in self.models:
+                if hasattr(model, "history") and model.history is not None:
+                    val_losses.append(model.history.history["val_loss"][-1])
+            
+            if val_losses:
+                mean_val_loss = np.mean(val_losses)
+                std_val_loss = np.std(val_losses)
+                html.append(f"<li>Mean validation loss: {mean_val_loss:.4f} ± {std_val_loss:.4f}</li>")
+        else:
+            html.append("<li>Models: Not trained</li>")
+        
+        html.append("</ul>")
+        html.append("</div>")
+        
         return "".join(html)
