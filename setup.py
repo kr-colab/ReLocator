@@ -14,18 +14,39 @@ setup(
     packages=find_packages(exclude=[]),
     install_requires=[
         "numpy>=1.26.0",
-        "tensorflow>=2.17.0",
+        "tf-nightly[and-cuda]",
         "h5py",
         "scikit-allel",
         "matplotlib",
         "scipy",
         "tqdm",
         "pandas",
-        "zarr",
+        "zarr<3.0.0",
         "seaborn",
+        
+        #geospatial
         "cartopy",
         "geopy",
+        "rasterio",
+        "rasterstats",
+        "shapely",
+        "affine",
+        
+        # Optional dependencies
+        "jupyter",
+        "ipykernel",
     ],
+    extras_require={
+        'dev': [
+            'pytest',
+            'black',     # Code formatting
+            'flake8',    # Code linting
+        ],
+        'docs': [
+            'sphinx',
+            'sphinx_rtd_theme',
+        ]
+    },
     entry_points={
         "console_scripts": [
             "locator=locator.cli:main",
