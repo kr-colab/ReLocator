@@ -129,7 +129,9 @@ def parse_args():
         "--gpu_number",
         default=None,
         type=str,
-        help="restrict to specific GPU. default: None",
+        help="Specify which GPU to use (0-based index). For example, use '1' to use the second GPU. "
+             "If not specified, uses the first available GPU. "
+             "Use --disable_gpu to force CPU usage. default: None",
     )
     parser.add_argument(
         "--plot_history",
@@ -176,7 +178,8 @@ def parse_args():
     parser.add_argument(
         "--disable_gpu",
         action="store_true",
-        help="Disable GPU usage even if available",
+        help="Disable GPU usage even if available. Useful when running multiple jobs "
+             "or when GPU memory is needed for other tasks. default: False",
     )
 
     return parser.parse_args()
