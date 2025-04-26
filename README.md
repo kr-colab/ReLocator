@@ -1,3 +1,7 @@
+[![Documentation Status](https://readthedocs.org/projects/relocator/badge/?version=latest)](https://relocator.readthedocs.io/en/latest/?badge=latest)
+
+You can find the full documentation at [https://relocator.readthedocs.io/en/latest/](https://relocator.readthedocs.io/en/latest/).
+
 `Locator` is a supervised machine learning method for predicting the geographic origin of a sample from
 genotype or sequencing data. A manuscript describing it and its use can be found at https://elifesciences.org/articles/54507
 

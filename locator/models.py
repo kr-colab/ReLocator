@@ -9,6 +9,8 @@ from shapely.geometry import Point
 import geopandas as gpd
 from rasterio.features import rasterize
 from affine import Affine
+from typing import Optional
+
 
 def rasterize_species_range(shapefile_path, resolution=0.1):
     gdf = gpd.read_file(shapefile_path)
@@ -25,10 +27,11 @@ def rasterize_species_range(shapefile_path, resolution=0.1):
         out_shape=(height, width),
         transform=transform,
         fill=0,
-        dtype="uint8"
+        dtype="uint8",
     )
 
     return mask.astype(np.float32), transform
+
 
 def euclidean_distance_loss(y_true, y_pred):
     """Custom loss function using Euclidean distance.
@@ -42,6 +45,7 @@ def euclidean_distance_loss(y_true, y_pred):
     """
     return K.sqrt(K.sum(K.square(y_pred - y_true), axis=-1))
 
+
 def mask_lookup(pred_coords, mask_tensor, transform, resolution):
     """
     pred_coords: (batch_size, 2), float32 [lon, lat]
@@ -52,8 +56,12 @@ def mask_lookup(pred_coords, mask_tensor, transform, resolution):
     # Convert coordinates to mask indices
     lon = pred_coords[:, 0]
     lat = pred_coords[:, 1]
-    col = tf.clip_by_value(((lon - transform.c) / resolution), 0, mask_tensor.shape[1] - 1)
-    row = tf.clip_by_value(((lat - transform.f) / resolution), 0, mask_tensor.shape[0] - 1)
+    col = tf.clip_by_value(
+        ((lon - transform.c) / resolution), 0, mask_tensor.shape[1] - 1
+    )
+    row = tf.clip_by_value(
+        ((lat - transform.f) / resolution), 0, mask_tensor.shape[0] - 1
+    )
 
     # Integer indices (nearest-neighbor lookup)
     col = tf.cast(tf.round(col), tf.int32)
@@ -65,7 +73,10 @@ def mask_lookup(pred_coords, mask_tensor, transform, resolution):
 
     return valid
 
-def loss_with_range_penalty(y_true, y_pred, mask_tensor, transform, resolution, penalty_weight=1.0):
+
+def loss_with_range_penalty(
+    y_true, y_pred, mask_tensor, transform, resolution, penalty_weight=1.0
+):
     # Euclidean distance
     euclidean = tf.sqrt(tf.reduce_sum(tf.square(y_pred - y_true), axis=-1))
 
@@ -74,31 +85,44 @@ def loss_with_range_penalty(y_true, y_pred, mask_tensor, transform, resolution, 
 
     # Penalize out-of-range predictions
     penalty = tf.square(1.0 - valid_mask)
-    #tf.print("Euclidean:", euclidean, summarize=10)
-   # tf.print("Penalty:", penalty, summarize=10)
-   # tf.print("Valid mask:", valid_mask, summarize=10)
+    # tf.print("Euclidean:", euclidean, summarize=10)
+    # tf.print("Penalty:", penalty, summarize=10)
+    # tf.print("Valid mask:", valid_mask, summarize=10)
     return euclidean + penalty_weight * penalty
 
-def create_network(input_shape, width=256, n_layers=8, dropout_prop=0.25, optimizer_config=None, loss_fn=None):
+
+def create_network(
+    input_shape: int,
+    width: int = 256,
+    n_layers: int = 8,
+    dropout_prop: float = 0.25,
+    optimizer_config: Optional[dict] = None,
+    loss_fn: Optional[callable] = None,
+) -> keras.Model:
     """Create a neural network model for geographic location prediction.
 
-    Args:
-        input_shape (int): Number of input features (SNPs)
-        width (int, optional): Width of the dense layers. Defaults to 256.
-        n_layers (int, optional): Total number of dense layers (excluding final layers).
-            Defaults to 8.
-        dropout_prop (float, optional): Dropout proportion for middle dropout layer.
-            Defaults to 0.25.
-        optimizer_config (dict, optional): Configuration for the optimizer.
-            Should contain:
-                - algo: str, "adam" or "adamw"
-                - learning_rate: float
-                - weight_decay: float (only for adamw)
-            Defaults to None (uses Adam with default settings).
-        loss_fn (callable, optional): Loss function to use. If None, defaults to euclidean_distance_loss.
+    :param input_shape: Number of input features (SNPs).
+    :type input_shape: int
+    :param width: Width of the dense layers, defaults to 256.
+    :type width: int, optional
+    :param n_layers: Total number of dense layers (excluding final layers),
+        defaults to 8.
+    :type n_layers: int, optional
+    :param dropout_prop: Dropout proportion for middle dropout layer,
+        defaults to 0.25.
+    :type dropout_prop: float, optional
+    :param optimizer_config: Configuration for the optimizer. Should be a dict containing keys:
+        "algo" (str): "adam" or "adamw";
+        "learning_rate" (float);
+        "weight_decay" (float, only used for "adamw").
+        Defaults to None (uses Adam with default settings).
 
-    Returns:
-        keras.Model: Compiled Keras model ready for training
+    :type optimizer_config: dict, optional
+    :param loss_fn: Loss function to use. If None, defaults to
+        euclidean_distance_loss, defaults to None.
+    :type loss_fn: callable, optional
+    :return: Compiled Keras model ready for training.
+    :rtype: keras.Model
 
     Example:
         >>> model = create_network(input_shape=1000)
@@ -133,11 +157,13 @@ def create_network(input_shape, width=256, n_layers=8, dropout_prop=0.25, optimi
         optimizer = "Adam"
     else:
         if optimizer_config["algo"].lower() == "adam":
-            optimizer = keras.optimizers.Adam(learning_rate=optimizer_config["learning_rate"])
+            optimizer = keras.optimizers.Adam(
+                learning_rate=optimizer_config["learning_rate"]
+            )
         elif optimizer_config["algo"].lower() == "adamw":
             optimizer = keras.optimizers.AdamW(
                 learning_rate=optimizer_config["learning_rate"],
-                weight_decay=optimizer_config["weight_decay"]
+                weight_decay=optimizer_config["weight_decay"],
             )
         else:
             raise ValueError(f"Unsupported optimizer: {optimizer_config['algo']}")
@@ -150,6 +176,7 @@ def create_network(input_shape, width=256, n_layers=8, dropout_prop=0.25, optimi
     model.compile(optimizer=optimizer, loss=loss_fn)
 
     return model
+
 
 __all__ = [
     "create_network",
