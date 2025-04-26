@@ -1,6 +1,6 @@
 """Locator: A tool for predicting geographic location from genetic variation"""
 
-from .core import Locator
+from .core import Locator, EnsembleLocator
 from .plotting import plot_predictions, plot_error_summary
 from .models import create_network, euclidean_distance_loss
 

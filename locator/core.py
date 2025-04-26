@@ -2025,18 +2025,89 @@ class EnsembleLocator:
         self.sdlong = None
         self.meanlat = None
         self.sdlat = None
-        
-    def train(self, genotypes, samples, sample_data_file=None):
-        """Train k models on different folds of the data.
+
+    def create_folds(self, genotypes, samples, locations, training_set_indices=None):
+        """Create k-fold splits of the data.
         
         Args:
             genotypes: GenotypeArray containing genetic data
             samples: Array of sample IDs
-            sample_data_file: Optional path to sample data file
-            
+            locations: Array of geographic coordinates (x,y)
+            training_set_indices: Optional list/array of indices to use for training+validation.
+                If provided, only these samples will be used to create the k-folds.
+                If None, all samples will be considered for training/validation.
+                
         Returns:
-            list: Training histories for each fold
+            dict: Dictionary with fold indices
         """
+        # First verify dimensions match
+        if len(samples) != genotypes.shape[1]:  # Assuming genotypes is (n_snps, n_samples, ploidy)
+            raise ValueError(
+                f"Number of samples ({len(samples)}) does not match genotype data dimension ({genotypes.shape[1]})"
+            )
+        
+        # If training_set_indices provided, verify they are valid
+        if training_set_indices is not None:
+            training_set_indices = np.array(training_set_indices)
+            if not np.all(np.isin(training_set_indices, range(len(samples)))):
+                raise ValueError("training_set_indices contains invalid indices")
+            
+            # Subset the relevant arrays to only include training set samples
+            subset_samples = samples[training_set_indices]
+            subset_locations = locations[training_set_indices]
+        else:
+            # Use all samples
+            subset_samples = samples
+            subset_locations = locations
+            training_set_indices = np.arange(len(samples))
+        
+        # Get indices of samples with known locations within the subset
+        known_idx = np.argwhere(~np.isnan(subset_locations[:, 0]))
+        known_idx = np.array([x[0] for x in known_idx])
+        
+        # Get indices of samples with unknown locations (from the full dataset)
+        # These are samples not in training_set_indices OR samples with unknown locations
+        all_indices = set(range(len(samples)))
+        training_set = set(training_set_indices)
+        pred_idx = np.array(list(all_indices - training_set))  # Samples not in training set
+        
+        # Also add samples with unknown locations from the training set
+        unknown_in_training = training_set_indices[np.isnan(subset_locations[:, 0])]
+        pred_idx = np.concatenate([pred_idx, unknown_in_training])
+        pred_idx.sort()
+        
+        # Randomly shuffle known indices
+        np.random.shuffle(known_idx)
+        
+        # Create k folds
+        fold_size = len(known_idx) // self.k_folds
+        self.fold_indices = {}  # Initialize fold_indices dictionary
+        
+        for fold in range(self.k_folds):
+            start_idx = fold * fold_size
+            end_idx = start_idx + fold_size if fold < self.k_folds - 1 else len(known_idx)
+            
+            # Get validation indices for this fold
+            # Convert back to original sample indices
+            val_idx = training_set_indices[known_idx[start_idx:end_idx]]
+            
+            # Get training indices (all other known samples from training set)
+            train_subset = known_idx[np.concatenate([
+                np.arange(0, start_idx),
+                np.arange(end_idx, len(known_idx))
+            ])]
+            train_idx = training_set_indices[train_subset]
+            
+            self.fold_indices[fold] = {
+                'train': train_idx,
+                'val': val_idx,
+                'pred': pred_idx
+            }
+        
+        return self.fold_indices
+
+    def train(self, genotypes, samples, sample_data_file=None):
+        """Train k models on different folds of the data."""
         self.samples = samples
         
         # Get sample data and locations
@@ -2088,8 +2159,9 @@ class EnsembleLocator:
             val_idx = fold_indices['val']
             pred_idx = fold_indices['pred']
             
-            # Store prediction indices for later use
-            model.pred_indices = pred_idx
+            # Store samples and prediction indices
+            model.samples = samples  
+            model.pred_indices = pred_idx  
             
             # Prepare data for this fold using pre-filtered genotypes
             model.traingen = np.transpose(filtered_genotypes[:, train_idx])
@@ -2209,20 +2281,8 @@ class EnsembleLocator:
         
         return histories
     
-    def predict(self, return_df=True, save_preds_to_disk=True):
-        """Make predictions using the ensemble of models.
-        
-        For samples with unknown locations, this averages predictions across
-        all models in the ensemble. For samples used in validation, it uses
-        the predictions from models where that sample was in the validation set.
-        
-        Args:
-            return_df (bool): Whether to return predictions as DataFrame
-            save_preds_to_disk (bool): Whether to save predictions to file
-            
-        Returns:
-            pandas.DataFrame: DataFrame with predictions if return_df=True
-        """
+    def predict(self, return_df=True, save_preds_to_disk=True, include_val_predictions=True):
+        """Make predictions using the ensemble of models."""
         if not self.models:
             raise ValueError("No trained models in ensemble")
         
@@ -2231,17 +2291,36 @@ class EnsembleLocator:
         
         # Get predictions for unknown locations from all models
         pred_predictions = []
+        sample_ids = None
+        
         for model in self.models:
+            # Ensure samples and pred_indices are set
+            if not hasattr(model, 'samples'):
+                model.samples = self.samples
+            if not hasattr(model, 'pred_indices'):
+                model.pred_indices = self.fold_indices[0]['pred']  # Use first fold's pred indices
+                
             preds = model.predict(return_df=True, save_preds_to_disk=False)
             pred_predictions.append(preds[['x', 'y']].values)
+            
+            # Store sample IDs from first model (they should be the same for all models)
+            if sample_ids is None and 'sampleID' in preds.columns:
+                sample_ids = preds['sampleID'].values
         
         # Average predictions across models
         mean_predictions = np.mean(pred_predictions, axis=0)
-        
+        # rename columns to x_pred and y_pred   
+        mean_predictions = pd.DataFrame(mean_predictions, columns=['x_pred', 'y_pred'])
         # Create DataFrame with predictions
-        pred_df = pd.DataFrame(mean_predictions, columns=['x', 'y'])
-        if hasattr(self.models[0], 'samples') and hasattr(self.models[0], 'pred_indices'):
-            pred_df.insert(0, 'sampleID', self.models[0].samples[self.models[0].pred_indices])
+        pred_df = pd.DataFrame(mean_predictions, columns=['x_pred', 'y_pred'])
+        if sample_ids is not None:
+            pred_df.insert(0, 'sampleID', sample_ids)
+        
+        if not include_val_predictions:
+            # Return only prediction set results
+            if save_preds_to_disk:
+                pred_df.to_csv(f"{self.base_config['out']}_ensemble_predlocs_pred_only.csv", index=False)
+            return pred_df if return_df else pred_df.values[:, 1:]
         
         # Get validation predictions for each fold
         val_predictions = {}
