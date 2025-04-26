@@ -1,7 +1,9 @@
 Usage Guide
 ===========
 
-This guide will walk you through the basic usage of Locator for predicting geographic coordinates from genotype matrices.
+This guide covers how to use Locator for predicting geographic coordinates from genotype matrices.
+
+For complete API documentation, see :doc:`api`.
 
 Basic Usage
 ----------
@@ -9,166 +11,188 @@ Basic Usage
 Loading Data
 ~~~~~~~~~~~
 
-Locator expects genotype data in a specific format. Here's how to load your data:
+For detailed API reference of data loading functions, see :ref:`api:Data Module`.
+
+Locator supports multiple input formats for genotype data:
 
 .. code-block:: python
 
-   import locator
-   from locator.data import load_genotype_data
+   from locator import Locator
 
-   # Load genotype matrix
-   genotype_data = load_genotype_data("path/to/genotype_matrix.csv")
+   # Create a Locator instance with configuration
+   config = {
+       "out": "my_analysis",
+       "batch_size": 32,
+       "width": 256,
+       "nlayers": 8,
+       "dropout_prop": 0.25
+   }
    
-   # Load known coordinates (for training)
-   coordinates = load_genotype_data("path/to/coordinates.csv")
+   locator = Locator(config)
 
-Creating a Model
-~~~~~~~~~~~~~~
+   # Load data from various formats:
+   
+   # 1. From VCF
+   genotypes, samples = locator.load_genotypes(vcf="path/to/genotypes.vcf")
+   
+   # 2. From zarr (recommended for large datasets)
+   genotypes, samples = locator.load_genotypes(zarr="path/to/genotypes.zarr")
+   
+   # 3. From pandas DataFrame
+   locator = Locator({
+       "out": "my_analysis",
+       "genotype_data": genotype_df,  # DataFrame with samples as index, SNPs as columns
+       "sample_data": coords_df       # DataFrame with sampleID, x, y columns
+   })
 
-Locator provides several pre-built models. Here's how to create and configure one:
+Training and Prediction
+~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: python
-
-   from locator.models import LocatorModel
-
-   # Create a model with default settings
-   model = LocatorModel(
-       input_shape=(n_loci,),  # Number of genetic loci
-       hidden_layers=[128, 64],
-       dropout_rate=0.2
-   )
-
-Training
-~~~~~~~~
-
-Train the model using your genotype data and known coordinates:
+Train the model and make predictions:
 
 .. code-block:: python
 
    # Train the model
-   history = model.fit(
-       genotype_data,
-       coordinates,
-       epochs=100,
-       batch_size=32,
-       validation_split=0.2
-   )
-
-Making Predictions
-~~~~~~~~~~~~~~~~
-
-Once trained, you can use the model to predict coordinates for new samples:
-
-.. code-block:: python
-
-   # Load new genotype data
-   new_samples = load_genotype_data("path/to/new_samples.csv")
+   history = locator.train(genotypes=genotypes, samples=samples)
    
    # Make predictions
-   predicted_coords = model.predict(new_samples)
+   predictions = locator.predict(return_df=True)  # Returns DataFrame with sampleID, x, y
 
 Advanced Usage
 -------------
 
-Using Species Range Masks
-~~~~~~~~~~~~~~~~~~~~~~~
+For complete API documentation of advanced features, see :ref:`api:Core Module`.
 
-Locator can incorporate species range masks to improve prediction accuracy:
-
-.. code-block:: python
-
-   from locator.utils import load_range_mask
-
-   # Load range mask
-   range_mask = load_range_mask("path/to/range_mask.tif")
-   
-   # Create model with range mask
-   model = LocatorModel(
-       input_shape=(n_loci,),
-       range_mask=range_mask
-   )
-
-Custom Loss Functions
-~~~~~~~~~~~~~~~~~~~
-
-You can define custom loss functions for specific needs:
-
-.. code-block:: python
-
-   from locator.losses import CustomLoss
-
-   # Create custom loss
-   custom_loss = CustomLoss(
-       mse_weight=1.0,
-       range_penalty_weight=0.5
-   )
-   
-   # Use in model
-   model = LocatorModel(
-       input_shape=(n_loci,),
-       loss=custom_loss
-   )
-
-Batch Processing
+Holdout Analysis
 ~~~~~~~~~~~~~~
 
-For large datasets, use batch processing:
+Evaluate model performance by holding out samples:
 
 .. code-block:: python
 
-   from locator.data import DataGenerator
-
-   # Create data generator
-   generator = DataGenerator(
-       genotype_data,
-       coordinates,
-       batch_size=32
+   # Hold out k samples during training
+   locator.train_holdout(
+       genotypes=genotypes,
+       samples=samples,
+       k=10
    )
    
-   # Train with generator
-   model.fit(
-       generator,
-       epochs=100
+   # Get predictions for held-out samples
+   holdout_preds = locator.predict_holdout(
+       return_df=True,
+       plot_summary=True
    )
 
-Evaluation
----------
+Ensemble Models
+~~~~~~~~~~~~~
 
-Locator provides various metrics for evaluating prediction accuracy:
+Use multiple models for improved predictions:
 
 .. code-block:: python
 
-   from locator.metrics import evaluate_predictions
-
-   # Evaluate predictions
-   metrics = evaluate_predictions(
-       true_coords,
-       predicted_coords
+   from locator import EnsembleLocator
+   
+   # Create ensemble with 5 models
+   ensemble = EnsembleLocator(
+       base_config=config,
+       k_folds=5
    )
    
-   print(f"Mean Squared Error: {metrics['mse']}")
-   print(f"Mean Absolute Error: {metrics['mae']}")
-   print(f"R-squared Score: {metrics['r2']}")
+   # Train ensemble
+   histories = ensemble.train(
+       genotypes=genotypes,
+       samples=samples
+   )
+   
+   # Get ensemble predictions
+   predictions = ensemble.predict(return_df=True)
 
-Visualization
------------
+Windowed Analysis
+~~~~~~~~~~~~~~~
 
-Visualize your results using built-in plotting functions:
+Analyze predictions across genomic windows:
 
 .. code-block:: python
 
-   from locator.visualization import plot_predictions
-
-   # Plot predictions
-   plot_predictions(
-       true_coords,
-       predicted_coords,
-       range_mask=range_mask
+   # Run windowed analysis
+   window_predictions = locator.run_windows(
+       genotypes=genotypes,
+       samples=samples,
+       window_size=5e5,  # 500kb windows
+       return_df=True
    )
+
+Jacknife Analysis
+~~~~~~~~~~~~~~~
+
+Assess prediction uncertainty:
+
+.. code-block:: python
+
+   # Run jacknife analysis
+   jacknife_predictions = locator.run_jacknife(
+       genotypes=genotypes,
+       samples=samples,
+       prop=0.05,  # Proportion of SNPs to mask
+       n_replicates=100,
+       return_df=True
+   )
+
+Using Range Masks
+~~~~~~~~~~~~~~~
+
+Incorporate species range constraints:
+
+.. code-block:: python
+
+   # Configure model with range penalty
+   config = {
+       "out": "range_constrained",
+       "use_range_penalty": True,
+       "species_range_shapefile": "path/to/range.shp",
+       "resolution": 0.05,
+       "penalty_weight": 1.0
+   }
+   
+   locator = Locator(config)
+
+GPU Configuration
+~~~~~~~~~~~~~~
+
+Configure GPU usage:
+
+.. code-block:: python
+
+   # Specify GPU device
+   config = {
+       "out": "gpu_analysis",
+       "gpu_number": 0  # Use first GPU
+   }
+   
+   # Or disable GPU
+   config = {
+       "out": "cpu_analysis",
+       "disable_gpu": True
+   }
+
+Data Augmentation
+~~~~~~~~~~~~~~~
+
+Enable data augmentation during training:
+
+.. code-block:: python
+
+   config = {
+       "out": "augmented",
+       "augmentation": {
+           "enabled": True,
+           "flip_rate": 0.05  # Rate at which to flip genotypes
+       }
+   }
 
 Next Steps
 ---------
 
-* Check out the :doc:`api` reference for detailed information about all available functions and classes
+* Check the :doc:`api` reference for detailed information about all available functions and classes
 * See the :doc:`examples` section for more advanced usage examples
 * Learn how to :doc:`contributing` to the project 

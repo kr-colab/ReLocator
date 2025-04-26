@@ -37,6 +37,8 @@ This will install:
 * flake8 for linting
 * sphinx and related packages for documentation
 
+For detailed API documentation useful during development, see :doc:`api`.
+
 Installing from Source
 ---------------------
 
@@ -93,4 +95,6 @@ If you encounter any issues during installation:
 Next Steps
 ----------
 
-After installation, proceed to the :doc:`usage` guide to learn how to use Locator. 
+* Read the :doc:`usage` guide to learn how to use Locator
+* Check the :doc:`api` reference for detailed documentation
+* See :doc:`examples` for example workflows 

@@ -13,8 +13,17 @@ Locator is a deep learning-based tool for predicting geographic coordinates from
    examples
    contributing
 
-Features
---------
+Quick Links
+----------
+
+* :doc:`installation` - Installation instructions
+* :doc:`usage` - Basic and advanced usage guide
+* :doc:`api` - Complete API reference
+* :doc:`examples` - Example workflows
+* :doc:`contributing` - Contribution guidelines
+
+Key Features
+-----------
 
 * Deep learning-based coordinate prediction
 * Custom loss functions for geographic constraints
@@ -23,40 +32,20 @@ Features
 * TensorFlow/Keras implementation
 * Comprehensive evaluation metrics
 
-Installation
------------
+Getting Started
+-------------
 
-To install Locator, use pip:
+1. :ref:`installation:Installation` - Install Locator
+2. :ref:`usage:Basic Usage` - Learn the basics
+3. :ref:`api:API Reference` - Explore the API
+4. :ref:`examples:Examples` - See examples
 
-.. code-block:: bash
+For Developers
+------------
 
-   pip install locator
-
-For development installation with documentation tools:
-
-.. code-block:: bash
-
-   pip install locator[dev,docs]
-
-Quick Start
-----------
-
-Here's a simple example of using Locator:
-
-.. code-block:: python
-
-   from locator.models import LocatorModel
-   from locator.data import load_genotype_data
-
-   # Load your genotype data
-   X_train, y_train = load_genotype_data('path/to/data')
-
-   # Create and train the model
-   model = LocatorModel()
-   model.fit(X_train, y_train)
-
-   # Make predictions
-   predictions = model.predict(X_test)
+* :ref:`contributing:Contributing` - How to contribute
+* :ref:`api:API Reference` - Detailed API documentation
+* :ref:`installation:Development Installation` - Setting up for development
 
 Indices and tables
 ==================
