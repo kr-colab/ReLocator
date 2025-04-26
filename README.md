@@ -7,7 +7,7 @@ genotype or sequencing data. A manuscript describing it and its use can be found
 
 # Installation 
 
-The easiest way to install `locator` is to download the github repo and run the setup script. It's usually a good idea to do this in a new conda environment (https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html) to avoid version conflicts with other software: 
+The easiest way to install `relocator` is to download the github repo and run the setup script. It's usually a good idea to do this in a new conda environment (https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html) to avoid version conflicts with other software: 
 
 ```
 conda create --name locator
@@ -112,37 +112,9 @@ locator --vcf data/test_genotypes.vcf.gz --sample_data data/test_sample_data.txt
 ```
 
 # Plotting and summarizing output
-plot_locator.R is a command line script that calculates centroids from multiple locator predictions, estimates errors (if true locations for all samples are provided) and plots maps of locator output. It is intended for runs with multiple outputs (either windowed analyses, bootstraps, or jacknife replicates). Install the required packages by running 
 
-```Rscript scripts/install_R_packages.R```
 
-Calculate centroids and plot predictions for our jacknife predictions with:
 
-```bash
-Rscript scripts/plot_locator.R --infile out/test_windows/ --sample_data data/test_sample_data.txt --out out/test_ --map F
-```
-
-This will plot predictions and uncertainties for 9 randomly selected individuals to `/out/jacknife/test_windows.png`, and print the locations with peak kernal density ("kd_x/y") and the geographic centroids ("gc_x/y") across jacknife replicates to `out/jacknife/test_centroids.txt`. You can also calculate and plot validation error estimates by using the `--error` option if you provide a sample data file with true locations for all individuals. See all parameters with 
-
-```bash
-Rscript scripts/plot_locator.R --help
-```
-
-# Iterating over training/validation samples
-For datasets with relatively few individuals, randomly splitting training and validation samples can sometimes result in different inferences across runs. One way to deal with this variation is to train replicate models while using different sets of samples for training and validation (by changing the random seed), then estimating final locations as the centroid across multiple predictions:
-```
-#loop over seeds and generate five predictions using different sets of training and validation samples
-cd ~/locator
-for i in {12345,54321,2349560,549657840,48576593}
-do
-  locator --vcf data/test_genotypes.vcf.gz --sample_data data/test_sample_data.txt --out out/test/test_seed_$i --seed $i
-done
-
-#generate plots and centroid estimates
-Rscript scripts/plot_locator.R --infile out/test/ --sample_data data/test_sample_data.txt --out out/test/test --map F
-
-```
-The first command will train five separate `locator` models and generate predictions for the unknown individuals, and the second will calculate centroids (in `out/test/test_centroids.txt `and generate a plot showing the spread of predicted locations (`out/test/test_windows.png`). In the `test_centroids` file, the "kd_x/y" columns give the location with highest kernal density, while the "gc_x/y" columns give the geographic centroids. See the preprint for details. 
 
 # Diagnosing Failures
 We recommend all users read the paper (https://elifesciences.org/articles/54507) before using Locator to get an idea of when and how it can fail. In general, location prediction works better in populations with less dispersal and datasets with more SNPs. When run on populations with too much dispersal or too little data, Locator tends to predict the middle of the distribution of training points. This behavior can also occur when a species is strongly structured in only one direction -- for example, if there is a strong north-south cline in allele frequencies but no east-west variation, Locator will typically generate accurate latitude predictions but will guess the middle of the longitudinal range of training points. 
