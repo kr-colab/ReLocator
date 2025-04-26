@@ -2,7 +2,7 @@ Installation
 ============
 
 Requirements
------------
+-------------
 
 Locator requires Python 3.8 or higher. The following dependencies are automatically installed:
 
@@ -13,7 +13,7 @@ Locator requires Python 3.8 or higher. The following dependencies are automatica
 * Matplotlib >= 3.3.0
 
 Basic Installation
------------------
+-------------------
 
 The simplest way to install Locator is using pip:
 
@@ -22,7 +22,7 @@ The simplest way to install Locator is using pip:
    pip install locator
 
 Development Installation
------------------------
+-------------------------
 
 For development, you may want to install additional dependencies for testing and documentation:
 
@@ -40,7 +40,7 @@ This will install:
 For detailed API documentation useful during development, see :doc:`api`.
 
 Installing from Source
----------------------
+-----------------------
 
 To install from source:
 
@@ -58,7 +58,7 @@ To install from source:
       pip install -e .
 
 Verifying Installation
----------------------
+-----------------------
 
 To verify your installation, run:
 
@@ -70,10 +70,10 @@ To verify your installation, run:
 You should see the version number printed without any errors.
 
 Troubleshooting
---------------
+---------------
 
 Common Issues
-~~~~~~~~~~~~
+~~~~~~~~~~~~~
 
 1. TensorFlow GPU Support
    
@@ -84,11 +84,11 @@ Common Issues
    For large datasets, you may need to adjust your system's memory settings or use data generators.
 
 Getting Help
-~~~~~~~~~~~
+~~~~~~~~~~~~
 
 If you encounter any issues during installation:
 
-* Check the :ref:`troubleshooting` section
+* Check the troubleshooting section above
 * Open an issue on GitHub
 * Contact the development team
 

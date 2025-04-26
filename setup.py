@@ -14,7 +14,8 @@ setup(
     packages=find_packages(exclude=[]),
     install_requires=[
         "numpy>=1.26.0",
-        "tf-nightly[and-cuda]",
+        "tensorflow; platform_system=='Darwin'",
+        "tf-nightly[and-cuda]; platform_system=='Linux' or platform_system=='Windows'",
         "h5py",
         "scikit-allel",
         "matplotlib",
@@ -23,31 +24,30 @@ setup(
         "pandas",
         "zarr<3.0.0",
         "seaborn",
-        
-        #geospatial
+        # geospatial
         "cartopy",
         "geopy",
+        "geopandas",
         "rasterio",
         "rasterstats",
         "shapely",
         "affine",
-        
         # Optional dependencies
         "jupyter",
         "ipykernel",
     ],
     extras_require={
-        'dev': [
-            'pytest',
-            'black',     # Code formatting
-            'flake8',    # Code linting
+        "dev": [
+            "pytest",
+            "black",  # Code formatting
+            "flake8",  # Code linting
         ],
-        'docs': [
-            'sphinx>=4.0',
-            'sphinx_rtd_theme',
-            'sphinx-autodoc-typehints',
-            'sphinx-autobuild',
-        ]
+        "docs": [
+            "sphinx>=4.0",
+            "sphinx_rtd_theme",
+            "sphinx-autodoc-typehints",
+            "sphinx-autobuild",
+        ],
     },
     entry_points={
         "console_scripts": [

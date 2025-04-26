@@ -6,12 +6,10 @@ This guide covers how to use Locator for predicting geographic coordinates from 
 For complete API documentation, see :doc:`api`.
 
 Basic Usage
-----------
-
+-----------
 Loading Data
-~~~~~~~~~~~
-
-For detailed API reference of data loading functions, see :ref:`api:Data Module`.
+~~~~~~~~~~~~
+For detailed API reference of data loading functions, see :doc:`api`.
 
 Locator supports multiple input formats for genotype data:
 
@@ -29,15 +27,15 @@ Locator supports multiple input formats for genotype data:
    }
    
    locator = Locator(config)
-
-   # Load data from various formats:
    
+   # Load data from various formats:
+   #
    # 1. From VCF
    genotypes, samples = locator.load_genotypes(vcf="path/to/genotypes.vcf")
-   
+   #
    # 2. From zarr (recommended for large datasets)
    genotypes, samples = locator.load_genotypes(zarr="path/to/genotypes.zarr")
-   
+   #
    # 3. From pandas DataFrame
    locator = Locator({
        "out": "my_analysis",
@@ -46,8 +44,7 @@ Locator supports multiple input formats for genotype data:
    })
 
 Training and Prediction
-~~~~~~~~~~~~~~~~~~~~~
-
+-----------------------
 Train the model and make predictions:
 
 .. code-block:: python
@@ -59,13 +56,11 @@ Train the model and make predictions:
    predictions = locator.predict(return_df=True)  # Returns DataFrame with sampleID, x, y
 
 Advanced Usage
--------------
-
-For complete API documentation of advanced features, see :ref:`api:Core Module`.
+--------------
+For complete API documentation of advanced features, see :doc:`api`.
 
 Holdout Analysis
-~~~~~~~~~~~~~~
-
+----------------
 Evaluate model performance by holding out samples:
 
 .. code-block:: python
@@ -84,8 +79,7 @@ Evaluate model performance by holding out samples:
    )
 
 Ensemble Models
-~~~~~~~~~~~~~
-
+---------------
 Use multiple models for improved predictions:
 
 .. code-block:: python
@@ -108,8 +102,7 @@ Use multiple models for improved predictions:
    predictions = ensemble.predict(return_df=True)
 
 Windowed Analysis
-~~~~~~~~~~~~~~~
-
+-----------------
 Analyze predictions across genomic windows:
 
 .. code-block:: python
@@ -123,8 +116,7 @@ Analyze predictions across genomic windows:
    )
 
 Jacknife Analysis
-~~~~~~~~~~~~~~~
-
+-----------------
 Assess prediction uncertainty:
 
 .. code-block:: python
@@ -139,8 +131,7 @@ Assess prediction uncertainty:
    )
 
 Using Range Masks
-~~~~~~~~~~~~~~~
-
+-----------------
 Incorporate species range constraints:
 
 .. code-block:: python
@@ -157,8 +148,7 @@ Incorporate species range constraints:
    locator = Locator(config)
 
 GPU Configuration
-~~~~~~~~~~~~~~
-
+-----------------
 Configure GPU usage:
 
 .. code-block:: python
@@ -176,8 +166,7 @@ Configure GPU usage:
    }
 
 Data Augmentation
-~~~~~~~~~~~~~~~
-
+-----------------
 Enable data augmentation during training:
 
 .. code-block:: python
@@ -191,8 +180,7 @@ Enable data augmentation during training:
    }
 
 Next Steps
----------
-
-* Check the :doc:`api` reference for detailed information about all available functions and classes
-* See the :doc:`examples` section for more advanced usage examples
-* Learn how to :doc:`contributing` to the project 
+----------
+* Check the :doc:`api` reference for detailed information about all available functions and classes.
+* See the :doc:`examples` section for more advanced usage examples.
+* Learn how to :doc:`contributing` to the project. 

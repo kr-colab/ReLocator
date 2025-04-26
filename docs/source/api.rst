@@ -1,32 +1,35 @@
 API Reference
-============
+=============
 
 Core Module
-----------
-
+-----------
 .. module:: locator.core
 
+.. autofunction:: setup_gpu
+
+   Configure GPU settings for optimal usage.
+
+   Args:
+       gpu_number: Optional int or str specifying which GPU to use (0-based index).
+                  If None, uses the first available GPU.
+
+   Returns:
+       bool: True if GPU is available and configured, False otherwise
+
 Locator
-~~~~~~~
-
+^^^^^^^
 .. autoclass:: Locator
-   :members:
-   :special-members: __init__
 
-   The main class for predicting geographic locations from genetic data.
 
 EnsembleLocator
-~~~~~~~~~~~~~~
-
+^^^^^^^^^^^^^^^
 .. autoclass:: EnsembleLocator
-   :members:
-   :special-members: __init__
+   :members: 
 
-   A class for managing an ensemble of Locator models.
+ 
 
 Models Module
-------------
-
+-------------
 .. module:: locator.models
 
 .. autofunction:: create_network
@@ -42,8 +45,7 @@ Models Module
    Converts species range shapefile to raster format.
 
 Utils Module
------------
-
+------------
 .. module:: locator.utils
 
 .. autofunction:: normalize_locs
@@ -66,56 +68,15 @@ Utils Module
        max_snps (int, optional): Maximum number of SNPs to retain
        impute (bool): Whether to impute missing values
 
-Data Module
-----------
 
-.. module:: locator.data
 
-.. autoclass:: DataGenerator
-   :members:
-   :special-members: __init__
 
-   Generates batches of data for training.
-
-.. autofunction:: load_genotype_data
-
-   Loads genotype data from various file formats.
-
-Metrics Module
--------------
-
-.. module:: locator.metrics
-
-.. autofunction:: evaluate_predictions
-
-   Evaluates prediction accuracy using various metrics.
-
-   Args:
-       true_coords (numpy.ndarray): True coordinates
-       predicted_coords (numpy.ndarray): Predicted coordinates
-
-   Returns:
-       dict: Dictionary of evaluation metrics
-
-Visualization Module
-------------------
-
-.. module:: locator.visualization
-
-.. autofunction:: plot_predictions
-
-   Visualizes predicted vs true locations.
-
-.. autofunction:: plot_error_summary
-
-   Creates summary plots of prediction errors.
-
-Configuration
-------------
+Configuration Options
+---------------------
+*This section provides an overview of the available configuration options.*
 
 Default Configuration
-~~~~~~~~~~~~~~~~~~~
-
+^^^^^^^^^^^^^^^^^^^^^
 The default configuration for Locator includes:
 
 .. code-block:: python
@@ -127,12 +88,12 @@ The default configuration for Locator includes:
        "min_mac": 2,
        "max_SNPs": None,
        "impute_missing": False,
-
+       
        # Network architecture
        "width": 256,
        "nlayers": 8,
        "dropout_prop": 0.25,
-
+       
        # Training parameters
        "max_epochs": 5000,
        "patience": 100,
@@ -140,24 +101,24 @@ The default configuration for Locator includes:
        "min_epochs": 10,
        "min_delta": 1e-4,
        "restore_best_weights": True,
-
+       
        # Optimizer parameters
        "optimizer_algo": "adam",
        "weight_decay": 0.004,
-
+       
        # Output control
        "keras_verbose": 1,
        "prediction_frequency": 1,
-
+       
        # Validation
        "validation_split": 0.1,
-
+       
        # Data augmentation
        "augmentation": {
            "enabled": False,
            "flip_rate": 0.05
        },
-
+       
        # Range penalty
        "use_range_penalty": False,
        "species_range_shapefile": None,
@@ -166,11 +127,9 @@ The default configuration for Locator includes:
    }
 
 Input Formats
-~~~~~~~~~~~~
-
+^^^^^^^^^^^^^
 Genotype Data
-************
-
+"""""""""""""
 Supported input formats for genotype data:
 
 1. VCF files (``.vcf`` or ``.vcf.gz``)
@@ -181,8 +140,7 @@ Supported input formats for genotype data:
    - Genotype counts (0,1,2) as values
 
 Sample Data
-**********
-
+"""""""""""
 Required format for sample coordinate data:
 
 - Tab-delimited file or DataFrame with columns:
@@ -191,11 +149,9 @@ Required format for sample coordinate data:
   - ``y``: Latitude
 
 Output Formats
-~~~~~~~~~~~~~
-
+^^^^^^^^^^^^^^
 Prediction Results
-****************
-
+""""""""""""""""""
 Default output files:
 
 - ``{out}_predlocs.txt``: Main predictions
@@ -211,12 +167,87 @@ For special analyses:
 - ``{out}_holdout_predlocs.csv``: Holdout analysis results
 
 Error Handling
--------------
-
+^^^^^^^^^^^^^^
 Common error messages and their solutions:
 
 GPU Errors
-~~~~~~~~~
-
+""""""""""
 - ``GPU memory allocation error``: Reduce batch size or model size
 - ``CUDA initialization error``: Check GPU drivers and TensorFlow installation
+
+Examples
+--------
+
+This section provides examples of how to use the Locator package for various analysis scenarios.
+
+Basic Usage
+^^^^^^^^^^^
+
+.. code-block:: python
+
+    import locator
+    from locator.core import Locator
+    
+    # Initialize Locator with configuration
+    loc = Locator({
+        "out": "my_analysis",
+        "sample_data": "samples.txt",
+        "zarr": "genotypes.zarr"
+    })
+    
+    # Load genotype data
+    genotypes, samples = loc.load_genotypes(zarr="genotypes.zarr")
+    
+    # Train the model
+    loc.train(genotypes=genotypes, samples=samples)
+    
+    # Make predictions
+    predictions = loc.predict(return_df=True)
+    
+    # Plot results
+    loc.plot_history(loc.history)
+
+Advanced Analysis
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+    # Run windowed analysis
+    window_results = loc.run_windows(
+        genotypes=genotypes,
+        samples=samples,
+        window_size=1e6
+    )
+    
+    # Run jacknife analysis
+    jacknife_results = loc.run_jacknife(
+        genotypes=genotypes,
+        samples=samples,
+        prop=0.1
+    )
+    
+    # Run bootstrap analysis
+    bootstrap_results = loc.run_bootstraps(
+        genotypes=genotypes,
+        samples=samples,
+        n_bootstraps=100
+    )
+
+Ensemble Analysis
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+    from locator.core import EnsembleLocator
+    
+    # Initialize ensemble
+    ensemble = EnsembleLocator(
+        base_config={"out": "ensemble_analysis"},
+        k_folds=5
+    )
+    
+    # Train ensemble
+    ensemble.train(genotypes=genotypes, samples=samples)
+    
+    # Make predictions
+    ensemble_predictions = ensemble.predict()
