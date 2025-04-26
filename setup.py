@@ -43,8 +43,10 @@ setup(
             'flake8',    # Code linting
         ],
         'docs': [
-            'sphinx',
+            'sphinx>=4.0',
             'sphinx_rtd_theme',
+            'sphinx-autodoc-typehints',
+            'sphinx-autobuild',
         ]
     },
     entry_points={
