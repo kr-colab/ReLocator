@@ -12,6 +12,7 @@ extensions = [
     'sphinx.ext.viewcode',
     'sphinx.ext.intersphinx',
     'sphinx.ext.mathjax',
+    'sphinx.ext.autosummary',  
 ]
 
 templates_path = ['_templates']
@@ -42,3 +43,28 @@ autodoc_default_options = {
     'undoc-members': True,
     'exclude-members': '__weakref__'
 } 
+
+# Add intersphinx mapping for external libraries
+intersphinx_mapping = {
+    'python': ('https://docs.python.org/3', None),
+    'numpy': ('https://numpy.org/doc/stable/', None),
+    'tensorflow': ('https://www.tensorflow.org/api_docs/python', None),
+    'pandas': ('https://pandas.pydata.org/docs/', None),
+}
+
+# Templates path
+templates_path = ['_templates']
+exclude_patterns = []
+
+# HTML theme settings
+html_theme = 'sphinx_rtd_theme'
+html_static_path = ['_static']
+
+# Add any Sphinx extension module names here
+autosummary_generate = True  # Generate stub pages for autosummary
+add_module_names = False  # Remove module names from generated documentation
+
+# Make sure the target directory exists
+import os
+if not os.path.exists('_autosummary'):
+    os.makedirs('_autosummary')
