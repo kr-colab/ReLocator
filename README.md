@@ -1,6 +1,7 @@
 [![Documentation Status](https://readthedocs.org/projects/relocator/badge/?version=latest)](https://relocator.readthedocs.io/en/latest/?badge=latest)
 
-You can find the full documentation at [https://relocator.readthedocs.io/en/latest/](https://relocator.readthedocs.io/en/latest/).
+You can find the full documentation at [https://relocator.readthedocs.io/en/latest/](https://relocator.readthedocs.io/en/latest/). This is a work in progress and will be updated as we add more features and examples. Please refer to that documentation rather
+than this README for the most up to date information.
 
 `Locator` is a supervised machine learning method for predicting the geographic origin of a sample from
 genotype or sequencing data. A manuscript describing it and its use can be found at https://elifesciences.org/articles/54507
@@ -17,7 +18,11 @@ cd locator
 pip install .
 ```
 
-We recommend running on a CUDA-enabled GPU (https://www.tensorflow.org/install/gpu).
+`relocator` using the tensorflow backend and is compatible with both CPU and GPU.
+Using a GPU will speed up training and prediction, but is not required. The `pip`
+requirements _should_ install a compatible version of tensorflow, but if you
+run into trouble, please file an issue and or refer to the [tensorflow
+installation guide](https://www.tensorflow.org/install).
 
 # Overview
 `locator` reads in a set of genotypes and locations, trains a neural network to approximate the relationship between them, and predicts locations for a set of samples held out from the training routine. Samples with known locations are split randomly into a training set (used to fit model parameters) and a validation set (used to tune hyperparameters of the optimizer and evaluate error after training). Predictions are then generated for all samples with unknown coordinates. By fitting multiple models to different regions of the genome or to bootstrapped subsets of the full SNP matrix, the approach can also estimate uncertainty in a location estimate. 
