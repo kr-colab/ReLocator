@@ -209,3 +209,42 @@ def test_locator_init_gpu_selection(
     config_gpu_invalid = {"gpu_number": "abc"}
     Locator(config=config_gpu_invalid)
     mock_setup_gpu.assert_called_with(None)
+
+
+@patch("locator.core.allel.read_vcf")
+def test_load_from_vcf_success(mock_read_vcf):
+    """
+    Tests that _load_from_vcf correctly loads genotype and sample data from a VCF file.
+    """
+    # Mock VCF data structure as returned by allel.read_vcf
+    mock_vcf = {
+        "calldata/GT": np.array(
+            [[[0, 0], [1, 0]], [[1, 1], [0, 1]]]
+        ),  # shape: (variants, samples, ploidy)
+        "samples": np.array(["sample1", "sample2"]),
+    }
+    mock_read_vcf.return_value = mock_vcf
+
+    locator = Locator()
+    genotypes, samples = locator._load_from_vcf("dummy.vcf")
+
+    # Assertions
+    assert isinstance(samples, np.ndarray)
+    np.testing.assert_array_equal(samples, np.array(["sample1", "sample2"]))
+    # Check that genotypes is an allel.GenotypeArray and matches the mock data
+    assert hasattr(genotypes, "shape")
+    np.testing.assert_array_equal(genotypes, mock_vcf["calldata/GT"])
+
+    mock_read_vcf.assert_called_once_with("dummy.vcf")
+
+
+@patch("locator.core.allel.read_vcf")
+def test_load_from_vcf_failure(mock_read_vcf):
+    """
+    Tests that _load_from_vcf raises ValueError if the VCF file cannot be read.
+    """
+    mock_read_vcf.return_value = None
+    locator = Locator()
+    with pytest.raises(ValueError, match="Could not read VCF file: dummy.vcf"):
+        locator._load_from_vcf("dummy.vcf")
+    mock_read_vcf.assert_called_once_with("dummy.vcf")
