@@ -254,7 +254,8 @@ class Locator:
         self.sdlong = None
         self.meanlat = None
         self.sdlat = None
-        self.positions = None  # For windowed analysis
+        if not hasattr(self, "positions"):
+            self.positions = None  # For windowed analysis
 
         # Setup GPU if not explicitly disabled
         if not self.config.get("disable_gpu", False):
