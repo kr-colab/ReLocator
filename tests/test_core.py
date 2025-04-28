@@ -248,3 +248,82 @@ def test_load_from_vcf_failure(mock_read_vcf):
     with pytest.raises(ValueError, match="Could not read VCF file: dummy.vcf"):
         locator._load_from_vcf("dummy.vcf")
     mock_read_vcf.assert_called_once_with("dummy.vcf")
+
+
+@patch("locator.core.pd.read_csv")
+def test_load_from_matrix_success(mock_read_csv):
+    """
+    Tests that _load_from_matrix correctly loads genotype and sample data from a matrix file.
+    """
+    # Mock DataFrame as would be read from a matrix file
+    mock_df = MagicMock()
+    mock_df.__getitem__.side_effect = lambda key: {
+        "sampleID": ["s1", "s2"],
+    }[key]
+    mock_df.drop.return_value = pd.DataFrame(
+        {
+            1001: [0, 1],
+            2001: [1, 2],
+            3005: [2, 0],
+        },
+        index=[0, 1],
+    )
+    mock_read_csv.return_value = mock_df
+
+    locator = Locator()
+    genotypes, samples = locator._load_from_matrix("dummy_matrix.txt")
+
+    # Assertions
+    assert isinstance(samples, np.ndarray)
+    np.testing.assert_array_equal(samples, np.array(["s1", "s2"]))
+    # Check that genotypes is an allel.GenotypeArray and has the expected shape
+    assert hasattr(genotypes, "shape")
+    # The shape should be (n_sites, n_samples, 2)
+    assert genotypes.shape[1] == 2  # 2 samples
+    assert genotypes.shape[2] == 2  # ploidy=2
+
+    mock_read_csv.assert_called_once_with("dummy_matrix.txt", sep="\t")
+
+
+@patch("locator.core.pd.read_csv")
+def test_load_from_matrix_invalid_file(mock_read_csv):
+    """
+    Tests that _load_from_matrix raises a KeyError if 'sampleID' column is missing.
+    """
+    # Simulate missing 'sampleID' column
+    mock_df = pd.DataFrame(
+        {
+            1001: [0, 1],
+            2001: [1, 2],
+        }
+    )
+    mock_read_csv.return_value = mock_df
+
+    locator = Locator()
+    with pytest.raises(KeyError):
+        locator._load_from_matrix("dummy_matrix.txt")
+    mock_read_csv.assert_called_once_with("dummy_matrix.txt", sep="\t")
+
+
+@patch("locator.core.pd.read_csv")
+def test_load_from_matrix_with_invalid_genotypes_raises(mock_read_csv):
+    """
+    Tests that _load_from_matrix raises ValueError if invalid genotype values are present.
+    """
+    mock_df = MagicMock()
+    mock_df.__getitem__.side_effect = lambda key: {
+        "sampleID": ["s1", "s2"],
+    }[key]
+    mock_df.drop.return_value = pd.DataFrame(
+        {
+            1001: [0, 3],  # 3 is invalid
+            2001: [1, -1],  # -1 is invalid
+            3005: [2, 0],
+        },
+        index=[0, 1],
+    )
+    mock_read_csv.return_value = mock_df
+
+    locator = Locator()
+    with pytest.raises(ValueError, match="Genotype values must be 0, 1, or 2"):
+        locator._load_from_matrix("dummy_matrix.txt")

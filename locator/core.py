@@ -140,6 +140,7 @@ class Locator:
         - **genotype_data** (*pandas.DataFrame*): DataFrame with samples as index, SNP positions as columns, and genotype counts (0, 1, 2) as values.
         - **zarr** (*str*): Path to Zarr format genotype data.
         - **vcf** (*str*): Path to VCF format genotype data.
+        - **out** (*str*): Output root name for all output files.
         - **train_split** (*float*): Proportion of data to use for training.
         - **batch_size** (*int*): Batch size for training.
         - **max_epochs** (*int*): Maximum number of training epochs.
@@ -204,6 +205,7 @@ class Locator:
             "species_range_shapefile": None,
             "resolution": 0.05,
             "penalty_weight": 1.0,
+            "out": "locator",
         }
 
         # Update with user config
@@ -337,6 +339,8 @@ class Locator:
         gmat = pd.read_csv(matrix_path, sep="\t")
         samples = np.array(gmat["sampleID"])
         gmat = gmat.drop(labels="sampleID", axis=1)
+        if not np.all(np.isin(gmat, [0, 1, 2])):
+            raise ValueError("Genotype values must be 0, 1, or 2")
         gmat = np.array(gmat, dtype="int8")
 
         # Convert to haplotype format
@@ -469,6 +473,8 @@ class Locator:
             gmat = pd.read_csv(matrix, sep="\t")
             samples = np.array(gmat["sampleID"])
             gmat = gmat.drop(labels="sampleID", axis=1)
+            if not np.all(np.isin(gmat, [0, 1, 2])):
+                raise ValueError("Genotype values must be 0, 1, or 2")
             gmat = np.array(gmat, dtype="int8")
 
             # Convert to haplotype format
@@ -1873,6 +1879,36 @@ class Locator:
         html.append("</div>")
 
         return "".join(html)
+
+    @property
+    def sample_data(self) -> pd.DataFrame:
+        """
+        Returns the sample data as a pandas DataFrame.
+
+        Returns:
+            pd.DataFrame: The sample data DataFrame with columns ['sampleID', 'x', 'y', ...].
+
+        Raises:
+            ValueError: If sample data is not available.
+
+        Example:
+            >>> locator = Locator({"sample_data": coords_df})
+            >>> df = locator.sample_data
+        """
+        if hasattr(self, "_sample_data_df"):
+            return self._sample_data_df
+        elif "sample_data" in self.config and isinstance(
+            self.config["sample_data"], str
+        ):
+            # Load from file if not already loaded
+            sample_df = pd.read_csv(self.config["sample_data"], sep="\t")
+            required_cols = ["sampleID", "x", "y"]
+            if not all(col in sample_df.columns for col in required_cols):
+                raise ValueError(f"sample_data must contain columns: {required_cols}")
+            self._sample_data_df = sample_df
+            return self._sample_data_df
+        else:
+            raise ValueError("Sample data is not available in this Locator instance.")
 
 
 class EnsembleLocator:
