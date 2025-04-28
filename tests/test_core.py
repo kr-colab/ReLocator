@@ -6,6 +6,9 @@ import tensorflow as tf  # Import tensorflow to check its attributes
 from locator.core import setup_gpu, Locator
 import pandas as pd
 import numpy as np
+import allel
+from pathlib import Path
+import tempfile
 
 
 @patch("locator.core.tf.config.list_physical_devices")
@@ -327,3 +330,115 @@ def test_load_from_matrix_with_invalid_genotypes_raises(mock_read_csv):
     locator = Locator()
     with pytest.raises(ValueError, match="Genotype values must be 0, 1, or 2"):
         locator._load_from_matrix("dummy_matrix.txt")
+
+
+# Test load_genotypes when genotype_data is provided via config as a DataFrame.
+def test_load_genotypes_from_dataframe():
+    # Create a small genotype DataFrame with SNP positions as columns (convertible to float)
+    geno_df = pd.DataFrame({1001: [0, 1], 2005: [1, 2]}, index=["s1", "s2"])
+    sample_df = pd.DataFrame(
+        {"sampleID": ["s1", "s2"], "x": [10.0, 20.0], "y": [5.0, 15.0]}
+    )
+    config = {"genotype_data": geno_df, "sample_data": sample_df}
+    locator = Locator(config=config)
+    # When genotype_data is provided in config, Locator.__init__ stores _genotype_df.
+    genotypes, samples = locator.load_genotypes()
+    # Check that samples are strings
+    np.testing.assert_array_equal(samples, np.array(["s1", "s2"], dtype=object))
+    # Expect genotype array shape: (n_sites, n_samples, 2) -> (2, 2, 2)
+    assert genotypes.shape == (2, 2, 2)
+    assert isinstance(genotypes, allel.GenotypeArray)
+
+
+# Test load_genotypes using a matrix file.
+def test_load_genotypes_from_matrix(tmp_path):
+    # Create a temporary matrix file with valid data.
+    data = {"sampleID": ["s1", "s2"], "1001": [0, 1], "2005": [1, 2]}
+    df = pd.DataFrame(data)
+    matrix_file = tmp_path / "geno_matrix.txt"
+    df.to_csv(matrix_file, sep="\t", index=False)
+
+    sample_df = pd.DataFrame(
+        {"sampleID": ["s1", "s2"], "x": [10.0, 20.0], "y": [5.0, 15.0]}
+    )
+    config = {"sample_data": sample_df}
+    locator = Locator(config=config)
+    # Do not provide genotype_data so that the matrix branch is executed.
+    genotypes, samples = locator.load_genotypes(matrix=str(matrix_file))
+
+    # Expected shape: (n_sites, n_samples, 2). In this case, n_sites = 2, n_samples = 2.
+    assert genotypes.shape == (2, 2, 2)
+    np.testing.assert_array_equal(samples, np.array(["s1", "s2"], dtype=object))
+    assert isinstance(genotypes, allel.GenotypeArray)
+
+
+# Test load_genotypes using a VCF file by patching allel.read_vcf.
+def test_load_genotypes_from_vcf(monkeypatch):
+    dummy_vcf_data = {
+        "calldata/GT": np.array([[[0, 0], [1, 0]], [[1, 1], [0, 1]]]),  # shape: (2,2,2)
+        "samples": np.array(["s1", "s2"]),
+    }
+
+    def dummy_read_vcf(vcf, log):
+        return dummy_vcf_data
+
+    monkeypatch.setattr("locator.core.allel.read_vcf", dummy_read_vcf)
+
+    sample_df = pd.DataFrame(
+        {"sampleID": ["s1", "s2"], "x": [10.0, 20.0], "y": [5.0, 15.0]}
+    )
+    config = {"sample_data": sample_df}
+    locator = Locator(config=config)
+    genotypes, samples = locator.load_genotypes(vcf="dummy.vcf")
+
+    np.testing.assert_array_equal(samples, np.array(["s1", "s2"]))
+    assert genotypes.shape == (2, 2, 2)
+    assert isinstance(genotypes, allel.GenotypeArray)
+
+
+# Test load_genotypes using a zarr input by patching the _load_from_zarr method.
+def test_load_genotypes_from_zarr(monkeypatch):
+    def dummy_load_from_zarr(self, zarr_path):
+        # Return a dummy genotype array and samples.
+        dummy_genotypes = np.array([[[0, 0], [1, 0]], [[1, 1], [0, 1]]])
+        return allel.GenotypeArray(dummy_genotypes), np.array(["s1", "s2"])
+
+    monkeypatch.setattr(Locator, "_load_from_zarr", dummy_load_from_zarr)
+
+    sample_df = pd.DataFrame(
+        {"sampleID": ["s1", "s2"], "x": [10.0, 20.0], "y": [5.0, 15.0]}
+    )
+    config = {"sample_data": sample_df}
+    locator = Locator(config=config)
+    genotypes, samples = locator.load_genotypes(zarr="dummy.zarr")
+
+    np.testing.assert_array_equal(samples, np.array(["s1", "s2"]))
+    assert genotypes.shape == (2, 2, 2)
+    assert isinstance(genotypes, allel.GenotypeArray)
+
+
+# Test error case: no genotype data provided.
+def test_load_genotypes_no_data():
+    sample_df = pd.DataFrame(
+        {"sampleID": ["s1", "s2"], "x": [10.0, 20.0], "y": [5.0, 15.0]}
+    )
+    config = {"sample_data": sample_df}
+    locator = Locator(config=config)
+    with pytest.raises(ValueError, match="No genotype data provided"):
+        locator.load_genotypes()
+
+
+def dummy_create_network(
+    input_shape, width, n_layers, dropout_prop, optimizer_config, loss_fn=None
+):
+    """Dummy replacement for create_network for testing Locator.train."""
+
+    class DummyModel:
+        def fit(self, dataset, epochs, verbose, validation_data, callbacks):
+            # Return a dummy history object with a 'history' dict.
+            DummyHistory = type(
+                "DummyHistory", (), {"history": {"loss": [0.5], "val_loss": [0.6]}}
+            )
+            return DummyHistory()
+
+    return DummyModel()
