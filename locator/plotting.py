@@ -259,26 +259,36 @@ def plot_error_summary(
         width: Figure width
         height: Figure height
         dpi: Figure resolution
-        use_geodesic: Whether to calculate errors using geodesic distance (km)
-                     instead of Euclidean distance in coordinate space
-        include_training_locs: Whether to use full sample_data extent for map bounds
-                             and plot all training locations (default: True)
+        use_geodesic: Use geodesic distances (km) if True, else Euclidean distances
+        include_training_locs: Whether to plot training locations and use their extent
     """
-    # Validate inputs
-    if predictions.empty or sample_data.empty:
-        raise ValueError("Predictions and sample data cannot be empty DataFrames")
+    # Validate predictions input
+    if predictions.empty:
+        raise ValueError("Predictions DataFrame cannot be empty")
 
-    # Check for required columns
+    # Consolidate loading and validation of sample_data
+    if isinstance(sample_data, pd.DataFrame):
+        samples = sample_data.copy()
+    elif isinstance(sample_data, (str, Path)):
+        sample_path = Path(sample_data)
+        if not sample_path.is_file():
+            raise ValueError(f"sample_data file {sample_data} does not exist")
+        samples = pd.read_csv(sample_path, sep="\t")
+    else:
+        raise ValueError("sample_data must be a DataFrame or a valid file path")
+
+    if samples.empty:
+        raise ValueError("Sample data cannot be empty")
+
+    # Validate required columns in predictions and samples
     required_pred_cols = ["sampleID", "x_pred", "y_pred"]
     required_sample_cols = ["sampleID", "x", "y"]
-
     missing_pred_cols = [
         col for col in required_pred_cols if col not in predictions.columns
     ]
     missing_sample_cols = [
-        col for col in required_sample_cols if col not in sample_data.columns
+        col for col in required_sample_cols if col not in samples.columns
     ]
-
     if missing_pred_cols:
         raise ValueError(
             f"Missing required columns in predictions: {missing_pred_cols}"
@@ -288,7 +298,8 @@ def plot_error_summary(
             f"Missing required columns in sample data: {missing_sample_cols}"
         )
 
-    # Set larger font sizes globally
+    samples = samples.rename(columns={"x": "x_true", "y": "y_true"})
+
     plt.rcParams.update(
         {
             "font.size": 12,
@@ -300,18 +311,8 @@ def plot_error_summary(
         }
     )
 
-    # Load sample data if path provided
-    if isinstance(sample_data, pd.DataFrame):
-        samples = sample_data.copy()
-    else:
-        samples = pd.read_csv(sample_data, sep="\t")
-
-    # Rename columns in sample data to avoid conflicts
-    samples = samples.rename(columns={"x": "x_true", "y": "y_true"})
-
     # Merge predictions with true locations
     merged = predictions.merge(samples[["sampleID", "x_true", "y_true"]], on="sampleID")
-    # Check if merge was successful
     if merged.empty:
         raise ValueError(
             "No matching samples found between predictions and sample data"
@@ -319,159 +320,63 @@ def plot_error_summary(
 
     # Calculate errors
     if use_geodesic:
-        # Calculate geodesic distance in kilometers
         merged["error"] = merged.apply(
             lambda row: geodesic(
-                (row["y_true"], row["x_true"]),  # (lat, lon) for true location
-                (row["y_pred"], row["x_pred"]),  # (lat, lon) for predicted location
+                (row["y_true"], row["x_true"]), (row["y_pred"], row["x_pred"])
             ).kilometers,
             axis=1,
         )
         error_units = "km"
     else:
-        # Original Euclidean distance in coordinate space
         merged["error"] = np.sqrt(
             (merged["x_pred"] - merged["x_true"]) ** 2
             + (merged["y_pred"] - merged["y_true"]) ** 2
         )
         error_units = "coordinate units"
 
-    # Create figure
+    # Set up figure and primary axis based on plot_map flag
     if plot_map:
         fig = plt.figure(figsize=(width, height), dpi=dpi)
         gs = fig.add_gridspec(1, 3)
-
-        ax1 = fig.add_subplot(gs[0:2], projection=ccrs.PlateCarree())
-        ax1.set_xticks([])
-        ax1.set_yticks([])
-
-        ax1.add_feature(cfeature.LAND, facecolor="lightgray")
-        ax1.add_feature(cfeature.COASTLINE, linewidth=0.5)
-
-        # Calculate bounds based on include_training_locs setting
-        if include_training_locs:
-            # Use all sample locations (including training) for bounds
-            x_min, x_max = samples["x_true"].min(), samples["x_true"].max()
-            y_min, y_max = samples["y_true"].min(), samples["y_true"].max()
-            
-            # Plot all training locations
-            training_mask = ~samples["sampleID"].isin(predictions["sampleID"])
-            training_locs = samples[training_mask]
-            if not training_locs.empty:
-                ax1.scatter(
-                    training_locs["x_true"],
-                    training_locs["y_true"],
-                    c="gray",
-                    marker="o",
-                    s=20,
-                    alpha=0.5,
-                    label="Training locations"
-                )
-        else:
-            # Use only prediction locations for bounds
-            x_min, x_max = merged["x_true"].min(), merged["x_true"].max()
-            y_min, y_max = merged["y_true"].min(), merged["y_true"].max()
-
-        # Add padding to bounds
-        padding = 0.1
-        x_range = x_max - x_min
-        y_range = y_max - y_min
-
-        # Set map extent
-        ax1.set_extent(
-            [
-                x_min - x_range * padding,
-                x_max + x_range * padding,
-                y_min - y_range * padding,
-                y_max + y_range * padding,
-            ]
-        )
-
-        # Plot predictions scatter with error colors
-        scatter = ax1.scatter(
-            merged["x_true"],
-            merged["y_true"],
-            c=merged["error"],
-            cmap="RdYlBu_r",
-            s=20,
-            label="Test locations"
-        )
-
-        # Add colorbar
-        cbar = plt.colorbar(scatter, ax=ax1, label=f"Error ({error_units})")
-        cbar.outline.set_visible(False)
-
-        # Plot error connections
-        for _, row in merged.iterrows():
-            ax1.plot(
-                [row["x_true"], row["x_pred"]],
-                [row["y_true"], row["y_pred"]],
-                "k-",
-                linewidth=0.5,
-                alpha=0.5,
-            )
-
-        # Add legend if including training locations
-        if include_training_locs:
-            ax1.legend(loc='upper right')
-
-        # Create right panel (histogram) - spans 1 unit
-        ax2 = fig.add_subplot(gs[2])
-
-        # Plot error histogram with larger fonts
-        sns.histplot(data=merged, x="error", ax=ax2)
-        ax2.set_xlabel(f"Error ({error_units})", fontsize=14)
-        ax2.set_ylabel("Count", fontsize=14)
-
-        # Add summary statistics as text with larger font
-        stats_text = (
-            f"Mean error: {merged['error'].mean():.2f} {error_units}\n"
-            f"Median error: {merged['error'].median():.2f} {error_units}\n"
-            f"Max error: {merged['error'].max():.2f} {error_units}\n"
-            f"R² (x): {np.corrcoef(merged['x_pred'], merged['x_true'])[0,1]**2:.3f}\n"
-            f"R² (y): {np.corrcoef(merged['y_pred'], merged['y_true'])[0,1]**2:.3f}"
-        )
-        ax2.text(
-            0.95,
-            0.95,
-            stats_text,
-            transform=ax2.transAxes,
-            verticalalignment="top",
-            horizontalalignment="right",
-            bbox=dict(facecolor="white", alpha=0.8),
-            fontsize=12,
-        )
-
-        plt.tight_layout()
-
-        if out_prefix:
-            plt.savefig(f"{out_prefix}_error_summary.png")
-
-        plt.show()
-        plt.close()
+        map_ax = fig.add_subplot(gs[0:2], projection=ccrs.PlateCarree())
     else:
-        # Create figure
         fig = plt.figure(figsize=(width, height), dpi=dpi)
         gs = fig.add_gridspec(1, 2)
+        map_ax = fig.add_subplot(gs[0])
 
-        # Create left panel (map + colorbar) without frame
-        ax1 = fig.add_subplot(gs[0], projection=ccrs.PlateCarree())
-        ax1.set_frame_on(False)
-        ax1.set_xticks([])
-        ax1.set_yticks([])
+    # Common axis setup
+    map_ax.set_xticks([])
+    map_ax.set_yticks([])
+    if plot_map:
+        map_ax.add_feature(cfeature.LAND, facecolor="lightgray")
+        map_ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
 
-        ax1.add_feature(cfeature.LAND, facecolor="lightgray")
-        ax1.add_feature(cfeature.COASTLINE, linewidth=0.5)
-
-        # Calculate bounds with some padding
+    # Determine bounds and optionally plot training locations
+    if include_training_locs:
+        x_min, x_max = samples["x_true"].min(), samples["x_true"].max()
+        y_min, y_max = samples["y_true"].min(), samples["y_true"].max()
+        training_mask = ~samples["sampleID"].isin(predictions["sampleID"])
+        training_locs = samples[training_mask]
+        if not training_locs.empty:
+            map_ax.scatter(
+                training_locs["x_true"],
+                training_locs["y_true"],
+                c="gray",
+                marker="o",
+                s=20,
+                alpha=0.5,
+                label="Training locations",
+            )
+    else:
         x_min, x_max = merged["x_true"].min(), merged["x_true"].max()
         y_min, y_max = merged["y_true"].min(), merged["y_true"].max()
-        padding = 0.1
-        x_range = x_max - x_min
-        y_range = y_max - y_min
 
-        # Set map extent
-        ax1.set_extent(
+    padding = 0.1
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    if plot_map:
+        # Use set_extent only for map projections.
+        map_ax.set_extent(
             [
                 x_min - x_range * padding,
                 x_max + x_range * padding,
@@ -479,62 +384,59 @@ def plot_error_summary(
                 y_max + y_range * padding,
             ]
         )
+    else:
+        # For regular axes, set x and y limits.
+        map_ax.set_xlim(x_min - x_range * padding, x_max + x_range * padding)
+        map_ax.set_ylim(y_min - y_range * padding, y_max + y_range * padding)
 
-        # Plot scatter and get colorbar
-        scatter = ax1.scatter(
-            merged["x_true"],
-            merged["y_true"],
-            c=merged["error"],
-            cmap="RdYlBu_r",
-            s=20,
+    # Plot scatter, colorbar, and error connections
+    scatter = map_ax.scatter(
+        merged["x_true"],
+        merged["y_true"],
+        c=merged["error"],
+        cmap="RdYlBu_r",
+        s=20,
+        **({"label": "Test locations"} if plot_map else {}),
+    )
+    cbar = plt.colorbar(scatter, ax=map_ax, label=f"Error ({error_units})")
+    cbar.outline.set_visible(False)
+    for _, row in merged.iterrows():
+        map_ax.plot(
+            [row["x_true"], row["x_pred"]],
+            [row["y_true"], row["y_pred"]],
+            "k-",
+            linewidth=0.5,
+            alpha=0.5,
         )
+    if plot_map and include_training_locs:
+        map_ax.legend(loc="upper right")
 
-        # Add colorbar without frame
-        cbar = plt.colorbar(scatter, ax=ax1, label=f"Error ({error_units})")
-        cbar.outline.set_visible(False)
+    # Set up histogram panel (common to both layouts)
+    hist_ax = fig.add_subplot(gs[2] if plot_map else gs[1])
+    sns.histplot(data=merged, x="error", ax=hist_ax)
+    hist_ax.set_xlabel(f"Error ({error_units})", fontsize=14)
+    hist_ax.set_ylabel("Count", fontsize=14)
+    stats_text = (
+        f"Mean error: {merged['error'].mean():.2f} {error_units}\n"
+        f"Median error: {merged['error'].median():.2f} {error_units}\n"
+        f"Max error: {merged['error'].max():.2f} {error_units}\n"
+        f"R² (x): {np.corrcoef(merged['x_pred'], merged['x_true'])[0,1]**2:.3f}\n"
+        f"R² (y): {np.corrcoef(merged['x_pred'], merged['x_true'])[0,1]**2:.3f}"
+    )
+    hist_ax.text(
+        0.95,
+        0.95,
+        stats_text,
+        transform=hist_ax.transAxes,
+        verticalalignment="top",
+        horizontalalignment="right",
+        bbox=dict(facecolor="white", alpha=0.8),
+        fontsize=12,
+    )
 
-        # Create right panel (histogram)
-        ax2 = fig.add_subplot(gs[1])
-
-        # Plot error connections
-        for _, row in merged.iterrows():
-            ax1.plot(
-                [row["x_true"], row["x_pred"]],
-                [row["y_true"], row["y_pred"]],
-                "k-",
-                linewidth=0.5,
-                alpha=0.5,
-            )
-
-        # Plot error histogram with larger fonts
-        sns.histplot(data=merged, x="error", ax=ax2)
-        ax2.set_xlabel(f"Error ({error_units})", fontsize=14)
-        ax2.set_ylabel("Count", fontsize=14)
-
-        # Add summary statistics as text with larger font
-        stats_text = (
-            f"Mean error: {merged['error'].mean():.2f} {error_units}\n"
-            f"Median error: {merged['error'].median():.2f} {error_units}\n"
-            f"Max error: {merged['error'].max():.2f} {error_units}\n"
-            f"R² (x): {np.corrcoef(merged['x_pred'], merged['x_true'])[0,1]**2:.3f}\n"
-            f"R² (y): {np.corrcoef(merged['y_pred'], merged['y_true'])[0,1]**2:.3f}"
-        )
-        ax2.text(
-            0.95,
-            0.95,
-            stats_text,
-            transform=ax2.transAxes,
-            verticalalignment="top",
-            horizontalalignment="right",
-            bbox=dict(facecolor="white", alpha=0.8),
-            fontsize=12,
-        )
-
-        plt.tight_layout()
-
-        if out_prefix:
-            plt.savefig(f"{out_prefix}_error_summary.png")
-
-        plt.show()
-        plt.close()
+    plt.tight_layout()
+    if out_prefix:
+        plt.savefig(f"{out_prefix}_error_summary.png")
+    plt.show()
+    plt.close()
     return None
