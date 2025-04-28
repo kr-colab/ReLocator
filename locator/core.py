@@ -1412,6 +1412,7 @@ class Locator:
         return_df=False,
         save_preds_to_disk=True,
         plot_summary=True,
+        plot_map=True,
     ):
         """Predict locations for held out samples.
 
@@ -1420,6 +1421,7 @@ class Locator:
             return_df: Return predictions as pandas DataFrame
             save_preds_to_disk: Save predictions to disk
             plot_summary: Display error summary plot in notebook (only if return_df=True)
+            plot_map: Display map of predictions (only if plot_summary=True)
 
         Returns:
             If return_df is True, returns pandas DataFrame with predictions
@@ -1465,7 +1467,7 @@ class Locator:
                     plot_error_summary(
                         predictions=pred_df,
                         sample_data=sample_data,
-                        plot_map=True,
+                        plot_map=plot_map,
                         width=15,
                         height=5,
                         out_prefix=self.config.get("out"),
