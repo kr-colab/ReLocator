@@ -14,7 +14,7 @@ import tensorflow as tf
 from typing import List, Optional
 
 from .models import create_network
-from .utils import normalize_locs, filter_snps
+from .utils import normalize_locs, filter_snps, make_kd_weights
 
 
 def setup_gpu(gpu_number=None):
@@ -200,6 +200,11 @@ class Locator:
                 "enabled": False,  # Whether to use data augmentation
                 "flip_rate": 0.05,  # Rate at which to flip genotypes
             },
+#            "weight_samples": False,
+            "weight_samples": {
+                "enabled": False,  # Whether to weight samples by distance
+                "method": "KD"     # Method for weighting samples ("KD", "histogram", "df")
+            },
             # Range penalty parameters
             "use_range_penalty": False,
             "species_range_shapefile": None,
@@ -247,6 +252,14 @@ class Locator:
                 )
             # Store DataFrame
             self._genotype_df = geno_df.copy()
+        
+        # weight samples?
+        if isinstance(self.config.get("weight_samples"), dict):
+            if self.config["weight_samples"].get("enabled", False):
+                if self.config["weight_samples"].get("method", "KD") not in ["KD", "histogram", "df"]:
+                    raise ValueError("weight_samples method must be one of: KD, histogram, df")
+                if self.config["weight_samples"].get("method", "KD"):
+                    self._sample_weights_method = "KD"
 
         # Initialize attributes that will be set during training
         self.model = None
@@ -258,6 +271,8 @@ class Locator:
         self.sdlat = None
         if not hasattr(self, "positions"):
             self.positions = None  # For windowed analysis
+        self.unnormedlocs = None # For calculating sample weights
+        self.sample_weights = None
 
         # Setup GPU if not explicitly disabled
         if not self.config.get("disable_gpu", False):
@@ -668,7 +683,7 @@ class Locator:
             sample_data, locs = self.sort_samples(samples, sample_data_file)
 
         # Normalize locations
-        self.meanlong, self.sdlong, self.meanlat, self.sdlat, normalized_locs = (
+        self.meanlong, self.sdlong, self.meanlat, self.sdlat, self.unnormedlocs, normalized_locs = (
             normalize_locs(locs)
         )
 
@@ -1290,9 +1305,15 @@ class Locator:
 
         # Now normalize locations using only training data
         train_locs = locs[train_idx_final]
-        self.meanlong, self.sdlong, self.meanlat, self.sdlat, normalized_train_locs = (
+        self.meanlong, self.sdlong, self.meanlat, self.sdlat, self.unnormedlocs, normalized_train_locs = (
             normalize_locs(train_locs)
         )
+
+        # Apply sample weighting only if enabled in config
+        if self.config.get("weight_samples", {}).get("enabled", False):
+            wmethod = self.config.get("weight_samples", {}).get("method", "KD")
+            if wmethod == "KD":
+                self.sample_weights = make_kd_weights(trainlocs)
 
         # Normalize test and holdout locations using same parameters
         test_locs = locs[test_idx]
@@ -2334,6 +2355,7 @@ class EnsembleLocator:
             "nlayers",
             "dropout_prop",
             "max_epochs",
+            "weight_samples",
         ]
 
         for param in key_params:
