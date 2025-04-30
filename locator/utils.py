@@ -1,6 +1,6 @@
 """Utility functions for data processing"""
 
-import numpy as np
+import numpy as np, pandas as pd
 from sklearn.neighbors import KernelDensity
 from sklearn.model_selection import GridSearchCV
 from tqdm import tqdm
@@ -103,6 +103,45 @@ def split_train_test(ac, locs, train_split=0.8):
     testlocs = locs[test]
     predgen = np.transpose(ac[:, pred])
     return train, test, traingen, testgen, trainlocs, testlocs, pred, predgen
+
+def weight_samples(method,
+                   trainlocs=None,
+                   trainsamps=None,
+                   weightdf=None,
+                   xbins=10,
+                   ybins=10,
+                   lam=1.0,
+                   bandwidth=None):
+    """
+    Calculate weights for training data based on the specified method
+    Args:
+        method (str): Method for calculating weights ('KD', 'histogram', or 'load')
+        trainlocs (numpy.ndarray): Training locations
+        weightdf (pd.DataFrame): DataFrame containing sample weights (default: None)
+        xbins (int): Number of bins in x direction (default: 10)
+        ybins (int): Number of bins in y direction (default: 10)
+        lam (float): Exponent for weights (default: 1.0)
+        bandwidth (float): Bandwidth for KDE (default: None)
+    Returns:
+        numpy.ndarray: Weights for training data
+    """
+    if method == 'KD':
+        weights = make_kd_weights(trainlocs, 
+                                  1.0 if lam is None else lam, 
+                                  bandwidth)
+        return weights, pd.DataFrame({'sampleID':trainsamps,
+                                      'sample_weight':weights})
+    elif method == 'histogram':
+        weights = make_histogram_weights(trainlocs, 
+                                      10 if xbins is None else xbins,
+                                      10 if ybins is None else ybins)
+        return weights, pd.DataFrame({'sampleID':trainsamps,
+                                      'sample_weight':weights})
+    elif method == 'load':
+        df = load_sample_weights(weightdf, trainsamps)
+        return df['sample_weight'].values, df
+    else:
+        raise ValueError("Invalid method. Choose 'kde', 'histogram', or 'load'.")
 
 def make_kd_weights(trainlocs, lam=1.0, bandwidth=None):
     """

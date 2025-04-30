@@ -14,7 +14,7 @@ import tensorflow as tf
 from typing import List, Optional
 
 from .models import create_network
-from .utils import normalize_locs, filter_snps, make_kd_weights, make_histogram_weights
+from .utils import normalize_locs, filter_snps, weight_samples
 
 
 def setup_gpu(gpu_number=None):
@@ -204,7 +204,12 @@ class Locator:
             "weight_samples": {
                 "enabled": False,  # Whether to weight samples by distance
                 "method": "KD",     # Method for weighting samples ("KD", "histogram", "df")
-            },
+                "xbins": 10,       # Number of bins for histogram
+                "ybins": 10,       # Number of bins for histogram
+                "lam": 1.0,       # Exponent for weights
+                "bandwidth": None, # Bandwidth for KDE
+                "weightdf": None,  # DataFrame containing sample weights
+                },
             # Range penalty parameters
             "use_range_penalty": False,
             "species_range_shapefile": None,
@@ -613,6 +618,8 @@ class Locator:
         train_locs=None,
         test_locs=None,
         setup_only=False,
+        weight_samples=False,
+        weight_method=None,
     ):
         """Train the Locator model on genotype and location data.
 
@@ -703,6 +710,18 @@ class Locator:
                 normalized_locs,
                 train_split=self.config.get("train_split", 0.9),
             )
+
+            # Apply sample weighting only if enabled in config
+            if weight_samples:
+                wmethod = weight_method
+                if wmethod == "KD":
+                    self.sample_weights = make_kd_weights(self.unnormedlocs)
+                elif wmethod == "histogram":
+                    self.sample_weights = make_histogram_weights(self.unnormedlocs)
+                else:
+                    raise ValueError(
+                        "Invalid weight method. Use 'KD' or 'histogram'."
+                    )
             # Store prediction indices
             self.pred_indices = pred
         else:
@@ -786,6 +805,7 @@ class Locator:
             verbose=self.config.get("keras_verbose", 1),
             validation_data=(self.testgen, testlocs),
             callbacks=callbacks,
+            sample_weights=self.sample_weights,
         )
 
         # Save training history
@@ -1303,11 +1323,22 @@ class Locator:
 
         # Apply sample weighting only if enabled in config
         if self.config.get("weight_samples", {}).get("enabled", False):
-            wmethod = self.config.get("weight_samples", {}).get("method", "KD")
-            if wmethod == "KD":
-                self.sample_weights = make_kd_weights(self.unnormedlocs)
-            elif wmethod == "histogram":
-                self.sample_weights = make_histogram_weights(self.unnormedlocs)
+            wmethod = self.config.get("weight_samples", {}).get("method")
+            self.sample_weights, self.sample_weights_df = weight_samples(wmethod,
+                                                 trainlocs=self.unnormedlocs,
+                                                 trainsamps=self.samples[train_idx_final],
+                                                 weightdf=self.config.get("weight_samples", {}).get("dataframe"),
+                                                 xbins=self.config.get("weight_samples", {}).get("xbins"),
+                                                 ybins=self.config.get("weight_samples", {}).get("ybins"),
+                                                 lam=self.config.get("weight_samples", {}).get("lam"),
+                                                 bandwidth=self.config.get("weight_samples", {}).get("bandwidth"),
+                                                 )
+            
+
+            #if wmethod == "KD":
+            #    self.sample_weights = make_kd_weights(self.unnormedlocs)
+            #elif wmethod == "histogram":
+            #    self.sample_weights = make_histogram_weights(self.unnormedlocs)
 
         # Normalize test and holdout locations using same parameters
         test_locs = locs[test_idx]
@@ -1775,7 +1806,6 @@ class Locator:
             "max_epochs",
             "optimizer_algo",
             "learning_rate",
-            "weight_samples",
             "weight_decay",
             "use_range_penalty",
             "species_range_shapefile",
@@ -1789,6 +1819,13 @@ class Locator:
                 html.append(
                     f"<tr><td style='padding:5px'>{param}</td>"
                     f"<td style='padding:5px'>{self.config[param]}</td></tr>"
+                )
+        # add weight samples to end, deal with weird dictionary thing
+        if "weight_samples" in self.config:
+            for key, value in self.config["weight_samples"].items():
+                html.append(
+                    f"<tr><td style='padding:5px'>weight_samples {key}</td>"
+                    f"<td style='padding:5px'>{value}</td></tr>"
                 )
 
         html.append("</table>")
