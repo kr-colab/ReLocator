@@ -14,7 +14,7 @@ import tensorflow as tf
 from typing import List, Optional
 
 from .models import create_network
-from .utils import normalize_locs, filter_snps, make_kd_weights
+from .utils import normalize_locs, filter_snps, make_kd_weights, make_histogram_weights
 
 
 def setup_gpu(gpu_number=None):
@@ -203,7 +203,7 @@ class Locator:
 #            "weight_samples": False,
             "weight_samples": {
                 "enabled": False,  # Whether to weight samples by distance
-                "method": "KD"     # Method for weighting samples ("KD", "histogram", "df")
+                "method": "KD",     # Method for weighting samples ("KD", "histogram", "df")
             },
             # Range penalty parameters
             "use_range_penalty": False,
@@ -252,14 +252,6 @@ class Locator:
                 )
             # Store DataFrame
             self._genotype_df = geno_df.copy()
-        
-        # weight samples?
-        if isinstance(self.config.get("weight_samples"), dict):
-            if self.config["weight_samples"].get("enabled", False):
-                if self.config["weight_samples"].get("method", "KD") not in ["KD", "histogram", "df"]:
-                    raise ValueError("weight_samples method must be one of: KD, histogram, df")
-                if self.config["weight_samples"].get("method", "KD"):
-                    self._sample_weights_method = "KD"
 
         # Initialize attributes that will be set during training
         self.model = None
@@ -1313,7 +1305,9 @@ class Locator:
         if self.config.get("weight_samples", {}).get("enabled", False):
             wmethod = self.config.get("weight_samples", {}).get("method", "KD")
             if wmethod == "KD":
-                self.sample_weights = make_kd_weights(trainlocs)
+                self.sample_weights = make_kd_weights(self.unnormedlocs)
+            elif wmethod == "histogram":
+                self.sample_weights = make_histogram_weights(self.unnormedlocs)
 
         # Normalize test and holdout locations using same parameters
         test_locs = locs[test_idx]
@@ -1391,12 +1385,13 @@ class Locator:
             return tf.where(mask, 1 - genotypes, genotypes), locations
 
         train_dataset = tf.data.Dataset.from_tensor_slices(
-            (self.traingen, self.trainlocs)
+            (self.traingen, self.trainlocs, self.sample_weights)
         )
         train_dataset = train_dataset.cache()
         train_dataset = train_dataset.shuffle(buffer_size=1000)
 
         # Apply augmentation only if enabled in config
+        print(self.config.get("augmentation", {}))
         if self.config.get("augmentation", {}).get("enabled", False):
             flip_rate = self.config.get("augmentation", {}).get("flip_rate", 0.05)
             train_dataset = train_dataset.map(
@@ -1419,6 +1414,8 @@ class Locator:
             verbose=self.config.get("keras_verbose", 0),
             validation_data=validation_dataset,
             callbacks=callbacks,
+            #sample_weight=self.sample_weights,
+
         )
 
         # Save training history
@@ -1778,6 +1775,7 @@ class Locator:
             "max_epochs",
             "optimizer_algo",
             "learning_rate",
+            "weight_samples",
             "weight_decay",
             "use_range_penalty",
             "species_range_shapefile",
@@ -1813,11 +1811,14 @@ class Locator:
                 hist = self.history.history
 
                 # Plot training and validation loss
-                ax.plot(hist["loss"], label="Training Loss")
-                ax.plot(hist["val_loss"], label="Validation Loss")
+                ax.plot(hist["loss"], label="Training Loss", color="blue")
+                axV = ax.twinx()
+                axV.plot(hist["val_loss"], label="Validation Loss", color="orange")
                 ax.set_xlabel("Epoch")
-                ax.set_ylabel("Loss")
+                ax.set_ylabel("Training Loss")
+                axV.set_ylabel("Validation Loss")
                 ax.legend()
+                axV.legend(loc='upper center')
 
                 # Get final validation loss
                 final_val_loss = hist["val_loss"][-1]
@@ -1871,6 +1872,11 @@ class Locator:
             html.append("<li>Genotype data: Path provided</li>")
         else:
             html.append("<li>Genotype data: Not provided</li>")
+
+        if hasattr(self, "sample_weights"):
+            html.append(
+                f"<li>Samples weighted using {self.config['weight_samples'].get('method')}</li>"
+            )
 
         # Add holdout information
         if hasattr(self, "holdout_idx") and self.samples is not None:
@@ -2118,6 +2124,7 @@ class EnsembleLocator:
                 model.sdlong,
                 model.meanlat,
                 model.sdlat,
+                model.unnormedlocs,
                 normalized_train_locs,
             ) = normalize_locs(train_locs)
 

@@ -1,6 +1,8 @@
 """Utility functions for data processing"""
 
 import numpy as np
+from sklearn.neighbors import KernelDensity
+from sklearn.model_selection import GridSearchCV
 from tqdm import tqdm
 
 __all__ = [
@@ -8,6 +10,9 @@ __all__ = [
     "sort_samples",
     "normalize_locs",
     "filter_snps",
+    "make_kd_weights",
+    "make_histogram_weights",
+    "load_sample_weights"
 ]
 
 
