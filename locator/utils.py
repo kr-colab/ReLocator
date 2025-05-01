@@ -10,9 +10,7 @@ __all__ = [
     "sort_samples",
     "normalize_locs",
     "filter_snps",
-    "make_kd_weights",
-    "make_histogram_weights",
-    "load_sample_weights"
+    "weight_samples",
 ]
 
 
@@ -108,9 +106,9 @@ def weight_samples(method,
                    trainlocs=None,
                    trainsamps=None,
                    weightdf=None,
-                   xbins=10,
-                   ybins=10,
-                   lam=1.0,
+                   xbins=None,
+                   ybins=None,
+                   lam=None,
                    bandwidth=None):
     """
     Calculate weights for training data based on the specified method
@@ -125,25 +123,36 @@ def weight_samples(method,
     Returns:
         numpy.ndarray: Weights for training data
     """
+
     if method == 'KD':
-        weights = make_kd_weights(trainlocs, 
+        weights = _make_kd_weights(trainlocs, 
                                   1.0 if lam is None else lam, 
                                   bandwidth)
-        return weights, pd.DataFrame({'sampleID':trainsamps,
+        df = pd.DataFrame({'sampleID':trainsamps,
                                       'sample_weight':weights})
     elif method == 'histogram':
-        weights = make_histogram_weights(trainlocs, 
+        weights = _make_histogram_weights(trainlocs, 
                                       10 if xbins is None else xbins,
                                       10 if ybins is None else ybins)
-        return weights, pd.DataFrame({'sampleID':trainsamps,
+        df = pd.DataFrame({'sampleID':trainsamps,
                                       'sample_weight':weights})
     elif method == 'load':
-        df = load_sample_weights(weightdf, trainsamps)
-        return df['sample_weight'].values, df
+        df = _load_sample_weights(weightdf, trainsamps)
+        weights = df['sample_weight'].values
+
     else:
         raise ValueError("Invalid method. Choose 'kde', 'histogram', or 'load'.")
+    return {'method': method,
+            'sample_weights': weights,
+            'sample_weights_df': df,
+            'xbins': xbins,
+            'ybins': ybins,
+            'lam': lam,
+            'bandwidth': bandwidth,
+            }
 
-def make_kd_weights(trainlocs, lam=1.0, bandwidth=None):
+
+def _make_kd_weights(trainlocs, lam=1.0, bandwidth=None):
     """
     Calculate weights for training data using Kernel Density Estimation (KDE)
     Args:
@@ -178,7 +187,7 @@ def make_kd_weights(trainlocs, lam=1.0, bandwidth=None):
 
     return weights
 
-def make_histogram_weights(trainlocs, xbins=10, ybins=10):
+def _make_histogram_weights(trainlocs, xbins=10, ybins=10):
     """
     Calculate weights for training data using histogram binning
     Args:
@@ -202,7 +211,7 @@ def make_histogram_weights(trainlocs, xbins=10, ybins=10):
 
     return weights
 
-def load_sample_weights(weightdf, trainsamps):
+def _load_sample_weights(weightdf, trainsamps):
     """Load sample weights from a DataFrame
     Args:
         weightdf (pd.DataFrame): DataFrame containing sample weights

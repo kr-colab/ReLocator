@@ -444,9 +444,8 @@ def plot_error_summary(
     plt.close()
     return None
 
-def plot_sample_weights(    
-    sample_data,
-    sample_weights,
+def plot_sample_weights(
+    locator,
     out_prefix=None,
     plot_map=True,
     width=5,
@@ -464,6 +463,8 @@ def plot_sample_weights(
         height: Figure height
         dpi: Figure resolution
     """
+    sample_data = locator._sample_data_df
+    sample_weights = locator.sample_weights['sample_weights_df']
     # Validate inputs
     if sample_data.empty or sample_weights.empty:
         raise ValueError("Sample data and weights cannot be empty DataFrames")

@@ -5,6 +5,7 @@ import pandas as pd
 import allel
 import zarr
 import sys
+import warnings
 from tensorflow import keras
 import matplotlib.pyplot as plt
 import copy
@@ -164,6 +165,14 @@ class Locator:
         - **augmentation** (*dict*): Dictionary of augmentation parameters:
             - **enabled** (*bool*): Whether data augmentation is enabled.
             - **flip_rate** (*float*): Rate at which to randomly flip genotypes during augmentation.
+        - **weight_samples** (*dict*): Dictionary of sample weighting parameters:
+            - **enabled** (*bool*): Whether to weight samples by distance.
+            - **method** (*str*): Method for weighting samples ("KD", "histogram", "df").
+            - **xbins** (*int*): Number of bins for histogram.
+            - **ybins** (*int*): Number of bins for histogram.
+            - **lam** (*float*): Exponent for weights.
+            - **bandwidth** (*float*): Bandwidth for KDE.
+            - **weightdf** (*pandas.DataFrame*): DataFrame containing sample weights.
         - **use_range_penalty** (*bool*): Whether to apply a range penalty in the loss function.
         - **penalty_weight** (*float*): Weight assigned to the range penalty term.
         - **species_range_geom** (*shapely.geometry*): Shapely geometry object defining the valid species range.
@@ -605,6 +614,17 @@ class Locator:
 
         return [checkpointer, earlystop, reducelr]
 
+    def set_sample_weights(self, wdict):
+        """Set sample weights for training.
+        Args:
+            wdict (dict): Dictionary returned by utils.weight_samples() containing sample weights.
+        """
+        self.sample_weights = wdict
+        self.config["weight_samples"]["enabled"] = True
+        for key, value in wdict.items():
+                self.config["weight_samples"][key] = value
+
+
     def train(
         self,
         *,  # Force keyword arguments
@@ -612,6 +632,7 @@ class Locator:
         samples,
         sample_data_file=None,
         boot=None,
+
         train_gen=None,
         test_gen=None,
         pred_gen=None,
@@ -712,16 +733,22 @@ class Locator:
             )
 
             # Apply sample weighting only if enabled in config
-            if weight_samples:
-                wmethod = weight_method
-                if wmethod == "KD":
-                    self.sample_weights = make_kd_weights(self.unnormedlocs)
-                elif wmethod == "histogram":
-                    self.sample_weights = make_histogram_weights(self.unnormedlocs)
-                else:
+            if self.config.get("weight_samples", {}).get("enabled", False):
+                if self.sample_weights is not None:
                     raise ValueError(
-                        "Invalid weight method. Use 'KD' or 'histogram'."
+                        "Sample weights already calculated. "
+                        "Set weight_samples to False in config to disable."
                     )
+                wmethod = self.config.get("weight_samples", {}).get("method")
+                self.sample_weights = weight_samples(wmethod,
+                                                    trainlocs=self.unnormedlocs,
+                                                    trainsamps=self.samples[train_idx_final],
+                                                    weightdf=self.config.get("weight_samples", {}).get("dataframe"),
+                                                    xbins=self.config.get("weight_samples", {}).get("xbins"),
+                                                    ybins=self.config.get("weight_samples", {}).get("ybins"),
+                                                    lam=self.config.get("weight_samples", {}).get("lam"),
+                                                    bandwidth=self.config.get("weight_samples", {}).get("bandwidth"),
+                                                    )
             # Store prediction indices
             self.pred_indices = pred
         else:
@@ -805,7 +832,7 @@ class Locator:
             verbose=self.config.get("keras_verbose", 1),
             validation_data=(self.testgen, testlocs),
             callbacks=callbacks,
-            sample_weights=self.sample_weights,
+            sample_weights = None if self.sample_weights is None else self.sample_weights['sample_weights'],
         )
 
         # Save training history
@@ -1317,28 +1344,30 @@ class Locator:
 
         # Now normalize locations using only training data
         train_locs = locs[train_idx_final]
+        self.trainIDs = samples[train_idx_final]
         self.meanlong, self.sdlong, self.meanlat, self.sdlat, self.unnormedlocs, normalized_train_locs = (
             normalize_locs(train_locs)
         )
 
         # Apply sample weighting only if enabled in config
         if self.config.get("weight_samples", {}).get("enabled", False):
-            wmethod = self.config.get("weight_samples", {}).get("method")
-            self.sample_weights, self.sample_weights_df = weight_samples(wmethod,
-                                                 trainlocs=self.unnormedlocs,
-                                                 trainsamps=self.samples[train_idx_final],
-                                                 weightdf=self.config.get("weight_samples", {}).get("dataframe"),
-                                                 xbins=self.config.get("weight_samples", {}).get("xbins"),
-                                                 ybins=self.config.get("weight_samples", {}).get("ybins"),
-                                                 lam=self.config.get("weight_samples", {}).get("lam"),
-                                                 bandwidth=self.config.get("weight_samples", {}).get("bandwidth"),
-                                                 )
-            
+            if self.sample_weights is not None:
+                warnings.warn(
+                    """Sample weights already calculated. 
+                    Set locator.sample_weights to None in config to disable."""
+                )
+            else:
+                wmethod = self.config.get("weight_samples", {}).get("method")
+                self.sample_weights = weight_samples(wmethod,
+                                                    trainlocs=self.unnormedlocs,
+                                                    trainsamps=self.samples[train_idx_final],
+                                                    weightdf=self.config.get("weight_samples", {}).get("dataframe"),
+                                                    xbins=self.config.get("weight_samples", {}).get("xbins"),
+                                                    ybins=self.config.get("weight_samples", {}).get("ybins"),
+                                                    lam=self.config.get("weight_samples", {}).get("lam"),
+                                                    bandwidth=self.config.get("weight_samples", {}).get("bandwidth"),
+                                                    )
 
-            #if wmethod == "KD":
-            #    self.sample_weights = make_kd_weights(self.unnormedlocs)
-            #elif wmethod == "histogram":
-            #    self.sample_weights = make_histogram_weights(self.unnormedlocs)
 
         # Normalize test and holdout locations using same parameters
         test_locs = locs[test_idx]
@@ -1416,7 +1445,7 @@ class Locator:
             return tf.where(mask, 1 - genotypes, genotypes), locations
 
         train_dataset = tf.data.Dataset.from_tensor_slices(
-            (self.traingen, self.trainlocs, self.sample_weights)
+            (self.traingen, self.trainlocs, None if self.sample_weights is None else self.sample_weights['sample_weights'])
         )
         train_dataset = train_dataset.cache()
         train_dataset = train_dataset.shuffle(buffer_size=1000)
@@ -1821,12 +1850,18 @@ class Locator:
                     f"<td style='padding:5px'>{self.config[param]}</td></tr>"
                 )
         # add weight samples to end, deal with weird dictionary thing
-        if "weight_samples" in self.config:
-            for key, value in self.config["weight_samples"].items():
-                html.append(
-                    f"<tr><td style='padding:5px'>weight_samples {key}</td>"
-                    f"<td style='padding:5px'>{value}</td></tr>"
-                )
+        if self.config.get("weight_samples", {}).get("enabled", False):
+            html.append(
+                    f"<tr><td style='padding:5px'>{'weight_samples'}</td>"
+                    f"<td style='padding:5px'>{'True'}</td></tr>"
+                ) 
+            for k in ['method', 'xbins', 'ybins', 'lam', 'bandwidth']:
+                if k in self.config['weight_samples'].keys():
+                    if self.config['weight_samples'][k] is not None:
+                        html.append(
+                            f"<tr><td style='padding:5px'>weight_samples {'weight_samples '+k}</td>"
+                            f"<td style='padding:5px'>{self.config['weight_samples'][k]}</td></tr>"
+                        )
 
         html.append("</table>")
 
