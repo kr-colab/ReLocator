@@ -1451,7 +1451,6 @@ class Locator:
         train_dataset = train_dataset.shuffle(buffer_size=1000)
 
         # Apply augmentation only if enabled in config
-        print(self.config.get("augmentation", {}))
         if self.config.get("augmentation", {}).get("enabled", False):
             flip_rate = self.config.get("augmentation", {}).get("flip_rate", 0.05)
             train_dataset = train_dataset.map(
