@@ -3,14 +3,17 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib
 import seaborn as sns
 from scipy.stats import gaussian_kde
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from pathlib import Path
 from geopy.distance import geodesic
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+import matplotlib.axes as maxes
 
-__all__ = ["kde_predict", "plot_predictions", "plot_error_summary"]
+__all__ = ["kde_predict", "plot_predictions", "plot_error_summary", "plot_sample_weights"]
 
 
 def kde_predict(x_coords, y_coords, xlim=(0, 50), ylim=(0, 50), n_points=100):
@@ -439,4 +442,187 @@ def plot_error_summary(
         plt.savefig(f"{out_prefix}_error_summary.png")
     plt.show()
     plt.close()
+    return None
+
+def plot_sample_weights(
+    locator,
+    out_prefix=None,
+    plot_map=True,
+    width=5,
+    height=3,
+    dpi=300,
+):
+    """Plot sample weights assined to training locations
+
+    Args:
+        sample_data: DataFrame or path to sample locations
+        sample_weights: DataFrame or path to sample weights
+        out_prefix: Prefix for output files
+        plot_map: Whether to plot on a map
+        width: Figure width
+        height: Figure height
+        dpi: Figure resolution
+    """
+    sample_data = locator._sample_data_df
+    sample_weights = locator.sample_weights['sample_weights_df']
+    # Validate inputs
+    if sample_data.empty or sample_weights.empty:
+        raise ValueError("Sample data and weights cannot be empty DataFrames")
+    # Check for required columns
+    required_weight_cols = ["sampleID", "sample_weight"]
+    required_sample_cols = ["sampleID", "x", "y"]
+
+    missing_weight_cols = [
+        col for col in required_weight_cols if col not in sample_weights.columns
+    ]
+    missing_sample_cols = [
+        col for col in required_sample_cols if col not in sample_data.columns
+    ]
+
+    if missing_weight_cols:
+        raise ValueError(
+            f"Missing required columns in predictions: {missing_weight_cols}"
+        )
+    if missing_sample_cols:
+        raise ValueError(
+            f"Missing required columns in sample data: {missing_sample_cols}"
+        )
+
+    # Set larger font sizes globally
+    plt.rcParams.update(
+        {
+            "font.size": 12,
+            "axes.labelsize": 14,
+            "axes.titlesize": 14,
+            "xtick.labelsize": 12,
+            "ytick.labelsize": 12,
+            "legend.fontsize": 12,
+        }
+    )
+
+    # Load sample data if path provided
+    if isinstance(sample_data, pd.DataFrame):
+        samples = sample_data.copy()
+    else:
+        samples = pd.read_csv(sample_data, sep="\t")
+        # Load sample data if path provided
+    if isinstance(sample_weights, pd.DataFrame):
+        weights = sample_weights.copy()
+    else:
+        weights = pd.read_csv(sample_weights, sep="\t")
+
+    # Merge predictions with true locations
+    merged = sample_weights.merge(samples, on="sampleID")
+    # Check if merge was successful
+    if merged.empty:
+        raise ValueError(
+            "No matching samples found between sample data and sample weights"
+        )
+
+    # Create figure
+    if plot_map:
+        fig = plt.figure(figsize=(width, height), dpi=dpi)
+        gs = fig.add_gridspec(1, 2)
+
+        ax1 = fig.add_subplot(gs[0:1], projection=ccrs.PlateCarree())
+        ax1.set_xticks([])
+        ax1.set_yticks([])
+
+        ax1.add_feature(cfeature.LAND, facecolor="lightgray")
+        ax1.add_feature(cfeature.COASTLINE, linewidth=0.5)
+
+        x_min, x_max = merged["x"].min(), merged["x"].max()
+        y_min, y_max = merged["y"].min(), merged["y"].max()
+
+        # Add padding to bounds
+        padding = 0.1
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+
+        # Set map extent
+        ax1.set_extent(
+            [
+                x_min - x_range * padding,
+                x_max + x_range * padding,
+                y_min - y_range * padding,
+                y_max + y_range * padding,
+            ]
+        )
+
+        # Plot predictions scatter with error colors
+        scatter = ax1.scatter(
+            merged["x"],
+            merged["y"],
+            c=merged["sample_weight"],
+            cmap="viridis",
+            s=10,
+            label="Training locations",
+            norm=matplotlib.colors.LogNorm(),
+        )
+
+        # Add colorbar
+        cbar = plt.colorbar(scatter, ax=ax1, label="Sample Weights")
+        cbar.outline.set_visible(False)
+        #plt.gca().set_aspect('equal')
+
+        #
+
+        #plt.tight_layout()
+
+        if out_prefix:
+            plt.savefig(f"{out_prefix}_sample_weights.png")
+
+        plt.show()
+        plt.close()
+    else:
+        # Create figure
+        fig = plt.figure(figsize=(width, height), dpi=dpi)
+        gs = fig.add_gridspec(1, 2)
+
+        # Create left panel (map + colorbar) without frame
+        ax1 = fig.add_subplot(gs[0])
+
+        # Calculate bounds with some padding
+        x_min, x_max = merged["x"].min(), merged["x"].max()
+        y_min, y_max = merged["y"].min(), merged["y"].max()
+
+        # Add padding to bounds
+        padding = 0.1
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+
+        # Set map extent
+        ax1.set(
+            xlim = (
+                x_min - x_range * padding,
+                x_max + x_range * padding),
+            ylim = (
+                y_min - y_range * padding,
+                y_max + y_range * padding)
+        )
+
+        # Plot predictions scatter with error colors
+        scatter = ax1.scatter(
+            merged["x"],
+            merged["y"],
+            c=merged["sample_weight"],
+            cmap="viridis",
+            s=10,
+            label="Training locations",
+            norm=matplotlib.colors.LogNorm(),
+        )
+
+        cbar = plt.colorbar(scatter, ax=ax1, label="Sample Weights")
+        cbar.outline.set_visible(False)
+        plt.gca().set_aspect('equal')
+
+        #
+
+        #plt.tight_layout()
+
+        if out_prefix:
+            plt.savefig(f"{out_prefix}_sample_weights.png")
+
+        plt.show()
+        plt.close()
     return None

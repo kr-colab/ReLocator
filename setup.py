@@ -18,6 +18,7 @@ setup(
         "tf-nightly[and-cuda]; platform_system=='Linux' or platform_system=='Windows'",
         "h5py",
         "scikit-allel",
+        "scikit-learn",
         "matplotlib",
         "scipy",
         "tqdm",

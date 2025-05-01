@@ -1,6 +1,8 @@
 """Utility functions for data processing"""
 
-import numpy as np
+import numpy as np, pandas as pd
+from sklearn.neighbors import KernelDensity
+from sklearn.model_selection import GridSearchCV
 from tqdm import tqdm
 
 __all__ = [
@@ -8,11 +10,13 @@ __all__ = [
     "sort_samples",
     "normalize_locs",
     "filter_snps",
+    "weight_samples",
 ]
 
 
 def normalize_locs(locs):
     """Normalize location coordinates"""
+    unnormedlocs = locs.copy()
     meanlong = np.nanmean(locs[:, 0])
     sdlong = np.nanstd(locs[:, 0])
     meanlat = np.nanmean(locs[:, 1])
@@ -20,7 +24,7 @@ def normalize_locs(locs):
     locs = np.array(
         [[(x[0] - meanlong) / sdlong, (x[1] - meanlat) / sdlat] for x in locs]
     )
-    return meanlong, sdlong, meanlat, sdlat, locs
+    return meanlong, sdlong, meanlat, sdlat, unnormedlocs, locs
 
 
 def replace_md(genotypes):
@@ -97,3 +101,130 @@ def split_train_test(ac, locs, train_split=0.8):
     testlocs = locs[test]
     predgen = np.transpose(ac[:, pred])
     return train, test, traingen, testgen, trainlocs, testlocs, pred, predgen
+
+def weight_samples(method,
+                   trainlocs=None,
+                   trainsamps=None,
+                   weightdf=None,
+                   xbins=None,
+                   ybins=None,
+                   lam=None,
+                   bandwidth=None):
+    """
+    Calculate weights for training data based on the specified method
+    Args:
+        method (str): Method for calculating weights ('KD', 'histogram', or 'load')
+        trainlocs (numpy.ndarray): Training locations
+        weightdf (pd.DataFrame): DataFrame containing sample weights (default: None)
+        xbins (int): Number of bins in x direction (default: 10)
+        ybins (int): Number of bins in y direction (default: 10)
+        lam (float): Exponent for weights (default: 1.0)
+        bandwidth (float): Bandwidth for KDE (default: None)
+    Returns:
+        numpy.ndarray: Weights for training data
+    """
+
+    if method == 'KD':
+        weights = _make_kd_weights(trainlocs, 
+                                  1.0 if lam is None else lam, 
+                                  bandwidth)
+        df = pd.DataFrame({'sampleID':trainsamps,
+                                      'sample_weight':weights})
+    elif method == 'histogram':
+        weights = _make_histogram_weights(trainlocs, 
+                                      10 if xbins is None else xbins,
+                                      10 if ybins is None else ybins)
+        df = pd.DataFrame({'sampleID':trainsamps,
+                                      'sample_weight':weights})
+    elif method == 'load':
+        df = _load_sample_weights(weightdf, trainsamps)
+        weights = df['sample_weight'].values
+
+    else:
+        raise ValueError("Invalid method. Choose 'kde', 'histogram', or 'load'.")
+    return {'method': method,
+            'sample_weights': weights,
+            'sample_weights_df': df,
+            'xbins': xbins,
+            'ybins': ybins,
+            'lam': lam,
+            'bandwidth': bandwidth,
+            }
+
+
+def _make_kd_weights(trainlocs, lam=1.0, bandwidth=None):
+    """
+    Calculate weights for training data using Kernel Density Estimation (KDE)
+    Args:
+        trainlocs (numpy.ndarray): Training locations
+        lam (float): Exponent for weights (default: 1.0)
+        bandwidth (float): Bandwidth for KDE (default: 
+            GridSearchCV to find optimal bandwidth)
+    Returns:
+        numpy.ndarray: Weights for training data
+    """
+    if bandwidth:
+        bw = bandwidth
+    else:
+    # use gridsearch to ID best bandwidth size
+        bandwidths = np.linspace(0.1, 10, 1000)
+        grid = GridSearchCV(KernelDensity(kernel='gaussian'), {'bandwidth':bandwidths})
+        grid.fit(trainlocs)
+        bw = grid.best_params_['bandwidth']
+    
+    # fit kernel
+    kde = KernelDensity(bandwidth=bw, kernel='gaussian')
+    kde.fit(trainlocs)
+
+    # calculate weights
+    weights = kde.score_samples(trainlocs)
+    weights = 1.0 / np.exp(weights)
+    weights /= min(weights)
+
+    weights = np.power(weights, lam)
+
+    weights /= sum(weights)
+
+    return weights
+
+def _make_histogram_weights(trainlocs, xbins=10, ybins=10):
+    """
+    Calculate weights for training data using histogram binning
+    Args:
+        trainlocs (numpy.ndarray): Training locations
+        xbins (int): Number of bins in x direction (default: 10)
+        ybins (int): Number of bins in y direction (default: 10)
+    Returns:
+        numpy.ndarray: Weights for training data
+    """
+    bincount = [xbins, ybins]
+    # make 2D histogram
+    H, xedges, yedges = np.histogram2d(trainlocs[:,0], trainlocs[:, 1], bins=bincount)
+    # sort trainlocs into bins
+    xbin = np.digitize(trainlocs[:, 0], xedges[1:], right=True)
+    ybin = np.digitize(trainlocs[:, 1], yedges[1:], right=True)
+    # assign sample weights
+    weights = np.empty(len(trainlocs), dtype='float')
+    for i in range(len(trainlocs)):
+        weights[i] = 1/(H[xbin[i]][ybin[i]])
+    weights /= min(weights)
+
+    return weights
+
+def _load_sample_weights(weightdf, trainsamps):
+    """Load sample weights from a DataFrame
+    Args:
+        weightdf (pd.DataFrame): DataFrame containing sample weights
+        trainsamps (list): List of training sample IDs
+    Returns:    
+        numpy.ndarray: Array of sample weights
+    """
+    weightdf.set_index('sampleID', inplace=True)
+    weights = np.empty(len(trainsamps), dtype='float')
+    for i in range(len(trainsamps)):
+        w = weightdf.loc[trainsamps[i], 'sample_weight']
+        if type(w) == pd.core.series.Series:
+            weights[i] = w[0]
+        else:
+            weights[i] = w 
+    return np.array(weights)
