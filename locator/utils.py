@@ -1,6 +1,7 @@
 """Utility functions for data processing"""
 
 import numpy as np, pandas as pd
+import geopy
 from sklearn.neighbors import KernelDensity
 from sklearn.model_selection import GridSearchCV
 from tqdm import tqdm
@@ -125,7 +126,7 @@ def weight_samples(method,
     """
 
     if method == 'KD':
-        weights = _make_kd_weights(trainlocs, 
+        weights, bandwidth = _make_kd_weights(trainlocs, 
                                   1.0 if lam is None else lam, 
                                   bandwidth)
         df = pd.DataFrame({'sampleID':trainsamps,
@@ -137,11 +138,13 @@ def weight_samples(method,
         df = pd.DataFrame({'sampleID':trainsamps,
                                       'sample_weight':weights})
     elif method == 'load':
-        df = _load_sample_weights(weightdf, trainsamps)
-        weights = df['sample_weight'].values
+        weights = _load_sample_weights(weightdf, trainsamps)
+        df = pd.DataFrame({'sampleID':trainsamps,
+                                      'sample_weight':weights})
 
     else:
         raise ValueError("Invalid method. Choose 'kde', 'histogram', or 'load'.")
+    
     return {'method': method,
             'sample_weights': weights,
             'sample_weights_df': df,
@@ -185,7 +188,7 @@ def _make_kd_weights(trainlocs, lam=1.0, bandwidth=None):
 
     weights /= sum(weights)
 
-    return weights
+    return weights, bandwidth
 
 def _make_histogram_weights(trainlocs, xbins=10, ybins=10):
     """
@@ -228,3 +231,25 @@ def _load_sample_weights(weightdf, trainsamps):
         else:
             weights[i] = w 
     return np.array(weights)
+
+def error_distances(locs, predlocs, method='geodesic'):
+    """Calculate distances between predicted and actual locations
+    Args:
+        locs (numpy.ndarray): Actual locations
+        predlocs (numpy.ndarray): Predicted locations
+        method (str): Method for calculating distances ('geodesic' or 'euclidean')
+    Returns:
+        numpy.ndarray: Array of distances
+    """
+    distances = np.empty(len(locs), dtype='float');
+    for i in range(len(locs)):
+        if method == 'euclidean':
+            distances[i] = np.sqrt(
+                (locs[i][0] - predlocs[i][0]) ** 2
+                + (locs[i][1] - predlocs[i][1]) ** 2
+            )
+        elif method == 'geodesic':
+            distances[i] = geopy.distance.geodesic(
+                (locs[i][1], locs[i][0]), (predlocs[i][1], predlocs[i][0])
+            ).km
+    return distances

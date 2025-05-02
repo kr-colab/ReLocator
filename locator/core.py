@@ -739,16 +739,17 @@ class Locator:
                         "Sample weights already calculated. "
                         "Set weight_samples to False in config to disable."
                     )
-                wmethod = self.config.get("weight_samples", {}).get("method")
-                self.sample_weights = weight_samples(wmethod,
-                                                    trainlocs=self.unnormedlocs,
-                                                    trainsamps=self.samples[train_idx_final],
-                                                    weightdf=self.config.get("weight_samples", {}).get("dataframe"),
-                                                    xbins=self.config.get("weight_samples", {}).get("xbins"),
-                                                    ybins=self.config.get("weight_samples", {}).get("ybins"),
-                                                    lam=self.config.get("weight_samples", {}).get("lam"),
-                                                    bandwidth=self.config.get("weight_samples", {}).get("bandwidth"),
-                                                    )
+                else:
+                    wmethod = self.config.get("weight_samples", {}).get("method")
+                    self.sample_weights = weight_samples(wmethod,
+                                                        trainlocs=self.unnormedlocs,
+                                                        trainsamps=self.samples[train_idx_final],
+                                                        weightdf=self.config.get("weight_samples", {}).get("dataframe"),
+                                                        xbins=self.config.get("weight_samples", {}).get("xbins"),
+                                                        ybins=self.config.get("weight_samples", {}).get("ybins"),
+                                                        lam=self.config.get("weight_samples", {}).get("lam"),
+                                                        bandwidth=self.config.get("weight_samples", {}).get("bandwidth"),
+                                                        )
             # Store prediction indices
             self.pred_indices = pred
         else:
@@ -1490,6 +1491,7 @@ class Locator:
         save_preds_to_disk=True,
         plot_summary=True,
         plot_map=True,
+        distances='Euclidean',
     ):
         """Predict locations for held out samples.
 
@@ -1522,6 +1524,19 @@ class Locator:
         pred_df["y"] = pred_df["y"] * self.sdlat + self.meanlat
         pred_df["x_pred"] = pred_df["x"]
         pred_df["y_pred"] = pred_df["y"]
+        
+        if distances == 'Euclidean':
+            pred_df["distance"] = np.sqrt(
+                (pred_df["x_pred"] - pred_df["x"]) ** 2
+                + (pred_df["y_pred"] - pred_df["y"]) ** 2
+            )
+        elif distances == 'geodesic':
+            pred_df["distance"] = haversine(
+                pred_df["x_pred"],
+                pred_df["y_pred"],
+                self.holdout_locs[:, 0],
+                self.holdout_locs[:, 1],
+            )
 
         if save_preds_to_disk:
             pred_df.to_csv(f"{self.config['out']}_holdout_predlocs.csv", index=False)
