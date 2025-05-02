@@ -212,10 +212,10 @@ class Locator:
 #            "weight_samples": False,
             "weight_samples": {
                 "enabled": False,  # Whether to weight samples by distance
-                "method": "KD",     # Method for weighting samples ("KD", "histogram", "df")
-                "xbins": 10,       # Number of bins for histogram
-                "ybins": 10,       # Number of bins for histogram
-                "lam": 1.0,       # Exponent for weights
+                "method": None,     # Method for weighting samples ("KD", "histogram", "df")
+                "xbins": None,       # Number of bins for histogram
+                "ybins": None,       # Number of bins for histogram
+                "lam": None,       # Exponent for weights
                 "bandwidth": None, # Bandwidth for KDE
                 "weightdf": None,  # DataFrame containing sample weights
                 },
@@ -833,7 +833,7 @@ class Locator:
             verbose=self.config.get("keras_verbose", 1),
             validation_data=(self.testgen, testlocs),
             callbacks=callbacks,
-            sample_weights = None if self.sample_weights is None else self.sample_weights['sample_weights'],
+            sample_weight=None if self.sample_weights is None else self.sample_weights['sample_weights'],
         )
 
         # Save training history
@@ -1873,7 +1873,7 @@ class Locator:
                 if k in self.config['weight_samples'].keys():
                     if self.config['weight_samples'][k] is not None:
                         html.append(
-                            f"<tr><td style='padding:5px'>weight_samples {'weight_samples '+k}</td>"
+                            f"<tr><td style='padding:5px'>{'weight_samples '+k}</td>"
                             f"<td style='padding:5px'>{self.config['weight_samples'][k]}</td></tr>"
                         )
 
@@ -1959,10 +1959,12 @@ class Locator:
         else:
             html.append("<li>Genotype data: Not provided</li>")
 
-        if hasattr(self, "sample_weights"):
+        if self.config.get("weight_samples", {}).get("enabled", False):
             html.append(
                 f"<li>Samples weighted using {self.config['weight_samples'].get('method')}</li>"
             )
+        else:
+            html.append("<li>Samples not weighted</li>")
 
         # Add holdout information
         if hasattr(self, "holdout_idx") and self.samples is not None:
