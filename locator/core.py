@@ -20,7 +20,7 @@ from .loaders import DataLoaderMixin
 from .training import TrainingMixin
 from .prediction import PredictionMixin
 from .analysis import AnalysisMixin
-from .visualization import VisualizationMixin
+from .plotting import PlottingMixin
 
 
 def setup_gpu(gpu_number=None):
@@ -68,7 +68,7 @@ def setup_gpu(gpu_number=None):
         return False
 
 
-class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, VisualizationMixin):
+class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, PlottingMixin):
     """A class for predicting geographic locations from genetic data.
 
     This class implements a neural network approach to predict sample locations from
