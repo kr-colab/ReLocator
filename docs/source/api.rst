@@ -19,7 +19,13 @@ Core Module
 Locator
 ^^^^^^^
 .. autoclass:: Locator
+   :members:
+   :inherited-members:
+   :show-inheritance:
 
+Ensemble Module
+---------------
+.. module:: locator.ensemble
 
 EnsembleLocator
 ^^^^^^^^^^^^^^^
@@ -67,6 +73,50 @@ Utils Module
        min_mac (int): Minimum minor allele count
        max_snps (int, optional): Maximum number of SNPs to retain
        impute (bool): Whether to impute missing values
+
+Internal Modules (Implementation Details)
+-----------------------------------------
+*These modules contain the implementation of Locator functionality. Users typically interact with these through the main Locator class.*
+
+Loaders Module
+^^^^^^^^^^^^^^
+.. module:: locator.loaders
+
+.. autoclass:: DataLoaderMixin
+   :members:
+   :noindex:
+
+Training Module
+^^^^^^^^^^^^^^^
+.. module:: locator.training
+
+.. autoclass:: TrainingMixin
+   :members:
+   :noindex:
+
+Prediction Module
+^^^^^^^^^^^^^^^^^
+.. module:: locator.prediction
+
+.. autoclass:: PredictionMixin
+   :members:
+   :noindex:
+
+Analysis Module
+^^^^^^^^^^^^^^^
+.. module:: locator.analysis
+
+.. autoclass:: AnalysisMixin
+   :members:
+   :noindex:
+
+Visualization Module
+^^^^^^^^^^^^^^^^^^^^
+.. module:: locator.visualization
+
+.. autoclass:: VisualizationMixin
+   :members:
+   :noindex:
 
 
 
@@ -238,7 +288,7 @@ Ensemble Analysis
 
 .. code-block:: python
 
-    from locator.core import EnsembleLocator
+    from locator import EnsembleLocator
     
     # Initialize ensemble
     ensemble = EnsembleLocator(

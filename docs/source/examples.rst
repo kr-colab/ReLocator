@@ -8,8 +8,7 @@ Basic Usage
 
 .. code-block:: python
 
-    import locator
-    from locator.core import Locator
+    from locator import Locator
     
     # Initialize Locator with configuration
     loc = Locator({
@@ -61,7 +60,7 @@ Ensemble Analysis
 
 .. code-block:: python
 
-    from locator.core import EnsembleLocator
+    from locator import EnsembleLocator
     
     # Initialize ensemble
     ensemble = EnsembleLocator(
