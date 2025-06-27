@@ -179,6 +179,85 @@ Enable data augmentation during training:
        }
    }
 
+Handling Missing Coordinates
+----------------------------
+Locator provides consistent handling of samples without geographic coordinates through the ``na_action`` parameter:
+
+.. code-block:: python
+
+   # Configure NA handling behavior
+   config = {
+       "out": "na_handling_example",
+       "na_action": "separate"  # Options: 'separate', 'exclude', 'fail'
+   }
+   
+   locator = Locator(config)
+
+Available NA Actions
+~~~~~~~~~~~~~~~~~~~~
+
+**'separate' (default)**
+   Train on samples with known coordinates, predict on samples without coordinates.
+   This is the default behavior that allows you to predict locations for new samples.
+
+**'exclude'**
+   Only use samples with known coordinates. Samples without coordinates are filtered
+   out before training or analysis.
+
+**'fail'**
+   Raise an error if any samples lack coordinates. Use this to ensure all samples
+   have location data.
+
+Checking Data Quality
+~~~~~~~~~~~~~~~~~~~~~
+Use the ``check_data()`` method to understand your dataset:
+
+.. code-block:: python
+
+   # Check data before analysis
+   locator.check_data(genotypes, samples, verbose=True)
+   
+   # Output example:
+   # ===== Data Summary =====
+   # Total samples: 231
+   # Samples with coordinates: 211
+   # Samples without coordinates: 20
+   # Total SNPs: 1000
+   # 
+   # Current NA handling mode: separate
+   # - Will train on samples with known locations
+   # - Can predict on samples without locations
+
+Method-Level Control
+~~~~~~~~~~~~~~~~~~~~
+Override the instance-level NA handling for specific methods:
+
+.. code-block:: python
+
+   # Instance configured with 'separate'
+   locator = Locator({"na_action": "separate"})
+   
+   # Override for a specific analysis
+   locator.run_bootstraps(
+       genotypes=genotypes,
+       samples=samples,
+       na_action="exclude"  # Only use samples with coordinates
+   )
+
+Important Notes on Holdout Methods
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Holdout-based methods require known coordinates for evaluation:
+
+.. code-block:: python
+
+   # These methods need coordinates to evaluate predictions
+   locator.run_holdouts(genotypes, samples)  # 'separate' behaves like 'exclude'
+   locator.run_k_fold_holdouts(genotypes, samples)  # Only uses samples with coordinates
+   
+   # Non-holdout methods can predict on NA samples with 'separate' mode
+   locator.run_jacknife(genotypes, samples)  # Can predict NA samples
+   locator.run_bootstraps(genotypes, samples)  # Can predict NA samples
+
 Next Steps
 ----------
 * Check the :doc:`api` reference for detailed information about all available functions and classes.

@@ -9,6 +9,7 @@ Locator is a deep learning-based tool for predicting geographic coordinates from
 
    installation
    usage
+   na_handling_guide
    api
    examples
    contributing
@@ -18,6 +19,7 @@ Quick Links
 
 * :doc:`installation` - Installation instructions
 * :doc:`usage` - Basic and advanced usage guide
+* :doc:`na_handling_guide` - Guide for handling missing coordinates
 * :doc:`api` - Complete API reference
 * :doc:`examples` - Example workflows
 * :doc:`contributing` - Contribution guidelines
@@ -28,6 +30,7 @@ Key Features
 * Deep learning-based coordinate prediction
 * Custom loss functions for geographic constraints
 * Species range mask integration
+* Consistent handling of missing coordinates
 * Efficient batch processing
 * TensorFlow/Keras implementation
 * Comprehensive evaluation metrics

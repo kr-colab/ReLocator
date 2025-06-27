@@ -34,7 +34,17 @@ Sample metadata should be a tab-delimited file with the first row:
 
 `sampleID	x	y`
 
-Use NA or NaN for x and y values of samples with unknown locations. Metadata must include all samples in the genotypes file. 
+Use NA or NaN for x and y values of samples with unknown locations. Metadata must include all samples in the genotypes file.
+
+## Handling Missing Coordinates
+
+Locator now provides consistent handling of samples without geographic coordinates through the `na_action` parameter:
+
+- **`separate` (default)**: Train on samples with known locations, predict on samples without
+- **`exclude`**: Only use samples with known coordinates
+- **`fail`**: Raise an error if any samples lack coordinates
+
+See the [documentation](https://relocator.readthedocs.io/en/latest/na_handling_guide.html) for detailed information. 
 
 
 # Examples

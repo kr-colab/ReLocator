@@ -23,6 +23,38 @@ Locator
    :inherited-members:
    :show-inheritance:
 
+NA Handling Methods
+^^^^^^^^^^^^^^^^^^^
+.. automethod:: Locator.get_sample_status
+
+   Analyze which samples have known coordinates vs NA coordinates.
+
+   Args:
+       samples: Array of sample IDs
+       sample_data: Optional DataFrame with coordinate data. If None, uses instance sample_data.
+
+   Returns:
+       dict: Dictionary containing:
+           - known_indices: Indices of samples with coordinates
+           - na_indices: Indices of samples without coordinates
+           - known_samples: Sample IDs with coordinates
+           - na_samples: Sample IDs without coordinates
+           - n_known: Count of samples with coordinates
+           - n_na: Count of samples without coordinates
+           - total: Total number of samples
+
+.. automethod:: Locator.check_data
+
+   Check data quality and report sample coordinate status.
+
+   Args:
+       genotypes: Genotype array
+       samples: Sample IDs
+       verbose: Whether to print detailed report
+
+   Returns:
+       dict: Sample status information from get_sample_status()
+
 Ensemble Module
 ---------------
 .. module:: locator.ensemble
