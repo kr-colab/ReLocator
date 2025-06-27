@@ -337,7 +337,6 @@ class AnalysisMixin:
             holdout_indices: Optional list of lists, each containing indices to hold out
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
-            
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each holdout replicate, otherwise None
@@ -410,13 +409,11 @@ class AnalysisMixin:
                 all_predictions = pd.merge(
                     all_predictions, df, on="sampleID", how="outer"
                 )
-
             if save_full_pred_matrix:
                 all_predictions.to_csv(
                     f"{self.config['out']}_holdouts_predlocs.csv", index=False
                 )
             return all_predictions
-
         return None
 
     def run_jacknife_holdouts(
@@ -623,4 +620,165 @@ class AnalysisMixin:
                 )
             return all_predictions
 
+        return None
+
+    def run_leave_one_out(
+        self,
+        genotypes,
+        samples,
+        return_df=True,
+        save_full_pred_matrix=True,
+    ):
+        """
+        Perform leave-one-out cross-validation: for each sample with a known location,
+        train without it and predict its location.
+
+        Args:
+            genotypes: Array of genotype data
+            samples: Sample IDs corresponding to genotypes
+            return_df: Whether to return DataFrame with all predictions
+            save_full_pred_matrix: Whether to save full prediction matrix to disk
+
+        Returns:
+            pandas.DataFrame or None: DataFrame with predictions for each left-out sample
+        """
+        self.samples = samples
+
+        # Get sample data and locations
+        if hasattr(self, "_sample_data_df"):
+            sample_data, locs = self.sort_samples(samples)
+        else:
+            sample_data_path = self.config.get("sample_data")
+            if not sample_data_path:
+                raise ValueError("sample_data file path must be provided in config")
+            sample_data, locs = self.sort_samples(samples, sample_data_path)
+
+        known_idx = np.argwhere(~np.isnan(locs[:, 0]))
+        known_idx = np.array([x[0] for x in known_idx])
+
+        pred_rows = []
+
+        print(f"Running leave-one-out cross-validation for {len(known_idx)} samples")
+
+        for idx in tqdm(known_idx):
+            self.model = None
+            # Train with all except idx
+            holdout_indices = [idx]
+            self.train_holdout(
+                genotypes=genotypes,
+                samples=samples,
+                holdout_indices=holdout_indices,
+            )
+            preds = self.predict_holdout(
+                verbose=False,
+                return_df=True,
+                save_preds_to_disk=False,
+            )
+            # preds should have one row: the held-out sample
+            pred_rows.append(preds.iloc[0])
+
+            keras.backend.clear_session()
+
+        all_predictions = pd.DataFrame(pred_rows)
+        if save_full_pred_matrix:
+            all_predictions.to_csv(
+                f"{self.config['out']}_leave_one_out_predlocs.csv", index=False
+            )
+        if return_df:
+            return all_predictions
+        return None
+
+    def run_k_fold_holdouts(
+        self,
+        genotypes,
+        samples,
+        k=10,
+        return_df=False,
+        save_full_pred_matrix=True,
+        verbose=True,
+    ):
+        """
+        Run true k-fold cross-validation with nonoverlapping holdout sets.
+
+        Args:
+            genotypes: Array of genotype data
+            samples: Sample IDs corresponding to genotypes
+            k: Number of folds (holdout sets)
+            return_df: Whether to return DataFrame with all predictions
+            save_full_pred_matrix: Whether to save full prediction matrix to disk
+            verbose: Whether to show training progress and intermediate output
+        Returns:
+            pandas.DataFrame or None: If return_df=True, returns DataFrame with one prediction per held-out sample (columns: sampleID, x_pred, y_pred)
+        """
+        self.samples = samples
+        pred_rows = []
+
+        # Get sample data and locations
+        if hasattr(self, "_sample_data_df"):
+            sample_data, locs = self.sort_samples(samples)
+        else:
+            sample_data_path = self.config.get("sample_data")
+            if not sample_data_path:
+                raise ValueError("sample_data file path must be provided in config")
+            sample_data, locs = self.sort_samples(samples, sample_data_path)
+
+        # Get indices of samples with known locations
+        known_idx = np.argwhere(~np.isnan(locs[:, 0]))
+        known_idx = np.array([x[0] for x in known_idx])
+        n_samples = len(known_idx)
+        if k > n_samples:
+            raise ValueError(
+                f"k ({k}) must be less than or equal to number of samples with known locations ({n_samples})"
+            )
+
+        # Shuffle and split known_idx into k folds
+        rng = np.random.default_rng()
+        shuffled_idx = rng.permutation(known_idx)
+        folds = np.array_split(shuffled_idx, k)
+
+        # Store original keras_verbose setting
+        original_keras_verbose = self.config.get('keras_verbose', 1)
+        
+        # Set keras_verbose based on verbose parameter
+        if not verbose:
+            self.config['keras_verbose'] = 0
+        
+        if verbose:
+            print(f"Running true {k}-fold cross-validation with nonoverlapping holdout sets")
+            fold_iterator = tqdm(enumerate(folds), total=k, desc="K-fold progress")
+        else:
+            fold_iterator = enumerate(folds)
+
+        for _, fold_indices in fold_iterator:
+            self.model = None
+            self.train_holdout(
+                genotypes=genotypes,
+                samples=samples,
+                holdout_indices=fold_indices,
+            )
+            preds = self.predict_holdout(
+                verbose=False,
+                return_df=True,
+                save_preds_to_disk=not save_full_pred_matrix,
+                plot_summary=False,  # Never plot during k-fold CV
+            )
+            # preds: one row per held-out sample in this fold
+            for _, row in preds.iterrows():
+                pred_rows.append({
+                    "sampleID": row["sampleID"],
+                    "x_pred": row["x_pred"],
+                    "y_pred": row["y_pred"]
+                })
+            keras.backend.clear_session()
+
+        # Restore original keras_verbose setting
+        self.config['keras_verbose'] = original_keras_verbose
+
+        if return_df:
+            all_predictions = pd.DataFrame(pred_rows)
+            if save_full_pred_matrix:
+                all_predictions.to_csv(
+                    f"{self.config['out']}_kfold_holdouts_predlocs.csv", index=False
+                )
+            return all_predictions
         return None
