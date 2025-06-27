@@ -117,9 +117,25 @@ class PredictionMixin:
         samples_str = [str(s) for s in samples]
 
         # Verify sample order matches using the correct column name
-        if not all(
-            sample_data["sampleID"].iloc[x] == samples_str[x] for x in range(len(samples))
-        ):
+        # First check if we have the same number of samples
+        if len(sample_data) != len(samples):
+            if reorder:
+                # Different number of samples - need to handle this case
+                print(f"Sample count mismatch: {len(samples)} in genotypes, {len(sample_data)} in metadata")
+                # We'll handle this by adding NA entries for missing samples during reordering
+            else:
+                raise ValueError(
+                    f"Sample count mismatch: genotypes has {len(samples)} samples but metadata has {len(sample_data)}. "
+                    f"Set reorder=True to handle this automatically."
+                )
+        
+        # Check order for the samples we do have
+        min_samples = min(len(sample_data), len(samples))
+        order_matches = len(sample_data) == len(samples) and all(
+            sample_data["sampleID"].iloc[x] == samples_str[x] for x in range(min_samples)
+        )
+        
+        if not order_matches:
             if reorder:
                 # Create a mapping DataFrame with genotype order
                 sample_order_df = pd.DataFrame({
@@ -142,6 +158,13 @@ class PredictionMixin:
                         f"{missing_in_meta} samples in genotypes have no metadata. "
                         f"First 10 missing: {missing_ids[:10]}"
                     )
+                    # For k-fold and other analyses that need all samples to have metadata,
+                    # this will cause issues. The user should use a complete metadata file.
+                    if missing_in_meta == len(reordered_data):
+                        raise ValueError(
+                            "No samples from genotypes found in metadata! "
+                            "Check that sample IDs match between files."
+                        )
                 
                 # Check for samples in metadata but not in genotypes
                 samples_set = set(samples_str)
@@ -159,7 +182,10 @@ class PredictionMixin:
                 # Print summary of reordering
                 print(f"Reordered metadata to match genotype sample order.")
                 print(f"Total samples in genotypes: {len(samples)}")
-                print(f"Samples with metadata: {len(samples) - missing_in_meta}")
+                print(f"Samples with coordinates: {len(samples) - missing_in_meta}")
+                if missing_in_meta > 0:
+                    print(f"Samples without coordinates (NA): {missing_in_meta}")
+                    print(f"Note: K-fold CV will only use the {len(samples) - missing_in_meta} samples with known locations")
                 
             else:
                 raise ValueError(

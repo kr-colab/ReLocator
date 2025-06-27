@@ -181,6 +181,10 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
         - **use_range_penalty** (*bool*): Whether to apply a range penalty in the loss function.
         - **penalty_weight** (*float*): Weight assigned to the range penalty term.
         - **species_range_geom** (*shapely.geometry*): Shapely geometry object defining the valid species range.
+        - **na_action** (*str*): How to handle samples without coordinates. Options:
+            - 'separate' (default): Include all samples, train on known, predict unknown.
+            - 'exclude': Only use samples with known coordinates.
+            - 'fail': Raise error if any samples lack coordinates.
         """
         # Set default configuration
         self.config = {
@@ -229,11 +233,21 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             "resolution": 0.05,
             "penalty_weight": 1.0,
             "out": "locator",
+            # NA handling
+            "na_action": "separate",  # How to handle samples without coordinates
         }
 
         # Update with user config
         if config is not None:
             self.config.update(config)
+        
+        # Validate na_action parameter
+        valid_na_actions = ['separate', 'exclude', 'fail']
+        if self.config['na_action'] not in valid_na_actions:
+            raise ValueError(
+                f"Invalid na_action '{self.config['na_action']}'. "
+                f"Must be one of: {valid_na_actions}"
+            )
 
         # If using range penalty and a species_range_geom is provided, set it in models
         if (
@@ -283,6 +297,9 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             self.positions = None  # For windowed analysis
         self.unnormedlocs = None # For calculating sample weights
         self.sample_weights = None
+        
+        # Store na_action as instance attribute for convenience
+        self.na_action = self.config['na_action']
 
         # Setup GPU if not explicitly disabled
         if not self.config.get("disable_gpu", False):
@@ -334,6 +351,143 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
                 raise ValueError(f"Could not load sample data: {e}")
         else:
             raise ValueError("No sample data available")
+
+    def get_sample_status(self, samples, sample_data=None):
+        """
+        Analyze sample coordinate status.
+        
+        This method identifies which samples have known geographic coordinates and which have
+        missing (NA) coordinates. This is useful for understanding your data and for methods
+        that need to handle samples with and without coordinates differently.
+        
+        Args:
+            samples (numpy.ndarray): Array of sample IDs from genotype data
+            sample_data (pandas.DataFrame, optional): DataFrame with columns 'sampleID', 'x', 'y'.
+                If not provided, uses the stored sample data or loads from config.
+        
+        Returns:
+            dict: A dictionary containing:
+                - 'known_indices' (numpy.ndarray): Array indices of samples with coordinates
+                - 'na_indices' (numpy.ndarray): Array indices of samples without coordinates
+                - 'known_samples' (numpy.ndarray): Sample IDs with coordinates
+                - 'na_samples' (numpy.ndarray): Sample IDs without coordinates
+                - 'n_known' (int): Count of samples with known coordinates
+                - 'n_na' (int): Count of samples with NA coordinates
+                - 'total' (int): Total number of samples
+        
+        Example:
+            >>> locator = Locator(config)
+            >>> status = locator.get_sample_status(samples)
+            >>> print(f"Found {status['n_known']} samples with coordinates")
+            >>> print(f"Found {status['n_na']} samples without coordinates")
+        """
+        # Get sample data and locations
+        if sample_data is None:
+            sample_data, locs = self.sort_samples(samples)
+        else:
+            # Validate provided DataFrame
+            required_cols = ['sampleID', 'x', 'y']
+            if not all(col in sample_data.columns for col in required_cols):
+                raise ValueError(f"sample_data must contain columns: {required_cols}")
+            locs = sample_data[['x', 'y']].values
+        
+        # Find indices with known and NA coordinates
+        # A sample has known coordinates if both x and y are not NaN
+        known_mask = ~(np.isnan(locs[:, 0]) | np.isnan(locs[:, 1]))
+        known_idx = np.where(known_mask)[0]
+        na_idx = np.where(~known_mask)[0]
+        
+        # Get sample IDs for each group
+        known_samples = samples[known_idx] if len(known_idx) > 0 else np.array([])
+        na_samples = samples[na_idx] if len(na_idx) > 0 else np.array([])
+        
+        return {
+            'known_indices': known_idx,
+            'na_indices': na_idx,
+            'known_samples': known_samples,
+            'na_samples': na_samples,
+            'n_known': len(known_idx),
+            'n_na': len(na_idx),
+            'total': len(samples)
+        }
+
+    def check_data(self, genotypes, samples, verbose=True):
+        """
+        Check data quality and report statistics.
+        
+        This is a convenience method to help users understand their data before running
+        analyses. It reports the number of samples, SNPs, and identifies samples with
+        missing coordinates.
+        
+        Args:
+            genotypes (numpy.ndarray or allel.GenotypeArray): Genotype data
+            samples (numpy.ndarray): Array of sample IDs
+            verbose (bool): If True, print detailed statistics. Default: True
+        
+        Returns:
+            dict: Sample status dictionary from get_sample_status()
+        
+        Example:
+            >>> locator = Locator(config)
+            >>> genotypes, samples = locator.load_genotypes()
+            >>> status = locator.check_data(genotypes, samples)
+            Data Summary
+            ==================================================
+            Total samples: 231
+            Samples with coordinates: 211
+            Samples without coordinates: 20
+            Total SNPs: 1000
+            
+            Current NA handling mode: separate
+            - Will train on samples with known locations
+            - Can predict on samples without locations
+            
+            Samples without coordinates (first 10):
+              - sample_001
+              - sample_002
+              ...
+        """
+        # Get sample status
+        status = self.get_sample_status(samples)
+        
+        if verbose:
+            print("Data Summary")
+            print("=" * 50)
+            print(f"Total samples: {status['total']}")
+            print(f"Samples with coordinates: {status['n_known']}")
+            print(f"Samples without coordinates: {status['n_na']}")
+            
+            # Report SNP count
+            if hasattr(genotypes, 'shape'):
+                n_snps = genotypes.shape[0]
+                print(f"Total SNPs: {n_snps}")
+            
+            # Report NA handling mode
+            print(f"\nCurrent NA handling mode: {self.na_action}")
+            if self.na_action == 'separate':
+                print("- Will train on samples with known locations")
+                print("- Can predict on samples without locations")
+            elif self.na_action == 'exclude':
+                print("- Will only use samples with known locations")
+                print("- Samples without locations will be excluded from all analyses")
+            elif self.na_action == 'fail':
+                print("- Will raise an error if any samples lack coordinates")
+            
+            # Show samples without coordinates
+            if status['n_na'] > 0:
+                print(f"\nSamples without coordinates (first 10):")
+                for i, sample_id in enumerate(status['na_samples'][:10]):
+                    print(f"  - {sample_id}")
+                if status['n_na'] > 10:
+                    print(f"  ... and {status['n_na'] - 10} more")
+                    
+                # Provide guidance based on na_action
+                if self.na_action == 'fail':
+                    print("\n⚠️  WARNING: Your current na_action='fail' setting will cause")
+                    print("   methods to fail with these NA samples. Consider using")
+                    print("   na_action='separate' or 'exclude' instead.")
+        
+        return status
 
 
 # Import EnsembleLocator from ensemble.py
