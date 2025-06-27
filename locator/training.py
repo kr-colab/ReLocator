@@ -50,7 +50,13 @@ class TrainingMixin:
         testgen = np.transpose(genotypes[:, test])
         trainlocs = locations[train]
         testlocs = locations[test]
-        predgen = np.transpose(genotypes[:, pred])
+        
+        # Handle case when there are no samples to predict (e.g., after exclude mode)
+        if len(pred) > 0:
+            predgen = np.transpose(genotypes[:, pred])
+        else:
+            # Create empty array with correct shape
+            predgen = np.empty((0, genotypes.shape[0]), dtype=genotypes.dtype)
 
         return train, test, traingen, testgen, trainlocs, testlocs, pred, predgen
 
@@ -122,6 +128,7 @@ class TrainingMixin:
         setup_only=False,
         weight_samples=False,
         weight_method=None,
+        na_action=None,
     ):
         """Train the Locator model on genotype and location data.
 
@@ -141,6 +148,8 @@ class TrainingMixin:
             train_locs (np.ndarray, optional): Pre-processed training locations. Used for bootstrapping. If None, will be generated from sample data. Defaults to None.
             test_locs (np.ndarray, optional): Pre-processed test locations. Used for bootstrapping. If None, will be generated from sample data. Defaults to None.
             setup_only (bool, optional): If True, only sets up the model and data without training. Defaults to False.
+            na_action (str, optional): How to handle NA samples ('separate', 'exclude', 'fail'). 
+                If None, uses self.na_action. Defaults to None.
 
         Returns:
             keras.callbacks.History or None: The Keras training history object if training is performed, or None if `setup_only` is True.
@@ -169,6 +178,25 @@ class TrainingMixin:
         # Store samples
         self.samples = samples
 
+        # Use instance default if na_action not specified
+        if na_action is None:
+            na_action = self.na_action
+            
+        # Get sample status
+        status = self.get_sample_status(samples)
+        
+        # Report status
+        print(f"Training data: {status['n_known']} samples with coordinates, {status['n_na']} without")
+        if status['n_na'] > 0:
+            print(f"NA handling mode: {na_action}")
+        
+        # Apply NA action
+        if na_action == 'fail' and status['n_na'] > 0:
+            raise ValueError(
+                f"Found {status['n_na']} samples without coordinates. "
+                f"Set na_action='separate' or 'exclude' to proceed."
+            )
+        
         # Get sorted sample data and locations
         if hasattr(self, "_sample_data_df"):
             # Use stored DataFrame
@@ -182,6 +210,17 @@ class TrainingMixin:
                     "when not using DataFrame input"
                 )
             sample_data, locs = self.sort_samples(samples, sample_data_file)
+            
+        # Apply 'exclude' mode if needed
+        if na_action == 'exclude' and status['n_na'] > 0:
+            print(f"Excluding {status['n_na']} samples without coordinates")
+            # Filter to only known samples
+            mask = status['known_indices']
+            genotypes = genotypes[:, mask]
+            samples = samples[mask]
+            locs = locs[mask]
+            # Update sample data to match
+            sample_data = sample_data.iloc[mask]
 
         # Normalize locations
         self.meanlong, self.sdlong, self.meanlat, self.sdlat, self.unnormedlocs, normalized_locs = (

@@ -22,6 +22,7 @@ class AnalysisMixin:
         window_stop=None,
         return_df=False,
         save_full_pred_matrix=True,
+        na_action=None,
     ):
         """Run windowed prediction analysis.
 
@@ -33,13 +34,40 @@ class AnalysisMixin:
             window_stop: Stop position for windows (default: None)
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+                If None, uses self.na_action
             
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each window, otherwise None
+                
+        Notes:
+            - With na_action='separate': Trains on samples with known locations,
+              can predict on samples with NA locations
+            - With na_action='exclude': Only uses samples with known locations
+            - With na_action='fail': Raises error if any NA samples found
         """
         # Store samples
         self.samples = samples
+        
+        # Use instance default if na_action not specified
+        if na_action is None:
+            na_action = self.na_action
+            
+        # Get sample status
+        status = self.get_sample_status(samples)
+        
+        # Report status
+        print(f"Window analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
+        if status['n_na'] > 0:
+            print(f"NA handling mode: {na_action}")
+        
+        # Apply NA action
+        if na_action == 'fail' and status['n_na'] > 0:
+            raise ValueError(
+                f"Found {status['n_na']} samples without coordinates. "
+                f"Set na_action='separate' or 'exclude' to proceed."
+            )
 
         # Get positions if not already stored
         if not hasattr(self, "positions"):
@@ -67,7 +95,7 @@ class AnalysisMixin:
         )
         if sum(first_window) > 0:
             window_genos = genotypes[first_window, :, :]
-            self.train(genotypes=window_genos, samples=samples)
+            self.train(genotypes=window_genos, samples=samples, na_action=na_action)
 
         # Create lists to store predictions
         pred_dfs = []
@@ -85,7 +113,7 @@ class AnalysisMixin:
                 self.model = None
 
                 # Train on window data
-                self.train(genotypes=window_genos, samples=samples)
+                self.train(genotypes=window_genos, samples=samples, na_action=na_action)
 
                 # Get predictions using self.predgen which is already properly formatted
                 preds = self.predict(
@@ -220,6 +248,7 @@ class AnalysisMixin:
         n_bootstraps=50,
         return_df=False,
         save_full_pred_matrix=True,
+        na_action=None,
     ):
         """Run bootstrap analysis by resampling SNPs with replacement.
         
@@ -229,20 +258,47 @@ class AnalysisMixin:
             n_bootstraps: Number of bootstrap replicates to run
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+                If None, uses self.na_action
             
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each bootstrap, otherwise None
+                
+        Notes:
+            - With na_action='separate': Trains on samples with known locations,
+              can predict on samples with NA locations
+            - With na_action='exclude': Only uses samples with known locations
+            - With na_action='fail': Raises error if any NA samples found
         """
         # Store samples
         self.samples = samples
+        
+        # Use instance default if na_action not specified
+        if na_action is None:
+            na_action = self.na_action
+            
+        # Get sample status
+        status = self.get_sample_status(samples)
+        
+        # Report status
+        print(f"Bootstrap analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
+        if status['n_na'] > 0:
+            print(f"NA handling mode: {na_action}")
+        
+        # Apply NA action
+        if na_action == 'fail' and status['n_na'] > 0:
+            raise ValueError(
+                f"Found {status['n_na']} samples without coordinates. "
+                f"Set na_action='separate' or 'exclude' to proceed."
+            )
 
         # Set bootstrap flag in config
         self.config["bootstrap"] = True
         self.config["nboots"] = n_bootstraps
 
-        # Initial training to set up model and data
-        self.train(genotypes=genotypes, samples=samples)
+        # Initial training to set up model and data - pass na_action
+        self.train(genotypes=genotypes, samples=samples, na_action=na_action)
 
         # Store original locations
         original_trainlocs = self.trainlocs
