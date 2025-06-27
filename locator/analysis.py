@@ -802,65 +802,54 @@ class AnalysisMixin:
         samples,
         return_df=True,
         save_full_pred_matrix=True,
+        na_action=None,
     ):
         """
         Perform leave-one-out cross-validation: for each sample with a known location,
         train without it and predict its location.
+
+        This is a convenience wrapper around run_k_fold_holdouts with k equal to the
+        number of samples with known locations.
 
         Args:
             genotypes: Array of genotype data
             samples: Sample IDs corresponding to genotypes
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+                If None, uses self.na_action
 
         Returns:
             pandas.DataFrame or None: DataFrame with predictions for each left-out sample
         """
-        self.samples = samples
-
-        # Get sample data and locations
-        if hasattr(self, "_sample_data_df"):
-            sample_data, locs = self.sort_samples(samples)
-        else:
-            sample_data_path = self.config.get("sample_data")
-            if not sample_data_path:
-                raise ValueError("sample_data file path must be provided in config")
-            sample_data, locs = self.sort_samples(samples, sample_data_path)
-
-        known_idx = np.argwhere(~np.isnan(locs[:, 0]))
-        known_idx = np.array([x[0] for x in known_idx])
-
-        pred_rows = []
-
-        print(f"Running leave-one-out cross-validation for {len(known_idx)} samples")
-
-        for idx in tqdm(known_idx):
-            self.model = None
-            # Train with all except idx
-            holdout_indices = [idx]
-            self.train_holdout(
-                genotypes=genotypes,
-                samples=samples,
-                holdout_indices=holdout_indices,
-            )
-            preds = self.predict_holdout(
-                verbose=False,
-                return_df=True,
-                save_preds_to_disk=False,
-            )
-            # preds should have one row: the held-out sample
-            pred_rows.append(preds.iloc[0])
-
-            keras.backend.clear_session()
-
-        all_predictions = pd.DataFrame(pred_rows)
-        if save_full_pred_matrix:
-            all_predictions.to_csv(
+        # Get sample status to determine k
+        status = self.get_sample_status(samples)
+        n_known = status['n_known']
+        
+        if n_known == 0:
+            raise ValueError("No samples with known coordinates for leave-one-out CV")
+        
+        print(f"Running leave-one-out cross-validation for {n_known} samples")
+        
+        # Run k-fold with k equal to number of known samples
+        # This will create folds with exactly 1 sample each
+        result = self.run_k_fold_holdouts(
+            genotypes=genotypes,
+            samples=samples,
+            k=n_known,
+            return_df=return_df,
+            save_full_pred_matrix=False,  # We'll save with our own name
+            verbose=False,  # We already printed our message
+            na_action=na_action
+        )
+        
+        # Save with leave-one-out specific filename if requested
+        if result is not None and save_full_pred_matrix:
+            result.to_csv(
                 f"{self.config['out']}_leave_one_out_predlocs.csv", index=False
             )
-        if return_df:
-            return all_predictions
-        return None
+        
+        return result
 
     def run_k_fold_holdouts(
         self,
