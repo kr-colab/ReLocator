@@ -148,6 +148,7 @@ class AnalysisMixin:
         prop=0.05,
         return_df=False,
         save_full_pred_matrix=True,
+        na_action=None,
     ):
         """Run jacknife analysis by dropping SNPs.
 
@@ -160,14 +161,41 @@ class AnalysisMixin:
                 Defaults to False.
             save_full_pred_matrix (bool, optional): Whether to save the full prediction matrix.
                 Defaults to True.
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+                If None, uses self.na_action
 
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame containing
                 all predictions, with columns named 'x_0', 'y_0', 'x_1', 'y_1', etc.
                 for each jacknife replicate. Row index contains sample IDs.
+                
+        Notes:
+            - With na_action='separate': Trains on samples with known locations,
+              can predict on samples with NA locations
+            - With na_action='exclude': Only uses samples with known locations
+            - With na_action='fail': Raises error if any NA samples found
         """
         # Store samples
         self.samples = samples
+        
+        # Use instance default if na_action not specified
+        if na_action is None:
+            na_action = self.na_action
+            
+        # Get sample status
+        status = self.get_sample_status(samples)
+        
+        # Report status
+        print(f"Jacknife analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
+        if status['n_na'] > 0:
+            print(f"NA handling mode: {na_action}")
+        
+        # Apply NA action
+        if na_action == 'fail' and status['n_na'] > 0:
+            raise ValueError(
+                f"Found {status['n_na']} samples without coordinates. "
+                f"Set na_action='separate' or 'exclude' to proceed."
+            )
 
         # Set jacknife flag in config
         self.config["jacknife"] = True
@@ -191,7 +219,7 @@ class AnalysisMixin:
         preds = None
 
         # Initial training to set up model (but don't output predictions)
-        self.train(genotypes=genotypes, samples=samples)
+        self.train(genotypes=genotypes, samples=samples, na_action=na_action)
 
         print("starting jacknife resampling")
         af = []
@@ -382,6 +410,7 @@ class AnalysisMixin:
         holdout_indices=None,
         return_df=False,
         save_full_pred_matrix=True,
+        na_action=None,
     ):
         """Run multiple holdout replicates for cross-validation.
 
@@ -393,12 +422,41 @@ class AnalysisMixin:
             holdout_indices: Optional list of lists, each containing indices to hold out
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+                If None, uses self.na_action
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each holdout replicate, otherwise None
+                
+        Notes:
+            - With na_action='separate': Currently behaves like 'exclude' (holdouts 
+              must have known locations). Future versions may support predicting NA samples.
+            - With na_action='exclude': Only uses samples with known locations (current behavior)
+            - With na_action='fail': Raises error if any NA samples found
         """
         # Store samples
         self.samples = samples
+        
+        # Use instance default if na_action not specified
+        if na_action is None:
+            na_action = self.na_action
+            
+        # Get sample status
+        status = self.get_sample_status(samples)
+        
+        # Report status
+        print(f"Holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
+        if status['n_na'] > 0:
+            print(f"NA handling mode: {na_action}")
+            if na_action == 'separate':
+                print("Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'")
+        
+        # Apply NA action
+        if na_action == 'fail' and status['n_na'] > 0:
+            raise ValueError(
+                f"Found {status['n_na']} samples without coordinates. "
+                f"Set na_action='separate' or 'exclude' to proceed."
+            )
 
         # Create lists to store predictions
         pred_dfs = []
@@ -482,6 +540,7 @@ class AnalysisMixin:
         holdout_indices=None,
         return_df=False,
         save_full_pred_matrix=True,
+        na_action=None,
     ):
         """Run jacknife analysis on holdout samples.
 
@@ -494,13 +553,42 @@ class AnalysisMixin:
             holdout_indices: Optional specific indices to hold out
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+                If None, uses self.na_action
             
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each jacknife replicate, otherwise None
+                
+        Notes:
+            - With na_action='separate': Currently behaves like 'exclude' (holdouts 
+              must have known locations). Future versions may support predicting NA samples.
+            - With na_action='exclude': Only uses samples with known locations (current behavior)
+            - With na_action='fail': Raises error if any NA samples found
         """
         # Store samples
         self.samples = samples
+        
+        # Use instance default if na_action not specified
+        if na_action is None:
+            na_action = self.na_action
+            
+        # Get sample status
+        status = self.get_sample_status(samples)
+        
+        # Report status
+        print(f"Jacknife holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
+        if status['n_na'] > 0:
+            print(f"NA handling mode: {na_action}")
+            if na_action == 'separate':
+                print("Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'")
+        
+        # Apply NA action
+        if na_action == 'fail' and status['n_na'] > 0:
+            raise ValueError(
+                f"Found {status['n_na']} samples without coordinates. "
+                f"Set na_action='separate' or 'exclude' to proceed."
+            )
 
         # Set jacknife flag
         self.config["jacknife"] = True
@@ -584,6 +672,7 @@ class AnalysisMixin:
         holdout_indices=None,
         return_df=False,
         save_full_pred_matrix=True,
+        na_action=None,
     ):
         """Run windowed analysis on holdout samples.
 
@@ -597,13 +686,42 @@ class AnalysisMixin:
             holdout_indices: Optional specific indices to hold out
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+                If None, uses self.na_action
             
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each window, otherwise None
+                
+        Notes:
+            - With na_action='separate': Currently behaves like 'exclude' (holdouts 
+              must have known locations). Future versions may support predicting NA samples.
+            - With na_action='exclude': Only uses samples with known locations (current behavior)
+            - With na_action='fail': Raises error if any NA samples found
         """
         # Store samples
         self.samples = samples
+        
+        # Use instance default if na_action not specified
+        if na_action is None:
+            na_action = self.na_action
+            
+        # Get sample status
+        status = self.get_sample_status(samples)
+        
+        # Report status
+        print(f"Windows holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
+        if status['n_na'] > 0:
+            print(f"NA handling mode: {na_action}")
+            if na_action == 'separate':
+                print("Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'")
+        
+        # Apply NA action
+        if na_action == 'fail' and status['n_na'] > 0:
+            raise ValueError(
+                f"Found {status['n_na']} samples without coordinates. "
+                f"Set na_action='separate' or 'exclude' to proceed."
+            )
 
         # Get positions
         if not hasattr(self, "positions"):
@@ -752,6 +870,7 @@ class AnalysisMixin:
         return_df=False,
         save_full_pred_matrix=True,
         verbose=True,
+        na_action=None,
     ):
         """
         Run true k-fold cross-validation with nonoverlapping holdout sets.
@@ -763,10 +882,41 @@ class AnalysisMixin:
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
             verbose: Whether to show training progress and intermediate output
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+                If None, uses self.na_action
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with one prediction per held-out sample (columns: sampleID, x_pred, y_pred)
+            
+        Notes:
+            - With na_action='separate': Currently behaves like 'exclude' (k-fold requires 
+              known locations). Future versions may support predicting NA samples.
+            - With na_action='exclude': Only uses samples with known locations (current behavior)
+            - With na_action='fail': Raises error if any NA samples found
         """
         self.samples = samples
+        
+        # Use instance default if na_action not specified
+        if na_action is None:
+            na_action = self.na_action
+            
+        # Get sample status
+        status = self.get_sample_status(samples)
+        
+        # Report status
+        if verbose:
+            print(f"K-fold CV: {status['n_known']} samples with coordinates, {status['n_na']} without")
+            if status['n_na'] > 0:
+                print(f"NA handling mode: {na_action}")
+                if na_action == 'separate':
+                    print("Note: K-fold CV requires known locations; 'separate' behaves like 'exclude'")
+        
+        # Apply NA action
+        if na_action == 'fail' and status['n_na'] > 0:
+            raise ValueError(
+                f"Found {status['n_na']} samples without coordinates. "
+                f"Set na_action='separate' or 'exclude' to proceed."
+            )
+        
         pred_rows = []
 
         # Get sample data and locations

@@ -5,6 +5,9 @@ import numpy as np
 import pandas as pd
 import allel
 from locator import Locator
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend to suppress plots
+import matplotlib.pyplot as plt
 
 
 class TestNAHandling:
@@ -426,4 +429,241 @@ class TestPhase2NAHandling:
         captured = capsys.readouterr()
         assert "Window analysis: 7 samples with coordinates, 3 without" in captured.out
         assert "NA handling mode: separate" in captured.out
+        assert result is not None
+
+
+class TestPhase3NAHandling:
+    """Test suite for Phase 3 - NA handling in holdout methods."""
+    
+    def setup_method(self):
+        """Close any existing plots before each test."""
+        plt.close('all')
+    
+    def teardown_method(self):
+        """Close any plots created during test."""
+        plt.close('all')
+    
+    def create_test_data(self, n_samples=10, n_known=7):
+        """Create test genotype and coordinate data."""
+        # Create sample IDs
+        samples = np.array([f'sample_{i}' for i in range(n_samples)])
+        
+        # Create genotype data that is guaranteed to be biallelic
+        # 100 SNPs, n_samples, diploid
+        genotype_array = np.zeros((100, n_samples, 2), dtype=np.int8)
+        
+        # Fill with biallelic genotypes (only 0s and 1s)
+        for i in range(100):
+            for j in range(n_samples):
+                # Generate allele counts between 0 and 2
+                allele_count = np.random.randint(0, 3)
+                if allele_count == 0:
+                    genotype_array[i, j, :] = [0, 0]
+                elif allele_count == 1:
+                    genotype_array[i, j, :] = [0, 1]
+                else:  # allele_count == 2
+                    genotype_array[i, j, :] = [1, 1]
+        
+        # Convert to allel.GenotypeArray
+        genotypes = allel.GenotypeArray(genotype_array)
+        
+        # Create coordinate data with some NAs
+        x_coords = [float(i) for i in range(n_known)] + [np.nan] * (n_samples - n_known)
+        y_coords = [float(i + 10) for i in range(n_known)] + [np.nan] * (n_samples - n_known)
+        
+        sample_df = pd.DataFrame({
+            'sampleID': samples,
+            'x': x_coords,
+            'y': y_coords
+        })
+        
+        return genotypes, samples, sample_df
+    
+    def test_run_holdouts_with_na_action(self, capsys):
+        """Test run_holdouts() with NA handling."""
+        genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
+        
+        locator = Locator({
+            'sample_data': sample_df,
+            'na_action': 'separate',
+            'keras_verbose': 0,
+            'max_epochs': 5,
+            'out': 'test_holdouts'
+        })
+        
+        # Run with just 2 replicates for speed
+        result = locator.run_holdouts(
+            genotypes=genotypes, 
+            samples=samples, 
+            k=2,  # Hold out 2 samples
+            n_reps=2,
+            return_df=True,
+            save_full_pred_matrix=False  # Don't save to disk
+        )
+        
+        captured = capsys.readouterr()
+        assert "Holdout analysis: 7 samples with coordinates, 3 without" in captured.out
+        assert "NA handling mode: separate" in captured.out
+        assert "Note: Holdout analysis requires known locations" in captured.out
+        assert result is not None
+        assert isinstance(result, pd.DataFrame)
+    
+    def test_run_holdouts_fail_mode(self):
+        """Test run_holdouts() with fail mode and NA samples."""
+        genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
+        
+        locator = Locator({
+            'sample_data': sample_df,
+            'na_action': 'fail',
+            'out': 'test_holdouts_fail'
+        })
+        
+        with pytest.raises(ValueError, match="Found 3 samples without coordinates"):
+            locator.run_holdouts(genotypes=genotypes, samples=samples, k=2, n_reps=1)
+    
+    def test_run_k_fold_holdouts_with_na_action(self, capsys):
+        """Test run_k_fold_holdouts() with NA handling."""
+        genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
+        
+        locator = Locator({
+            'sample_data': sample_df,
+            'na_action': 'separate',
+            'keras_verbose': 0,
+            'max_epochs': 5,
+            'out': 'test_kfold'
+        })
+        
+        # Run with just 2 folds for speed
+        result = locator.run_k_fold_holdouts(
+            genotypes=genotypes, 
+            samples=samples, 
+            k=2,
+            return_df=True,
+            verbose=True
+        )
+        
+        captured = capsys.readouterr()
+        assert "K-fold CV: 7 samples with coordinates, 3 without" in captured.out
+        assert "NA handling mode: separate" in captured.out
+        assert "Note: K-fold CV requires known locations" in captured.out
+        assert result is not None
+        assert isinstance(result, pd.DataFrame)
+    
+    def test_run_jacknife_with_na_action(self, capsys):
+        """Test run_jacknife() with NA handling."""
+        genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
+        
+        locator = Locator({
+            'sample_data': sample_df,
+            'na_action': 'separate',  # Changed from 'exclude' to test with samples to predict
+            'keras_verbose': 0,
+            'max_epochs': 5,
+            'nboots': 2,  # Just 2 boots for speed
+            'out': 'test_jacknife'
+        })
+        
+        result = locator.run_jacknife(
+            genotypes=genotypes, 
+            samples=samples, 
+            prop=0.1,
+            return_df=True,
+            save_full_pred_matrix=False  # Don't save to disk
+        )
+        
+        captured = capsys.readouterr()
+        assert "Jacknife analysis: 7 samples with coordinates, 3 without" in captured.out
+        assert "NA handling mode: separate" in captured.out
+        assert result is not None
+        assert isinstance(result, pd.DataFrame)
+    
+    def test_run_jacknife_holdouts_with_na_action(self, capsys):
+        """Test run_jacknife_holdouts() with NA handling."""
+        genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
+        
+        locator = Locator({
+            'sample_data': sample_df,
+            'na_action': 'separate',
+            'keras_verbose': 0,
+            'max_epochs': 5,
+            'out': 'test_jacknife_holdouts'
+        })
+        
+        result = locator.run_jacknife_holdouts(
+            genotypes=genotypes, 
+            samples=samples,
+            k=2,
+            prop=0.1,
+            n_boots=2,
+            return_df=True
+        )
+        
+        captured = capsys.readouterr()
+        assert "Jacknife holdout analysis: 7 samples with coordinates, 3 without" in captured.out
+        assert result is not None
+        assert isinstance(result, pd.DataFrame)
+    
+    def test_run_windows_holdouts_with_na_action(self, capsys):
+        """Test run_windows_holdouts() with NA handling."""
+        genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
+        
+        # Create positions for the genotype data
+        positions = np.arange(100) * 10000  # 100 SNPs spaced 10kb apart
+        
+        # We need to set up zarr or genotype DataFrame with positions
+        # For simplicity, create a genotype DataFrame
+        # Extract allele counts for first allele
+        allele_counts = genotypes.to_allele_counts()[:, :, 1]  # Get alternate allele counts
+        geno_df = pd.DataFrame(
+            allele_counts.T,
+            index=samples,
+            columns=positions
+        )
+        
+        locator = Locator({
+            'sample_data': sample_df,
+            'genotype_data': geno_df,
+            'na_action': 'separate',
+            'keras_verbose': 0,
+            'max_epochs': 5,
+            'out': 'test_windows_holdouts'
+        })
+        
+        result = locator.run_windows_holdouts(
+            genotypes=genotypes, 
+            samples=samples,
+            k=2,
+            window_size=3e5,  # 300kb windows
+            return_df=True
+        )
+        
+        captured = capsys.readouterr()
+        assert "Windows holdout analysis: 7 samples with coordinates, 3 without" in captured.out
+        assert "Note: Holdout analysis requires known locations" in captured.out
+        assert result is not None
+    
+    def test_holdout_method_override(self, capsys):
+        """Test na_action override at method level for holdout methods."""
+        genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
+        
+        # Initialize with 'fail' but override with 'exclude'
+        locator = Locator({
+            'sample_data': sample_df,
+            'na_action': 'fail',
+            'keras_verbose': 0,
+            'max_epochs': 5,
+            'out': 'test_override'
+        })
+        
+        # Should work because we override with 'exclude'
+        result = locator.run_holdouts(
+            genotypes=genotypes, 
+            samples=samples, 
+            k=2,
+            n_reps=1,
+            na_action='exclude',
+            return_df=True
+        )
+        
+        captured = capsys.readouterr()
+        assert "NA handling mode: exclude" in captured.out
         assert result is not None
