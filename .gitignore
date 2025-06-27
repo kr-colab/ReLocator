@@ -59,7 +59,7 @@ data/
 *_history.txt
 *_params.json
 *_fitplot.pdf
-
+CLAUDE.*
 # OS specific
 .DS_Store
 Thumbs.db 

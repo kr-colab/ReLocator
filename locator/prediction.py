@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+import warnings
 
 
 class PredictionMixin:
@@ -68,7 +69,7 @@ class PredictionMixin:
 
         return predictions
 
-    def sort_samples(self, samples=None, sample_data_file=None):
+    def sort_samples(self, samples=None, sample_data_file=None, reorder=True):
         """Sort samples and match with location data.
 
         This method matches samples with their location data and ensures consistent ordering
@@ -79,6 +80,8 @@ class PredictionMixin:
             samples (numpy.ndarray): Array of sample IDs from the genotype data
             sample_data_file (str, optional): Override path to tab-delimited file with
                 columns 'sampleID', 'x', 'y'. If not provided, uses stored sample data.
+            reorder (bool): If True, automatically reorder metadata to match genotype order.
+                If False, raise error on order mismatch (default: True)
 
         Returns:
             tuple: A tuple containing:
@@ -87,7 +90,7 @@ class PredictionMixin:
 
         Raises:
             ValueError: If samples not provided or if no sample data available
-            ValueError: If sample IDs don't match between genotype and sample data
+            ValueError: If sample IDs don't match between genotype and sample data (when reorder=False)
         """
         if samples is None:
             raise ValueError("samples must be provided")
@@ -111,14 +114,58 @@ class PredictionMixin:
 
         # Convert the sampleID column to match the type of samples
         sample_data["sampleID"] = sample_data["sampleID"].astype(str)
+        samples_str = [str(s) for s in samples]
 
         # Verify sample order matches using the correct column name
         if not all(
-            sample_data["sampleID"].iloc[x] == samples[x] for x in range(len(samples))
+            sample_data["sampleID"].iloc[x] == samples_str[x] for x in range(len(samples))
         ):
-            raise ValueError(
-                "Sample ordering failed! Check that sample IDs match the genotype data."
-            )
+            if reorder:
+                # Create a mapping DataFrame with genotype order
+                sample_order_df = pd.DataFrame({
+                    'sampleID': samples_str,
+                    'geno_order': range(len(samples_str))
+                })
+                
+                # Merge to reorder metadata to match genotype order
+                reordered_data = sample_order_df.merge(
+                    sample_data, 
+                    on='sampleID', 
+                    how='left'
+                )
+                
+                # Check for samples in genotypes but not in metadata
+                missing_in_meta = reordered_data[['x', 'y']].isna().any(axis=1).sum()
+                if missing_in_meta > 0:
+                    missing_ids = reordered_data[reordered_data['x'].isna()]['sampleID'].tolist()
+                    warnings.warn(
+                        f"{missing_in_meta} samples in genotypes have no metadata. "
+                        f"First 10 missing: {missing_ids[:10]}"
+                    )
+                
+                # Check for samples in metadata but not in genotypes
+                samples_set = set(samples_str)
+                extra_in_meta = sample_data[~sample_data['sampleID'].isin(samples_set)]
+                if len(extra_in_meta) > 0:
+                    extra_ids = extra_in_meta['sampleID'].tolist()
+                    warnings.warn(
+                        f"{len(extra_in_meta)} samples in metadata are not in genotypes. "
+                        f"First 10 extra: {extra_ids[:10]}"
+                    )
+                
+                # Sort by genotype order and drop the order column
+                sample_data = reordered_data.sort_values('geno_order').drop('geno_order', axis=1)
+                
+                # Print summary of reordering
+                print(f"Reordered metadata to match genotype sample order.")
+                print(f"Total samples in genotypes: {len(samples)}")
+                print(f"Samples with metadata: {len(samples) - missing_in_meta}")
+                
+            else:
+                raise ValueError(
+                    "Sample ordering failed! Check that sample IDs match the genotype data. "
+                    "Set reorder=True to automatically reorder metadata to match genotype order."
+                )
 
         # Extract location data
         locs = np.array(sample_data[["x", "y"]])
