@@ -350,7 +350,8 @@ class TrainingMixin:
                 optimal_batch = GPUOptimizer.get_optimal_batch_size(
                     self.model, 
                     input_shape=(self.traingen.shape[1],),
-                    target_memory_usage=0.85
+                    target_memory_usage=0.85,
+                    dataset_size=self.traingen.shape[0]
                 )
                 print(f"Using optimized batch size: {optimal_batch}")
                 batch_size = optimal_batch
@@ -596,7 +597,8 @@ class TrainingMixin:
                 optimal_batch = GPUOptimizer.get_optimal_batch_size(
                     self.model, 
                     input_shape=(self.traingen.shape[1],),
-                    target_memory_usage=0.85
+                    target_memory_usage=0.85,
+                    dataset_size=self.traingen.shape[0]
                 )
                 print(f"Using optimized batch size: {optimal_batch}")
                 batch_size = optimal_batch

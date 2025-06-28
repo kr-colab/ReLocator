@@ -49,7 +49,8 @@ class GPUOptimizer:
                              input_shape: Tuple[int, ...],
                              target_memory_usage: float = 0.9,
                              min_batch_size: int = 32,
-                             max_batch_size: int = 2048) -> int:
+                             max_batch_size: int = 2048,
+                             dataset_size: Optional[int] = None) -> int:
         """Dynamically determine optimal batch size for GPU memory.
         
         Args:
@@ -58,6 +59,7 @@ class GPUOptimizer:
             target_memory_usage: Target GPU memory usage (0.0-1.0)
             min_batch_size: Minimum batch size to test
             max_batch_size: Maximum batch size to test
+            dataset_size: Size of the dataset (if provided, limits max batch size)
             
         Returns:
             int: Optimal batch size for current GPU
@@ -66,13 +68,29 @@ class GPUOptimizer:
         if not gpus:
             return min_batch_size
             
+        # Limit max batch size based on dataset size
+        if dataset_size is not None:
+            # Don't use batch size larger than 10% of dataset
+            max_reasonable_batch = max(min_batch_size, dataset_size // 10)
+            max_batch_size = min(max_batch_size, max_reasonable_batch)
+            if max_batch_size < 2048:
+                print(f"Limiting max batch size to {max_batch_size} based on dataset size {dataset_size}")
+            
         # Get available GPU memory
         try:
             gpu_memory = tf.config.experimental.get_memory_info('GPU:0')
             available_memory = gpu_memory['current'] * target_memory_usage
         except:
-            # Fallback: estimate based on typical GPU sizes
-            available_memory = 8 * 1024 * 1024 * 1024 * target_memory_usage  # 8GB default
+            # Fallback: use conservative estimate
+            # Most consumer GPUs have 8-24GB, datacenter GPUs 40-80GB
+            gpu_name = gpus[0].name.lower()
+            if 'a100' in gpu_name or 'a6000' in gpu_name:
+                available_memory = 40 * 1024 * 1024 * 1024 * target_memory_usage  # 40GB for A100/A6000
+            elif 'v100' in gpu_name or '3090' in gpu_name or '4090' in gpu_name:
+                available_memory = 24 * 1024 * 1024 * 1024 * target_memory_usage  # 24GB
+            else:
+                available_memory = 8 * 1024 * 1024 * 1024 * target_memory_usage  # 8GB default
+            print(f"Using estimated GPU memory for {gpus[0].name}")
         
         # Binary search for optimal batch size
         left, right = min_batch_size, max_batch_size
@@ -113,6 +131,12 @@ class GPUOptimizer:
         
         # Round to nearest power of 2 for efficiency
         optimal_batch_size = 2 ** int(np.log2(optimal_batch_size))
+        
+        # Final check against dataset size
+        if dataset_size is not None and optimal_batch_size > dataset_size // 10:
+            # For small datasets, use a more conservative batch size
+            optimal_batch_size = min(optimal_batch_size, max(32, dataset_size // 16))
+            print(f"Adjusted batch size for small dataset: {optimal_batch_size}")
         
         print(f"Optimal batch size determined: {optimal_batch_size}")
         return optimal_batch_size

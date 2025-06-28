@@ -237,7 +237,7 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             # NA handling
             "na_action": "separate",  # How to handle samples without coordinates
             # GPU optimization parameters
-            "use_mixed_precision": False,  # Enable mixed precision training
+            "use_mixed_precision": True,  # Enable mixed precision training
             "gpu_batch_size": "auto",  # 'auto' or specific number
             "use_efficient_pipeline": True,  # Use tf.data pipeline
             "gradient_accumulation_steps": 1,  # For simulating larger batches

@@ -195,6 +195,65 @@ class TestBatchSizeOptimization:
         # Should return a power of 2
         assert optimal_size & (optimal_size - 1) == 0  # Check if power of 2
         assert 16 <= optimal_size <= 512
+    
+    def test_batch_size_with_small_dataset(self):
+        """Test batch size optimization with small dataset."""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(10, input_shape=(100,)),
+            tf.keras.layers.Dense(2)
+        ])
+        
+        # Test with very small dataset (100 samples)
+        batch_size = GPUOptimizer.get_optimal_batch_size(
+            model,
+            input_shape=(100,),
+            min_batch_size=32,
+            max_batch_size=2048,
+            dataset_size=100
+        )
+        
+        # Should be limited by dataset size (10% of 100 = 10, but min is 32)
+        assert batch_size == 32
+        
+    def test_batch_size_with_medium_dataset(self):
+        """Test batch size optimization with medium dataset."""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(10, input_shape=(100,)),
+            tf.keras.layers.Dense(2)
+        ])
+        
+        # Test with medium dataset (1000 samples)
+        batch_size = GPUOptimizer.get_optimal_batch_size(
+            model,
+            input_shape=(100,),
+            min_batch_size=32,
+            max_batch_size=2048,
+            dataset_size=1000
+        )
+        
+        # Should be limited to reasonable size (10% of 1000 = 100)
+        assert batch_size <= 128  # Next power of 2 after 100
+        
+    def test_batch_size_no_gpu(self):
+        """Test batch size optimization without GPU."""
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(10, input_shape=(100,)),
+            tf.keras.layers.Dense(2)
+        ])
+        
+        # Mock no GPU available
+        with patch('tensorflow.config.list_physical_devices') as mock_devices:
+            mock_devices.return_value = []
+            
+            batch_size = GPUOptimizer.get_optimal_batch_size(
+                model,
+                input_shape=(100,),
+                min_batch_size=32,
+                max_batch_size=2048
+            )
+            
+            # Should return minimum batch size when no GPU
+            assert batch_size == 32
 
 
 if __name__ == "__main__":
