@@ -8,6 +8,7 @@ import tensorflow as tf
 
 from .models import create_network, loss_with_range_penalty, rasterize_species_range
 from .utils import normalize_locs, filter_snps, weight_samples
+from .gpu_optimizer import GPUOptimizer
 
 
 class TrainingMixin:
@@ -341,17 +342,76 @@ class TrainingMixin:
 
         callbacks = self._create_callbacks(boot=boot)
 
-        self.history = self.model.fit(
-            self.traingen,
-            trainlocs,
-            epochs=self.config.get("max_epochs", 5000),
-            batch_size=self.config.get("batch_size", 32),
-            shuffle=True,
-            verbose=self.config.get("keras_verbose", 1),
-            validation_data=(self.testgen, testlocs),
-            callbacks=callbacks,
-            sample_weight = None if self.sample_weights is None else self.sample_weights['sample_weights'],
-        )
+        # Determine batch size
+        batch_size = self.config.get("batch_size", 32)
+        if self.config.get("gpu_batch_size") == "auto" and not self.config.get("disable_gpu", False):
+            # Try to determine optimal batch size
+            try:
+                optimal_batch = GPUOptimizer.get_optimal_batch_size(
+                    self.model, 
+                    input_shape=(self.traingen.shape[1],),
+                    target_memory_usage=0.85
+                )
+                print(f"Using optimized batch size: {optimal_batch}")
+                batch_size = optimal_batch
+            except Exception as e:
+                print(f"Failed to optimize batch size: {e}. Using default: {batch_size}")
+        elif isinstance(self.config.get("gpu_batch_size"), int):
+            batch_size = self.config["gpu_batch_size"]
+
+        # Use efficient data pipeline if enabled
+        if self.config.get("use_efficient_pipeline", True) and not self.config.get("disable_gpu", False):
+            # Create efficient training dataset
+            train_dataset = GPUOptimizer.create_efficient_dataset(
+                self.traingen, 
+                trainlocs,
+                batch_size=batch_size,
+                training=True,
+                cache=True
+            )
+            
+            # Create validation dataset
+            val_dataset = GPUOptimizer.create_efficient_dataset(
+                self.testgen,
+                testlocs,
+                batch_size=batch_size,
+                training=False,
+                cache=True
+            )
+            
+            # Apply sample weights if available
+            if self.sample_weights is not None:
+                sample_weights_array = self.sample_weights['sample_weights']
+                # Create a dataset with weights
+                weights_dataset = tf.data.Dataset.from_tensor_slices(sample_weights_array)
+                # Zip with the training dataset
+                train_dataset = tf.data.Dataset.zip((train_dataset, weights_dataset))
+                # Restructure to (features, labels, weights) format
+                train_dataset = train_dataset.map(
+                    lambda data_tuple, weight: (data_tuple[0], data_tuple[1], weight),
+                    num_parallel_calls=tf.data.AUTOTUNE
+                )
+            
+            self.history = self.model.fit(
+                train_dataset,
+                epochs=self.config.get("max_epochs", 5000),
+                verbose=self.config.get("keras_verbose", 1),
+                validation_data=val_dataset,
+                callbacks=callbacks,
+            )
+        else:
+            # Use standard fit (legacy mode)
+            self.history = self.model.fit(
+                self.traingen,
+                trainlocs,
+                epochs=self.config.get("max_epochs", 5000),
+                batch_size=batch_size,
+                shuffle=True,
+                verbose=self.config.get("keras_verbose", 1),
+                validation_data=(self.testgen, testlocs),
+                callbacks=callbacks,
+                sample_weight = None if self.sample_weights is None else self.sample_weights['sample_weights'],
+            )
 
         # Save training history
         hist_df = pd.DataFrame(self.history.history)
@@ -528,33 +588,104 @@ class TrainingMixin:
 
         callbacks = self._create_callbacks()
 
-        def flip_genotypes(genotypes, locations, mask_rate=0.05):
-            """Randomly flip genotype values with probability mask_rate"""
-            mask = tf.random.uniform(tf.shape(genotypes)) < mask_rate
-            return tf.where(mask, 1 - genotypes, genotypes), locations
+        # Determine batch size
+        batch_size = self.config.get("batch_size", 32)
+        if self.config.get("gpu_batch_size") == "auto" and not self.config.get("disable_gpu", False):
+            # Try to determine optimal batch size
+            try:
+                optimal_batch = GPUOptimizer.get_optimal_batch_size(
+                    self.model, 
+                    input_shape=(self.traingen.shape[1],),
+                    target_memory_usage=0.85
+                )
+                print(f"Using optimized batch size: {optimal_batch}")
+                batch_size = optimal_batch
+            except Exception as e:
+                print(f"Failed to optimize batch size: {e}. Using default: {batch_size}")
+        elif isinstance(self.config.get("gpu_batch_size"), int):
+            batch_size = self.config["gpu_batch_size"]
 
-        train_dataset = tf.data.Dataset.from_tensor_slices(
-            (self.traingen, self.trainlocs, None if self.sample_weights is None else self.sample_weights['sample_weights'])
-        )
-        train_dataset = train_dataset.cache()
-        train_dataset = train_dataset.shuffle(buffer_size=1000)
-
-        # Apply augmentation only if enabled in config
-        if self.config.get("augmentation", {}).get("enabled", False):
-            flip_rate = self.config.get("augmentation", {}).get("flip_rate", 0.05)
-            train_dataset = train_dataset.map(
-                lambda x, y, w: (*flip_genotypes(x, y, mask_rate=flip_rate), w) if w is not None else flip_genotypes(x, y, mask_rate=flip_rate),
-                num_parallel_calls=tf.data.AUTOTUNE,
+        # Use GPU optimizer for efficient datasets
+        if self.config.get("use_efficient_pipeline", True) and not self.config.get("disable_gpu", False):
+            # Prepare sample weights if available
+            sample_weights = None if self.sample_weights is None else self.sample_weights['sample_weights']
+            
+            # Create training dataset with GPU optimization
+            train_dataset = GPUOptimizer.create_efficient_dataset(
+                self.traingen,
+                self.trainlocs,
+                batch_size=batch_size,
+                training=True,
+                cache=True
             )
+            
+            if sample_weights is not None:
+                # Add weights to the dataset
+                weights_dataset = tf.data.Dataset.from_tensor_slices(sample_weights)
+                weights_dataset = weights_dataset.batch(batch_size, drop_remainder=True)
+                train_dataset = tf.data.Dataset.zip((train_dataset, weights_dataset))
+                train_dataset = train_dataset.map(
+                    lambda data_tuple, weights: (data_tuple[0], data_tuple[1], weights),
+                    num_parallel_calls=tf.data.AUTOTUNE
+                )
+            
+            # Apply augmentation if enabled
+            if self.config.get("augmentation", {}).get("enabled", False):
+                flip_rate = self.config.get("augmentation", {}).get("flip_rate", 0.05)
+                
+                def flip_genotypes(genotypes, locations, mask_rate=0.05):
+                    """Randomly flip genotype values with probability mask_rate"""
+                    mask = tf.random.uniform(tf.shape(genotypes)) < mask_rate
+                    return tf.where(mask, 1 - genotypes, genotypes), locations
+                
+                if sample_weights is not None:
+                    train_dataset = train_dataset.map(
+                        lambda x, y, w: (*flip_genotypes(x, y, mask_rate=flip_rate), w),
+                        num_parallel_calls=tf.data.AUTOTUNE
+                    )
+                else:
+                    train_dataset = train_dataset.map(
+                        lambda x, y: flip_genotypes(x, y, mask_rate=flip_rate),
+                        num_parallel_calls=tf.data.AUTOTUNE
+                    )
+            
+            # Create validation dataset
+            validation_dataset = GPUOptimizer.create_efficient_dataset(
+                self.testgen,
+                self.testlocs,
+                batch_size=batch_size,
+                training=False,
+                cache=True
+            )
+        else:
+            # Fallback to original implementation
+            def flip_genotypes(genotypes, locations, mask_rate=0.05):
+                """Randomly flip genotype values with probability mask_rate"""
+                mask = tf.random.uniform(tf.shape(genotypes)) < mask_rate
+                return tf.where(mask, 1 - genotypes, genotypes), locations
 
-        train_dataset = train_dataset.batch(self.config.get("batch_size", 32))
-        train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
+            train_dataset = tf.data.Dataset.from_tensor_slices(
+                (self.traingen, self.trainlocs, None if self.sample_weights is None else self.sample_weights['sample_weights'])
+            )
+            train_dataset = train_dataset.cache()
+            train_dataset = train_dataset.shuffle(buffer_size=1000)
 
-        validation_dataset = tf.data.Dataset.from_tensor_slices(
-            (self.testgen, self.testlocs)
-        )
-        validation_dataset = validation_dataset.batch(self.config.get("batch_size", 32))
-        validation_dataset = validation_dataset.prefetch(tf.data.AUTOTUNE)
+            # Apply augmentation only if enabled in config
+            if self.config.get("augmentation", {}).get("enabled", False):
+                flip_rate = self.config.get("augmentation", {}).get("flip_rate", 0.05)
+                train_dataset = train_dataset.map(
+                    lambda x, y, w: (*flip_genotypes(x, y, mask_rate=flip_rate), w) if w is not None else flip_genotypes(x, y, mask_rate=flip_rate),
+                    num_parallel_calls=tf.data.AUTOTUNE,
+                )
+
+            train_dataset = train_dataset.batch(batch_size)
+            train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
+
+            validation_dataset = tf.data.Dataset.from_tensor_slices(
+                (self.testgen, self.testlocs)
+            )
+            validation_dataset = validation_dataset.batch(batch_size)
+            validation_dataset = validation_dataset.prefetch(tf.data.AUTOTUNE)
 
         self.history = self.model.fit(
             train_dataset,

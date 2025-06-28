@@ -14,6 +14,7 @@ from typing import List, Optional
 
 from .models import create_network
 from .utils import normalize_locs, filter_snps, weight_samples
+from .gpu_optimizer import GPUOptimizer, create_optimized_training_config
 
 # Import all the mixins
 from .loaders import DataLoaderMixin
@@ -235,6 +236,13 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             "out": "locator",
             # NA handling
             "na_action": "separate",  # How to handle samples without coordinates
+            # GPU optimization parameters
+            "use_mixed_precision": False,  # Enable mixed precision training
+            "gpu_batch_size": "auto",  # 'auto' or specific number
+            "use_efficient_pipeline": True,  # Use tf.data pipeline
+            "gradient_accumulation_steps": 1,  # For simulating larger batches
+            "gpu_memory_mode": "growth",  # 'growth', 'preallocate', or 'limit:MB'
+            "enable_xla": False,  # Experimental XLA compilation
         }
 
         # Update with user config
@@ -312,17 +320,34 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
                     print(f"Invalid GPU number: {gpu_number}. Using default GPU.")
                     gpu_number = None
             setup_gpu(gpu_number)
+            
+            # Apply GPU optimizations
+            # 1. Mixed precision training
+            if self.config.get("use_mixed_precision", False):
+                if GPUOptimizer.setup_mixed_precision():
+                    self.config["use_mixed_precision"] = True
+                else:
+                    self.config["use_mixed_precision"] = False
+                    
+            # 2. GPU memory configuration
+            memory_mode = self.config.get("gpu_memory_mode", "growth")
+            if memory_mode.startswith("limit:"):
+                limit_mb = int(memory_mode.split(":")[1])
+                GPUOptimizer.optimize_gpu_memory("limit", limit_mb)
+            else:
+                GPUOptimizer.optimize_gpu_memory(memory_mode)
+                
+            # 3. Enable XLA if requested
+            if self.config.get("enable_xla", False):
+                try:
+                    GPUOptimizer.enable_xla_compilation()
+                except Exception as e:
+                    print(f"XLA compilation failed: {e}")
+                    self.config["enable_xla"] = False
+                    
         else:
             print("GPU usage disabled by configuration.")
-
-        # Set memory growth for better GPU memory management
-        gpus = tf.config.list_physical_devices("GPU")
-        if gpus:
-            try:
-                for gpu in gpus:
-                    tf.config.experimental.set_memory_growth(gpu, True)
-            except RuntimeError as e:
-                print(f"GPU memory growth setting failed: {e}")
+            self.config["use_mixed_precision"] = False
 
     @property
     def sample_data(self) -> pd.DataFrame:
