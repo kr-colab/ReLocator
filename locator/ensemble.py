@@ -7,7 +7,7 @@ import tensorflow as tf
 
 from .core import Locator
 from .models import create_network
-from .utils import filter_snps, normalize_locs
+from .data import filter_snps_legacy as filter_snps, normalize_locs
 
 
 def flip_genotypes(genotypes, locations, mask_rate=0.05):

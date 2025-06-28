@@ -4,6 +4,10 @@ from .core import Locator, EnsembleLocator
 from .plotting import plot_predictions, plot_error_summary, plot_sample_weights
 from .models import create_network, euclidean_distance_loss
 
+# Re-export data utilities for backward compatibility
+from .data.filters import filter_snps_legacy as filter_snps
+from .data.filters import normalize_locs, impute_missing
+
 __version__ = "0.1.0"
 
 # Make the package namespace clean and complete
@@ -18,4 +22,8 @@ __all__ = [
     # Model functions
     "create_network",
     "euclidean_distance_loss",
+    # Data utilities (backward compatibility)
+    "filter_snps",
+    "normalize_locs",
+    "impute_missing",
 ]

@@ -7,7 +7,8 @@ from tensorflow import keras
 import tensorflow as tf
 
 from .models import create_network, loss_with_range_penalty, rasterize_species_range
-from .utils import normalize_locs, filter_snps, weight_samples
+from .utils import weight_samples
+from .data import normalize_locs, filter_snps_legacy as filter_snps, IndexSet
 from .gpu_optimizer import GPUOptimizer
 
 
@@ -24,42 +25,47 @@ class TrainingMixin:
             train_split: Proportion of samples to use for training (default: 0.9)
 
         Returns:
-            tuple: (train_idx, test_idx, train_gen, test_gen, train_locs, test_locs, pred_idx, pred_gen)
-                train_idx: Indices of training samples
-                test_idx: Indices of test samples
+            tuple: (index_set, train_gen, test_gen, train_locs, test_locs, pred_gen)
+                index_set: IndexSet containing train/test/predict indices
                 train_gen: Genotype data for training samples
                 test_gen: Genotype data for test samples
                 train_locs: Location data for training samples
                 test_locs: Location data for test samples
-                pred_idx: Indices of samples with unknown locations
                 pred_gen: Genotype data for samples with unknown locations
         """
-        # Get indices of samples with known locations
-        train = np.argwhere(~np.isnan(locations[:, 0]))
-        train = np.array([x[0] for x in train])
-        # Get indices of samples with unknown locations
-        pred = np.array([x for x in range(len(locations)) if x not in train])
-
-        # Split known locations into train/test
-        test = np.random.choice(
-            train, round((1 - train_split) * len(train)), replace=False
-        )
-        train = np.array([x for x in train if x not in test])
-
-        # Prepare data arrays
-        traingen = np.transpose(genotypes[:, train])
-        testgen = np.transpose(genotypes[:, test])
-        trainlocs = locations[train]
-        testlocs = locations[test]
+        # Create NA mask
+        na_mask = np.isnan(locations[:, 0])
+        n_samples = len(locations)
         
-        # Handle case when there are no samples to predict (e.g., after exclude mode)
-        if len(pred) > 0:
-            predgen = np.transpose(genotypes[:, pred])
+        # Create IndexSet with custom splits for train/test
+        splits = {"train": train_split, "test": 1.0 - train_split}
+        index_set = IndexSet.random_split(
+            n=n_samples,
+            splits=splits,
+            na_mask=na_mask,
+            na_action='separate'  # This will create a 'predict' split for NA samples
+        )
+        
+        # Get indices
+        train_idx = index_set.train
+        test_idx = index_set.test
+        pred_idx = index_set.get_split('predict') if 'predict' in index_set.indices else np.array([], dtype=int)
+        
+        # Prepare data arrays (still need to return these for backward compatibility)
+        traingen = np.transpose(genotypes[:, train_idx])
+        testgen = np.transpose(genotypes[:, test_idx])
+        trainlocs = locations[train_idx]
+        testlocs = locations[test_idx]
+        
+        # Handle case when there are no samples to predict
+        if len(pred_idx) > 0:
+            predgen = np.transpose(genotypes[:, pred_idx])
         else:
             # Create empty array with correct shape
             predgen = np.empty((0, genotypes.shape[0]), dtype=genotypes.dtype)
 
-        return train, test, traingen, testgen, trainlocs, testlocs, pred, predgen
+        # Return both IndexSet and data arrays for gradual migration
+        return index_set, train_idx, test_idx, traingen, testgen, trainlocs, testlocs, pred_idx, predgen
 
     def _create_callbacks(self, boot=0):
         """Create Keras callbacks for training.
@@ -239,6 +245,7 @@ class TrainingMixin:
 
             # Split data
             (
+                self.index_set,
                 train,
                 test,
                 self.traingen,

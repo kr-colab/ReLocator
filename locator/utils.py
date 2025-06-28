@@ -8,78 +8,9 @@ from tqdm import tqdm
 __all__ = [
     "load_genotypes",
     "sort_samples",
-    "normalize_locs",
-    "filter_snps",
     "weight_samples",
+    "split_train_test",
 ]
-
-
-def normalize_locs(locs):
-    """Normalize location coordinates"""
-    unnormedlocs = locs.copy()
-    meanlong = np.nanmean(locs[:, 0])
-    sdlong = np.nanstd(locs[:, 0])
-    meanlat = np.nanmean(locs[:, 1])
-    sdlat = np.nanstd(locs[:, 1])
-    locs = np.array(
-        [[(x[0] - meanlong) / sdlong, (x[1] - meanlat) / sdlat] for x in locs]
-    )
-    return meanlong, sdlong, meanlat, sdlat, unnormedlocs, locs
-
-
-def replace_md(genotypes):
-    """Replace missing data with binomial draws from allele frequency"""
-    print("imputing missing data")
-    dc = genotypes.count_alleles()[:, 1]
-    ac = genotypes.to_allele_counts()[:, :, 1]
-    missingness = genotypes.is_missing()
-    ninds = np.array([np.sum(x) for x in ~missingness])
-    af = np.array([dc[x] / (2 * ninds[x]) for x in range(len(ninds))])
-    for i in tqdm(range(np.shape(ac)[0])):
-        for j in range(np.shape(ac)[1]):
-            if missingness[i, j]:
-                ac[i, j] = np.random.binomial(2, af[i])
-    return ac
-
-
-def filter_snps(genotypes, min_mac=1, max_snps=None, impute=False, verbose=False):
-    """Filter SNPs based on criteria.
-
-    Args:
-        genotypes: GenotypeArray to filter
-        min_mac (int): Minimum minor allele count for filtering
-        max_snps (int, optional): Maximum number of SNPs to retain
-        impute (bool): Whether to impute missing data
-        verbose (bool): Whether to print progress messages. Defaults to True.
-
-    Returns:
-        numpy.ndarray: Filtered allele counts array
-    """
-    if verbose:
-        print("filtering SNPs")
-
-    tmp = genotypes.count_alleles()
-    biallel = tmp.is_biallelic()
-    genotypes = genotypes[biallel, :, :]
-
-    if min_mac > 1:
-        derived_counts = genotypes.count_alleles()[:, 1]
-        ac_filter = [x >= min_mac for x in derived_counts]
-        genotypes = genotypes[ac_filter, :, :]
-
-    if impute:
-        ac = replace_md(genotypes)
-    else:
-        ac = genotypes.to_allele_counts()[:, :, 1]
-
-    if max_snps is not None:
-        ac = ac[np.random.choice(range(ac.shape[0]), max_snps, replace=False), :]
-
-    if verbose:
-        print(f"filtered {ac.shape[1]} individual genotypes")
-        print(f"{ac.shape[0]} SNPs after filtering\n\n\n")
-
-    return ac
 
 
 def split_train_test(ac, locs, train_split=0.8):

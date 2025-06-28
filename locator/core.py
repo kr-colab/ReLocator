@@ -13,7 +13,8 @@ import tensorflow as tf
 from typing import List, Optional
 
 from .models import create_network
-from .utils import normalize_locs, filter_snps, weight_samples
+from .utils import weight_samples
+from .data import normalize_locs, filter_snps_legacy as filter_snps
 from .gpu_optimizer import GPUOptimizer, create_optimized_training_config
 
 # Import all the mixins

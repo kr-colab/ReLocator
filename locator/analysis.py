@@ -7,7 +7,7 @@ from tqdm import tqdm
 from tensorflow import keras
 import zarr
 
-from .utils import filter_snps, normalize_locs
+from .data import filter_snps_legacy as filter_snps, normalize_locs, IndexSet
 
 
 class AnalysisMixin:
@@ -917,19 +917,27 @@ class AnalysisMixin:
                 raise ValueError("sample_data file path must be provided in config")
             sample_data, locs = self.sort_samples(samples, sample_data_path)
 
-        # Get indices of samples with known locations
-        known_idx = np.argwhere(~np.isnan(locs[:, 0]))
-        known_idx = np.array([x[0] for x in known_idx])
-        n_samples = len(known_idx)
-        if k > n_samples:
+        # Create NA mask
+        na_mask = np.isnan(locs[:, 0])
+        n_total_samples = len(locs)
+        n_samples_with_coords = np.sum(~na_mask)
+        
+        if k > n_samples_with_coords:
             raise ValueError(
-                f"k ({k}) must be less than or equal to number of samples with known locations ({n_samples})"
+                f"k ({k}) must be less than or equal to number of samples with known locations ({n_samples_with_coords})"
             )
 
-        # Shuffle and split known_idx into k folds
-        rng = np.random.default_rng()
-        shuffled_idx = rng.permutation(known_idx)
-        folds = np.array_split(shuffled_idx, k)
+        # Create list to store IndexSets for each fold
+        fold_index_sets = []
+        for fold_idx in range(k):
+            index_set = IndexSet.from_k_fold(
+                n=n_total_samples,
+                k=k,
+                fold=fold_idx,
+                seed=None,  # Will use numpy's global random state
+                na_mask=na_mask
+            )
+            fold_index_sets.append(index_set)
 
         # Store original keras_verbose setting
         original_keras_verbose = self.config.get('keras_verbose', 1)
@@ -940,16 +948,18 @@ class AnalysisMixin:
         
         if verbose:
             print(f"Running true {k}-fold cross-validation with nonoverlapping holdout sets")
-            fold_iterator = tqdm(enumerate(folds), total=k, desc="K-fold progress")
+            fold_iterator = tqdm(enumerate(fold_index_sets), total=k, desc="K-fold progress")
         else:
-            fold_iterator = enumerate(folds)
+            fold_iterator = enumerate(fold_index_sets)
 
-        for _, fold_indices in fold_iterator:
+        for fold_num, index_set in fold_iterator:
             self.model = None
+            # Use the test indices from this fold as holdout
+            holdout_indices = index_set.test
             self.train_holdout(
                 genotypes=genotypes,
                 samples=samples,
-                holdout_indices=fold_indices,
+                holdout_indices=holdout_indices,
             )
             preds = self.predict_holdout(
                 verbose=False,
