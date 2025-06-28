@@ -28,7 +28,7 @@ Locator supports multiple input formats for genotype data:
    
    locator = Locator(config)
    
-   # Note: GPU optimizations are enabled by default!
+   # Note: GPU optimizations and memory-efficient pipeline are enabled by default!
    # To disable them:
    # config["use_mixed_precision"] = False
    # config["use_efficient_pipeline"] = False
@@ -151,6 +151,33 @@ Incorporate species range constraints:
    }
    
    locator = Locator(config)
+
+Memory-Efficient Data Pipeline
+------------------------------
+Locator uses a memory-efficient data pipeline that is **enabled by default**. This pipeline:
+
+- Uses index-based operations instead of copying arrays
+- Provides up to 50% memory savings for large datasets
+- Enables efficient bootstrap resampling without data duplication
+- Integrates seamlessly with GPU optimizations
+
+The pipeline works automatically, but you can access its components directly:
+
+.. code-block:: python
+
+   from locator.data import IndexSet, make_tf_dataset
+   
+   # Create memory-efficient data splits
+   index_set = IndexSet.random_split(
+       n=len(samples),
+       splits={"train": 0.8, "test": 0.2}
+   )
+   
+   # Access data without copying
+   train_data = genotypes[:, index_set.train]
+   test_data = genotypes[:, index_set.test]
+
+For detailed information, see :doc:`data_pipeline_guide`.
 
 GPU Configuration
 -----------------

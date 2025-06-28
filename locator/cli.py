@@ -221,7 +221,17 @@ def main():
     start = time.time()
 
     # Run analysis based on mode
-    if args.windows:
+    if args.predict_from_weights:
+        # Load genotypes and predict using saved weights
+        loc.predict_from_weights(
+            weights_path=args.predict_from_weights,
+            genotypes=genotypes,
+            samples=samples,
+            sample_data_file=args.sample_data,
+            save_preds_to_disk=True,
+            return_df=True
+        )
+    elif args.windows:
         if args.zarr is None:
             raise ValueError("Windows mode requires zarr input")
 

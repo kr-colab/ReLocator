@@ -3,6 +3,9 @@
 import numpy as np
 import pandas as pd
 import warnings
+import h5py
+import json
+from tensorflow import keras
 
 
 class PredictionMixin:
@@ -68,6 +71,195 @@ class PredictionMixin:
             return pred_df
 
         return predictions
+
+    def load_model(self, weights_path):
+        """Load a trained model from saved weights.
+        
+        This method loads a model from HDF5 weights file and restores the
+        preprocessing parameters needed for making predictions.
+        
+        Args:
+            weights_path (str): Path to the saved HDF5 weights file
+            
+        Returns:
+            dict: Dictionary containing loaded metadata including normalization params
+            
+        Raises:
+            ValueError: If weights file cannot be loaded or is missing metadata
+        """
+        import os
+        if not os.path.exists(weights_path):
+            raise ValueError(f"Weights file not found: {weights_path}")
+            
+        # Load metadata from HDF5 file
+        metadata = {}
+        try:
+            with h5py.File(weights_path, 'r') as f:
+                # Load normalization parameters
+                self.meanlong = float(f.attrs.get('coord_meanlong', 0.0))
+                self.sdlong = float(f.attrs.get('coord_sdlong', 1.0))
+                self.meanlat = float(f.attrs.get('coord_meanlat', 0.0))
+                self.sdlat = float(f.attrs.get('coord_sdlat', 1.0))
+                
+                metadata['normalization'] = {
+                    'meanlong': self.meanlong,
+                    'sdlong': self.sdlong,
+                    'meanlat': self.meanlat,
+                    'sdlat': self.sdlat
+                }
+                
+                # Load preprocessing parameters
+                metadata['preprocessing'] = {
+                    'min_mac': int(f.attrs.get('min_mac', 2)),
+                    'max_SNPs': int(f.attrs.get('max_SNPs', -1)),
+                    'impute_missing': bool(f.attrs.get('impute_missing', False))
+                }
+                if metadata['preprocessing']['max_SNPs'] == -1:
+                    metadata['preprocessing']['max_SNPs'] = None
+                    
+                # Load other metadata
+                metadata['n_samples'] = int(f.attrs.get('n_samples', 0))
+                metadata['n_snps'] = int(f.attrs.get('n_snps', 0))
+                metadata['metadata_version'] = str(f.attrs.get('metadata_version', 'unknown'))
+                metadata['locator_version'] = str(f.attrs.get('locator_version', 'unknown'))
+                metadata['save_date'] = str(f.attrs.get('save_date', 'unknown'))
+                
+                # Load config if available
+                config_json = f.attrs.get('config_json', None)
+                if config_json:
+                    metadata['config'] = json.loads(config_json)
+                    # Update current config with loaded values
+                    self.config.update(metadata['config'])
+                    
+            print(f"Loaded model metadata from {weights_path}")
+            print(f"Model trained on {metadata['n_samples']} samples with {metadata['n_snps']} SNPs")
+            print(f"Normalization params: mean_long={self.meanlong:.4f}, sd_long={self.sdlong:.4f}")
+            
+        except Exception as e:
+            # For backward compatibility with models saved before metadata feature
+            warnings.warn(
+                f"Could not load metadata from weights file: {e}\n"
+                "This may be an older model without saved metadata. "
+                "Normalization parameters will need to be set manually."
+            )
+            metadata = None
+            
+        # Create the model architecture if not already created
+        if self.model is None:
+            # Infer architecture from weights or use config
+            # This requires knowing the input shape - will be set when genotypes are loaded
+            warnings.warn(
+                "Model architecture not yet created. "
+                "Call train() with setup_only=True after loading genotypes."
+            )
+            
+        # Load the weights if model exists
+        if self.model is not None:
+            self.model.load_weights(weights_path)
+            print(f"Loaded weights into model")
+            
+        return metadata
+    
+    def predict_from_weights(
+        self,
+        weights_path,
+        genotypes,
+        samples,
+        sample_data_file=None,
+        save_preds_to_disk=True,
+        return_df=True
+    ):
+        """Convenience method to load weights and make predictions.
+        
+        This method combines loading a saved model and making predictions
+        in a single call. It handles preprocessing the genotypes using
+        the same parameters that were used during training.
+        
+        Args:
+            weights_path (str): Path to saved HDF5 weights file
+            genotypes (numpy.ndarray): Genotype data to predict on
+            samples (numpy.ndarray): Sample IDs corresponding to genotypes
+            sample_data_file (str, optional): Path to sample data file
+            save_preds_to_disk (bool): Whether to save predictions to disk
+            return_df (bool): Whether to return predictions as DataFrame
+            
+        Returns:
+            numpy.ndarray or pandas.DataFrame: Predictions
+        """
+        # Load the model and metadata
+        metadata = self.load_model(weights_path)
+        
+        # Store samples
+        self.samples = samples
+        
+        # Get sample data to identify prediction samples
+        if hasattr(self, "_sample_data_df"):
+            sample_data, locs = self.sort_samples(samples)
+        else:
+            sample_data_path = sample_data_file or self.config.get("sample_data")
+            if not sample_data_path:
+                raise ValueError("sample_data must be provided")
+            sample_data, locs = self.sort_samples(samples, sample_data_path)
+            
+        # Find samples without coordinates (to predict)
+        na_mask = np.isnan(locs[:, 0]) | np.isnan(locs[:, 1])
+        self.pred_indices = np.where(na_mask)[0]
+        
+        if len(self.pred_indices) == 0:
+            warnings.warn("No samples found without coordinates. Nothing to predict.")
+            return pd.DataFrame(columns=['sampleID', 'x', 'y']) if return_df else np.array([])
+            
+        # Apply preprocessing using saved parameters
+        if metadata and 'preprocessing' in metadata:
+            from .data import filter_snps_legacy as filter_snps
+            
+            filtered_genotypes = filter_snps(
+                genotypes,
+                min_mac=metadata['preprocessing']['min_mac'],
+                max_snps=metadata['preprocessing']['max_SNPs'],
+                impute=metadata['preprocessing']['impute_missing']
+            )
+        else:
+            # Use current config if no metadata
+            from .data import filter_snps_legacy as filter_snps
+            
+            filtered_genotypes = filter_snps(
+                genotypes,
+                min_mac=self.config.get('min_mac', 2),
+                max_snps=self.config.get('max_SNPs'),
+                impute=self.config.get('impute_missing', False)
+            )
+            
+        # Prepare prediction genotypes
+        self.predgen = np.transpose(filtered_genotypes[:, self.pred_indices])
+        
+        # Create model if needed
+        if self.model is None:
+            from .models import create_network
+            
+            # Infer input shape from filtered genotypes
+            n_snps = filtered_genotypes.shape[0]
+            
+            self.model = create_network(
+                input_shape=n_snps,
+                width=self.config.get("width", 256),
+                n_layers=self.config.get("nlayers", 8),
+                dropout_prop=self.config.get("dropout_prop", 0.25),
+                optimizer_config={
+                    "algo": self.config.get("optimizer_algo", "adam"),
+                    "learning_rate": self.config.get("learning_rate", 0.001),
+                    "weight_decay": self.config.get("weight_decay", 0.004),
+                }
+            )
+            
+            # Now load the weights
+            self.model.load_weights(weights_path)
+            
+        # Make predictions
+        return self.predict(
+            save_preds_to_disk=save_preds_to_disk,
+            return_df=return_df
+        )
 
     def sort_samples(self, samples=None, sample_data_file=None, reorder=True):
         """Sort samples and match with location data.
@@ -263,6 +455,7 @@ class PredictionMixin:
                         width=15,
                         height=5,
                         out_prefix=self.config.get("out"),
+                        show=True,  # Explicitly show since we're in a notebook
                     )
 
             except ImportError:

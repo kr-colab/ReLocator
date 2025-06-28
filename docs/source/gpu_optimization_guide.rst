@@ -91,7 +91,7 @@ To use a fixed batch size:
 Efficient Data Pipeline
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-TensorFlow's tf.data API provides optimal data loading:
+The memory-efficient data pipeline integrates seamlessly with GPU optimization:
 
 .. code-block:: python
 
@@ -101,10 +101,14 @@ TensorFlow's tf.data API provides optimal data loading:
 
 Features:
 
+* **Zero-copy operations**: Uses indices instead of copying arrays
 * **Prefetching**: Overlaps data loading with model training
 * **Caching**: Keeps frequently used data in GPU memory
 * **Parallel processing**: Uses multiple CPU cores for data preparation
 * **Automatic tuning**: Optimizes buffer sizes dynamically
+
+For detailed information about the data pipeline architecture, including IndexSet and 
+custom tf.data operations, see :doc:`data_pipeline_guide`.
 
 GPU Memory Management
 ~~~~~~~~~~~~~~~~~~~~~

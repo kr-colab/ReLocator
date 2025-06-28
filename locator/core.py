@@ -453,7 +453,8 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
         Returns:
             dict: Sample status dictionary from get_sample_status()
         
-        Example:
+        Example::
+        
             >>> locator = Locator(config)
             >>> genotypes, samples = locator.load_genotypes()
             >>> status = locator.check_data(genotypes, samples)

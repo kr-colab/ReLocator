@@ -10,6 +10,9 @@ from .models import create_network, loss_with_range_penalty, rasterize_species_r
 from .utils import weight_samples
 from .data import normalize_locs, filter_snps_legacy as filter_snps, IndexSet, make_tf_dataset
 from .gpu_optimizer import GPUOptimizer
+import h5py
+import json
+from datetime import datetime
 
 
 class TrainingMixin:
@@ -466,6 +469,9 @@ class TrainingMixin:
         hist_df = pd.DataFrame(self.history.history)
         hist_df.to_csv(f"{self.config['out']}_history.txt", sep="\t", index=False)
 
+        # Save model metadata including normalization parameters
+        self._save_model_metadata(boot=boot)
+
         return self.history
 
     def train_holdout(
@@ -749,4 +755,67 @@ class TrainingMixin:
         hist_df = pd.DataFrame(self.history.history)
         hist_df.to_csv(f"{self.config['out']}_history.txt", sep="\t", index=False)
 
+        # Save model metadata including normalization parameters
+        self._save_model_metadata()
+
         return self.history
+    
+    def _save_model_metadata(self, boot=0):
+        """Save model metadata including normalization parameters to HDF5 file.
+        
+        This method saves essential preprocessing parameters as HDF5 attributes
+        so the model can be properly used for predictions in a new session.
+        
+        Args:
+            boot: Bootstrap iteration number (default: 0)
+        """
+        # Determine the weights file path
+        if self.config.get("bootstrap", False):
+            filepath = f"{self.config['out']}_boot{boot}.weights.h5"
+        else:
+            filepath = f"{self.config['out']}.weights.h5"
+        
+        # Wait a moment to ensure the weights file is written
+        import time
+        time.sleep(0.5)
+        
+        # Open the HDF5 file and add metadata as attributes
+        try:
+            with h5py.File(filepath, 'a') as f:
+                # Save normalization parameters
+                f.attrs['coord_meanlong'] = self.meanlong if self.meanlong is not None else 0.0
+                f.attrs['coord_sdlong'] = self.sdlong if self.sdlong is not None else 1.0
+                f.attrs['coord_meanlat'] = self.meanlat if self.meanlat is not None else 0.0
+                f.attrs['coord_sdlat'] = self.sdlat if self.sdlat is not None else 1.0
+                
+                # Save preprocessing parameters
+                f.attrs['min_mac'] = self.config.get('min_mac', 2)
+                f.attrs['max_SNPs'] = self.config.get('max_SNPs', None) if self.config.get('max_SNPs') is not None else -1
+                f.attrs['impute_missing'] = self.config.get('impute_missing', False)
+                f.attrs['n_samples'] = len(self.samples) if self.samples is not None else 0
+                f.attrs['n_snps'] = self.traingen.shape[1] if hasattr(self, 'traingen') and self.traingen is not None else 0
+                
+                # Save metadata version for future compatibility
+                f.attrs['metadata_version'] = '1.0'
+                f.attrs['locator_version'] = '0.1.0'  # Should get from package version
+                f.attrs['save_date'] = datetime.now().isoformat()
+                
+                # Save config as JSON string for full reproducibility
+                config_to_save = self.config.copy()
+                # Remove non-serializable items
+                non_serializable_keys = ['genotypes', 'sample_data', 'genotype_data', 'species_range_geom']
+                for key in non_serializable_keys:
+                    config_to_save.pop(key, None)
+                    
+                # Also remove any DataFrame values in nested dicts
+                if 'weight_samples' in config_to_save and isinstance(config_to_save['weight_samples'], dict):
+                    config_to_save['weight_samples'] = config_to_save['weight_samples'].copy()
+                    config_to_save['weight_samples'].pop('weightdf', None)
+                    
+                f.attrs['config_json'] = json.dumps(config_to_save)
+                
+                print(f"Model metadata saved to {filepath}")
+                
+        except Exception as e:
+            warnings.warn(f"Failed to save model metadata: {e}")
+            # Don't fail training if metadata save fails
