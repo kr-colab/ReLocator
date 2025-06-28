@@ -8,7 +8,7 @@ import tensorflow as tf
 
 from .models import create_network, loss_with_range_penalty, rasterize_species_range
 from .utils import weight_samples
-from .data import normalize_locs, filter_snps_legacy as filter_snps, IndexSet
+from .data import normalize_locs, filter_snps_legacy as filter_snps, IndexSet, make_tf_dataset
 from .gpu_optimizer import GPUOptimizer
 
 
@@ -369,36 +369,77 @@ class TrainingMixin:
 
         # Use efficient data pipeline if enabled
         if self.config.get("use_efficient_pipeline", True) and not self.config.get("disable_gpu", False):
-            # Create efficient training dataset
-            train_dataset = GPUOptimizer.create_efficient_dataset(
-                self.traingen, 
-                trainlocs,
-                batch_size=batch_size,
-                training=True,
-                cache=True
-            )
-            
-            # Create validation dataset
-            val_dataset = GPUOptimizer.create_efficient_dataset(
-                self.testgen,
-                testlocs,
-                batch_size=batch_size,
-                training=False,
-                cache=True
-            )
-            
-            # Apply sample weights if available
+            # Prepare sample weights if available
+            sample_weights_array = None
             if self.sample_weights is not None:
                 sample_weights_array = self.sample_weights['sample_weights']
-                # Create a dataset with weights
-                weights_dataset = tf.data.Dataset.from_tensor_slices(sample_weights_array)
-                # Zip with the training dataset
-                train_dataset = tf.data.Dataset.zip((train_dataset, weights_dataset))
-                # Restructure to (features, labels, weights) format
-                train_dataset = train_dataset.map(
-                    lambda data_tuple, weight: (data_tuple[0], data_tuple[1], weight),
-                    num_parallel_calls=tf.data.AUTOTUNE
+            
+            # Create datasets using the new unified function
+            # Note: we need to work with the full genotype array and use IndexSet
+            # First, we need to combine the data back since it was split
+            if hasattr(self, 'index_set') and self.index_set is not None:
+                # We have an IndexSet - use it directly with the original filtered genotypes
+                # This requires access to the full genotype array
+                # For now, reconstruct from the split data
+                all_genotypes = np.hstack([
+                    self.traingen.T,  # Transpose back to (n_snps, n_samples)
+                    self.testgen.T,
+                    self.predgen.T if self.predgen.shape[0] > 0 else np.empty((self.traingen.shape[1], 0))
+                ])
+                all_coords = np.vstack([
+                    trainlocs,
+                    testlocs,
+                    np.full((self.predgen.shape[0], 2), np.nan) if self.predgen.shape[0] > 0 else np.empty((0, 2))
+                ])
+                
+                # Create training dataset
+                train_dataset = make_tf_dataset(
+                    genotypes=all_genotypes,
+                    coordinates=all_coords,
+                    index_set=self.index_set,
+                    split="train",
+                    batch_size=batch_size,
+                    sample_weights=sample_weights_array,
+                    training=True,
+                    cache=True
                 )
+                
+                # Create validation dataset
+                val_dataset = make_tf_dataset(
+                    genotypes=all_genotypes,
+                    coordinates=all_coords,
+                    index_set=self.index_set,
+                    split="test",
+                    batch_size=batch_size,
+                    training=False,
+                    cache=True
+                )
+            else:
+                # Fallback: use the old GPUOptimizer for backward compatibility
+                train_dataset = GPUOptimizer.create_efficient_dataset(
+                    self.traingen, 
+                    trainlocs,
+                    batch_size=batch_size,
+                    training=True,
+                    cache=True
+                )
+                
+                val_dataset = GPUOptimizer.create_efficient_dataset(
+                    self.testgen,
+                    testlocs,
+                    batch_size=batch_size,
+                    training=False,
+                    cache=True
+                )
+                
+                # Apply sample weights if available
+                if sample_weights_array is not None:
+                    weights_dataset = tf.data.Dataset.from_tensor_slices(sample_weights_array)
+                    train_dataset = tf.data.Dataset.zip((train_dataset, weights_dataset))
+                    train_dataset = train_dataset.map(
+                        lambda data_tuple, weight: (data_tuple[0], data_tuple[1], weight),
+                        num_parallel_calls=tf.data.AUTOTUNE
+                    )
             
             self.history = self.model.fit(
                 train_dataset,

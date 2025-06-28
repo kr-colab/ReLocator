@@ -10,6 +10,11 @@ from .filters import (
     normalize_locs_params,
 )
 from .indexset import IndexSet
+from .tf_dataset import (
+    make_tf_dataset,
+    make_tf_dataset_from_arrays,
+    flip_genotypes_tf,
+)
 
 __all__ = [
     "FilterStats",
@@ -20,4 +25,7 @@ __all__ = [
     "normalize_locs",
     "normalize_locs_params",
     "IndexSet",
+    "make_tf_dataset",
+    "make_tf_dataset_from_arrays",
+    "flip_genotypes_tf",
 ]

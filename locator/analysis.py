@@ -7,7 +7,7 @@ from tqdm import tqdm
 from tensorflow import keras
 import zarr
 
-from .data import filter_snps_legacy as filter_snps, normalize_locs, IndexSet
+from .data import filter_snps_legacy as filter_snps, normalize_locs, IndexSet, make_tf_dataset
 
 
 class AnalysisMixin:
@@ -341,41 +341,42 @@ class AnalysisMixin:
             # Set random seed
             np.random.seed(np.random.choice(range(int(1e6)), 1))
 
-            # Create copies of data
-            traingen2 = copy.deepcopy(self.traingen)
-            testgen2 = copy.deepcopy(self.testgen)
-            predgen2 = copy.deepcopy(self.predgen)
-
-            # Resample sites with replacement
+            # Resample sites with replacement (no data copying!)
             site_order = np.random.choice(
-                traingen2.shape[1], traingen2.shape[1], replace=True
+                self.traingen.shape[1], self.traingen.shape[1], replace=True
             )
-
-            # Reorder sites in all datasets
-            traingen2 = traingen2[:, site_order]
-            testgen2 = testgen2[:, site_order]
-            predgen2 = predgen2[:, site_order]
 
             # Clear existing model
             self.model = None
 
-            # Train on bootstrapped data with original locations
+            # Store site order for use in training
+            self._bootstrap_site_order = site_order
+
+            # Train with bootstrapped sites (data will be resampled on-the-fly)
             self.train(
                 genotypes=None,
                 samples=samples,
                 boot=boot,
-                train_gen=traingen2,
-                test_gen=testgen2,
-                pred_gen=predgen2,
+                train_gen=self.traingen,  # Use original data
+                test_gen=self.testgen,
+                pred_gen=self.predgen,
                 train_locs=original_trainlocs,
                 test_locs=original_testlocs,
             )
 
             # Get predictions
+            # Note: The model was trained with bootstrapped sites, so predictions
+            # should also use the same site ordering
+            if self.predgen.shape[0] > 0:
+                # Resample prediction genotypes with same site order
+                predgen_resampled = self.predgen[:, site_order]
+            else:
+                predgen_resampled = self.predgen
+                
             preds = self.predict(
                 boot=boot,
                 verbose=False,
-                prediction_genotypes=predgen2,
+                prediction_genotypes=predgen_resampled,
                 return_df=True,
                 save_preds_to_disk=not save_full_pred_matrix,
             )
