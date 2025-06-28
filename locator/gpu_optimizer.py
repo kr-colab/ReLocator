@@ -78,9 +78,12 @@ class GPUOptimizer:
             
         # Get available GPU memory
         try:
+            # Note: After tf.config.set_visible_devices() or CUDA_VISIBLE_DEVICES is set,
+            # the selected GPU is always accessible as 'GPU:0' from TensorFlow's perspective,
+            # regardless of its physical index. This is why 'GPU:0' is correct here.
             gpu_memory = tf.config.experimental.get_memory_info('GPU:0')
             available_memory = gpu_memory['current'] * target_memory_usage
-        except:
+        except Exception as e:
             # Fallback: use conservative estimate
             # Most consumer GPUs have 8-24GB, datacenter GPUs 40-80GB
             gpu_name = gpus[0].name.lower()
