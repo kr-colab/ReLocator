@@ -24,6 +24,15 @@ requirements _should_ install a compatible version of tensorflow, but if you
 run into trouble, please file an issue and or refer to the [tensorflow
 installation guide](https://www.tensorflow.org/install).
 
+## GPU Optimizations
+
+Locator includes GPU optimizations enabled by default that can provide 2-4x speedup on compatible hardware:
+- **Mixed precision training**: Uses float16 computations with float32 weights
+- **Dynamic batch sizing**: Automatically optimizes batch size for GPU memory
+- **Efficient data pipeline**: Overlaps data loading with GPU computation
+
+See the [GPU optimization guide](https://relocator.readthedocs.io/en/latest/gpu_optimization_guide.html) for details.
+
 # Overview
 `locator` reads in a set of genotypes and locations, trains a neural network to approximate the relationship between them, and predicts locations for a set of samples held out from the training routine. Samples with known locations are split randomly into a training set (used to fit model parameters) and a validation set (used to tune hyperparameters of the optimizer and evaluate error after training). Predictions are then generated for all samples with unknown coordinates. By fitting multiple models to different regions of the genome or to bootstrapped subsets of the full SNP matrix, the approach can also estimate uncertainty in a location estimate. 
 

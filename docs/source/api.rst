@@ -106,6 +106,30 @@ Utils Module
        max_snps (int, optional): Maximum number of SNPs to retain
        impute (bool): Whether to impute missing values
 
+GPU Optimizer Module
+--------------------
+.. module:: locator.gpu_optimizer
+
+.. autoclass:: GPUOptimizer
+   :members:
+
+   Utilities for optimizing GPU performance in TensorFlow.
+
+.. autoclass:: GradientAccumulator
+   :members:
+
+   Helper class for gradient accumulation to simulate larger batch sizes.
+
+.. autofunction:: create_optimized_training_config
+
+   Create an optimized configuration for GPU training.
+
+   Args:
+       base_config (dict): Base configuration dictionary
+
+   Returns:
+       dict: Optimized configuration with GPU settings
+
 Internal Modules (Implementation Details)
 -----------------------------------------
 *These modules contain the implementation of Locator functionality. Users typically interact with these through the main Locator class.*
@@ -205,7 +229,15 @@ The default configuration for Locator includes:
        "use_range_penalty": False,
        "species_range_shapefile": None,
        "resolution": 0.05,
-       "penalty_weight": 1.0
+       "penalty_weight": 1.0,
+       
+       # GPU optimization (enabled by default)
+       "use_mixed_precision": True,
+       "gpu_batch_size": "auto",
+       "use_efficient_pipeline": True,
+       "gradient_accumulation_steps": 1,
+       "gpu_memory_mode": "growth",
+       "enable_xla": False
    }
 
 Input Formats
