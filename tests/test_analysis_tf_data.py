@@ -94,18 +94,12 @@ class TestAnalysisTFData:
             assert hasattr(result, 'history')
     
     # Jacknife tests
-    @pytest.mark.skip(reason="Jacknife not yet fully compatible with tf.data pipeline")
-    def test_jacknife_no_array_copy(self, genotype_data, basic_config):
-        """Test jacknife doesn't create deep copies"""
+    def test_jacknife_with_tf_data(self, genotype_data, basic_config):
+        """Test jacknife works with tf.data pipeline"""
         genotypes, samples, _, _, _ = genotype_data
         
         # Create locator
         locator = Locator(basic_config)
-        
-        # Mock model to avoid actual training
-        locator.model = Mock()
-        locator.model.fit.return_value = Mock(history={})
-        locator.model.predict.return_value = np.random.normal(0, 1, (len(samples), 2))
         
         # Run jacknife - it drops prop of SNPs, creates ceiling(1/prop) replicates
         results = locator.run_jacknife(
@@ -118,17 +112,18 @@ class TestAnalysisTFData:
         # Verify results
         assert isinstance(results, pd.DataFrame)
         # Should have predictions for each jackknife iteration
-        for i in range(5):
+        n_jack = int(np.ceil(1.0 / 0.2))  # Should be 5
+        for i in range(n_jack):
             assert f"x_{i}" in results.columns
             assert f"y_{i}" in results.columns
         
-        # Verify filtered_genotypes is reused
+        # Verify filtered_genotypes exists
         assert hasattr(locator, 'filtered_genotypes')
     
     # Shared memory efficiency test
     @pytest.mark.parametrize("method,method_kwargs", [
         ("run_bootstraps", {"n_bootstraps": 1}),
-        pytest.param("run_jacknife", {"prop": 0.5}, marks=pytest.mark.skip(reason="Jacknife not yet fully compatible with tf.data pipeline")),
+        ("run_jacknife", {"prop": 0.5}),  # 2 jacknife replicates
     ])
     def test_memory_efficiency(self, genotype_data, basic_config, method, method_kwargs):
         """Test that resampling methods don't create array copies"""
@@ -201,7 +196,7 @@ class TestAnalysisTFData:
         n_samples = 10
         n_snps = 50
         
-        geno_array = np.random.choice([0, 1], size=(n_snps, n_samples, 2), dtype=np.int8)
+        geno_array = np.random.choice([0, 1], size=(n_snps, n_samples, 2)).astype(np.int8)
         genotypes = allel.GenotypeArray(geno_array) 
         samples = np.array([f"sample_{i}" for i in range(n_samples)])
         

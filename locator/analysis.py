@@ -272,43 +272,60 @@ class AnalysisMixin:
         original_filtered_genotypes = self.filtered_genotypes if hasattr(self, 'filtered_genotypes') else None
         original_index_set = self.index_set if hasattr(self, 'index_set') else None
         
-        # Calculate allele frequencies for the filtered genotypes
-        if original_filtered_genotypes is not None:
-            # Use filtered genotypes for allele frequency calculation
-            ac = self.filtered_genotypes  # Already in allele count format
-            af = np.mean(ac, axis=1) / 2.0  # Calculate allele frequencies
-        else:
-            # Fallback to old method
-            ac = genotypes.to_allele_counts()[:, :, 1]
-            af = np.array([np.sum(ac[i, :]) / (ac.shape[1] * 2) for i in range(ac.shape[0])])
+        # Store original locations and model
+        original_trainlocs = self.trainlocs if hasattr(self, 'trainlocs') else None
+        original_testlocs = self.testlocs if hasattr(self, 'testlocs') else None
         
-        print("starting jacknife resampling")
+        # Calculate number of jacknife replicates
+        n_jack = int(np.ceil(1.0 / prop))
+        print(f"starting jacknife resampling ({n_jack} replicates)")
         
-        for boot in tqdm(range(self.config.get("nboots", 50))):
-            # Generate mask for sites to keep (more efficient than sites to remove)
-            if hasattr(self, 'traingen') and self.traingen is not None:
-                n_sites = self.traingen.shape[1]
+        for boot in tqdm(range(n_jack)):
+            # Generate indices of sites to keep (jackknife drops a subset)
+            if original_filtered_genotypes is not None:
+                n_sites = original_filtered_genotypes.shape[0]
             else:
-                n_sites = ac.shape[0]
-            sites_to_keep = np.ones(n_sites, dtype=bool)
-            n_to_remove = int(n_sites * prop)
-            sites_to_remove = np.random.choice(n_sites, n_to_remove, replace=False)
-            sites_to_keep[sites_to_remove] = False
+                raise ValueError("Jacknife requires filtered_genotypes from initial training")
             
-            # Create a modified prediction genotype array
-            # Instead of deep copy, create a new array only for removed sites
-            pg = self.predgen.copy()  # Shallow copy is sufficient
+            # For jacknife, we systematically drop different subsets
+            # This ensures each SNP is dropped in exactly one replicate
+            sites_per_replicate = int(n_sites * prop)
+            start_idx = boot * sites_per_replicate
+            end_idx = min(start_idx + sites_per_replicate, n_sites)
             
-            # Replace removed sites with random draws from allele frequencies
-            for i in sites_to_remove:
-                if i < len(af):  # Ensure we have allele frequency for this site
-                    pg[:, i] = np.random.binomial(2, af[i], size=pg.shape[0])
+            # Create array of all site indices except those being dropped
+            all_sites = np.arange(n_sites)
+            sites_to_keep = np.concatenate([all_sites[:start_idx], all_sites[end_idx:]])
+            
+            # Clear model to force retraining
+            self.model = None
+            self.sample_weights = None
+            
+            # Restore filtered genotypes and index set
+            if original_filtered_genotypes is not None:
+                self.filtered_genotypes = original_filtered_genotypes
+                self.index_set = original_index_set
+                
+            # Train with subset of sites using site_order
+            # site_order acts as a selection of which sites to use
+            self.train(
+                genotypes=genotypes,
+                samples=samples,
+                boot=boot,
+                train_locs=original_trainlocs,
+                test_locs=original_testlocs,
+                site_order=sites_to_keep,  # Use subset of sites
+                na_action=na_action,
+            )
 
-            # Get predictions
+            # Get predictions using the trained model with tf.data
             preds = self.predict(
                 boot=boot,
                 verbose=False,
-                prediction_genotypes=pg,
+                genotypes=genotypes,  # Pass full genotypes for tf.data
+                samples=samples,
+                indices=self.pred_indices if hasattr(self, 'pred_indices') else None,
+                site_order=sites_to_keep,  # Pass same site order for predictions
                 return_df=True,
                 save_preds_to_disk=not save_full_pred_matrix,
             )
@@ -480,12 +497,13 @@ class AnalysisMixin:
                 site_order=site_order,  # Pass site order for bootstrap resampling
             )
 
-            # Get predictions
-            # The model expects predictions with the same site ordering as training
+            # Get predictions using tf.data approach
             preds = self.predict(
                 boot=boot,
                 verbose=False,
-                prediction_genotypes=self.predgen,  # Use original data
+                genotypes=genotypes,  # Pass full genotypes for tf.data
+                samples=samples,
+                indices=self.pred_indices if hasattr(self, 'pred_indices') else None,
                 site_order=site_order,  # Pass same site order for consistent resampling
                 return_df=True,
                 save_preds_to_disk=not save_full_pred_matrix,
