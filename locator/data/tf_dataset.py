@@ -95,9 +95,10 @@ def make_tf_dataset(
         return sample_genotypes, sample_coords
     
     # Map indices to data
+    # Use fixed parallelism to avoid excessive forking
     dataset = indices_dataset.map(
         load_sample,
-        num_parallel_calls=tf.data.AUTOTUNE,
+        num_parallel_calls=4,  # Fixed instead of AUTOTUNE to reduce overhead
         deterministic=not training
     )
     
@@ -120,7 +121,7 @@ def make_tf_dataset(
         # Restructure to (features, labels, weights)
         dataset = dataset.map(
             lambda data_tuple, weight: (data_tuple[0], data_tuple[1], weight),
-            num_parallel_calls=tf.data.AUTOTUNE
+            num_parallel_calls=4  # Fixed instead of AUTOTUNE
         )
     
     # Apply caching before any randomness
@@ -139,7 +140,7 @@ def make_tf_dataset(
             
             dataset = dataset.map(
                 augment_with_weights,
-                num_parallel_calls=tf.data.AUTOTUNE
+                num_parallel_calls=4  # Fixed instead of AUTOTUNE
             )
         else:
             # Without weights: (features, labels)
@@ -149,7 +150,7 @@ def make_tf_dataset(
             
             dataset = dataset.map(
                 augment_without_weights,
-                num_parallel_calls=tf.data.AUTOTUNE
+                num_parallel_calls=4  # Fixed instead of AUTOTUNE
             )
     
     # Shuffle if training
@@ -170,8 +171,12 @@ def make_tf_dataset(
     options = tf.data.Options()
     options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
     options.experimental_optimization.apply_default_optimizations = True
-    options.experimental_optimization.map_parallelization = True
-    options.threading.private_threadpool_size = 0  # Use all available cores
+    # Disable map parallelization to avoid excessive forking
+    options.experimental_optimization.map_parallelization = False
+    # Use fixed thread pool instead of 0 to prevent process forking
+    options.threading.private_threadpool_size = 4
+    # Limit inter-op parallelism to reduce overhead
+    options.threading.max_intra_op_parallelism = 1
     dataset = dataset.with_options(options)
     
     return dataset
