@@ -264,7 +264,15 @@ class TrainingMixin:
             # Set array attributes to None for compatibility
             self.traingen = None
             self.testgen = None
-            self.predgen = None
+            
+            # For 'separate' mode, create predgen for backward compatibility
+            if na_action == 'separate' and len(pred) > 0:
+                self.predgen = np.transpose(self.filtered_genotypes[:, pred])
+            elif len(pred) == 0:
+                # Create empty array with correct shape
+                self.predgen = np.zeros((0, self.filtered_genotypes.shape[0]), dtype=self.filtered_genotypes.dtype)
+            else:
+                self.predgen = None
 
             # Normalize locations and store for each split using helper method
             normalized_locs = self._normalize_and_store_locations(locs, samples, train, test)
@@ -318,7 +326,11 @@ class TrainingMixin:
                 input_shape = self.traingen.shape[1]
             else:
                 # When using efficient pipeline, get shape from filtered_genotypes
-                input_shape = self.filtered_genotypes.shape[0]
+                # If site_order is provided, use its length (for jacknife/bootstrap)
+                if site_order is not None:
+                    input_shape = len(site_order)
+                else:
+                    input_shape = self.filtered_genotypes.shape[0]
             
             self.model = self._create_model(input_shape=input_shape)
 
@@ -563,7 +575,7 @@ class TrainingMixin:
                 f.attrs['max_SNPs'] = self.config.get('max_SNPs', None) if self.config.get('max_SNPs') is not None else -1
                 f.attrs['impute_missing'] = self.config.get('impute_missing', False)
                 f.attrs['n_samples'] = len(self.samples) if self.samples is not None else 0
-                f.attrs['n_snps'] = self.traingen.shape[1] if hasattr(self, 'traingen') and self.traingen is not None else 0
+                f.attrs['n_snps'] = self.filtered_genotypes.shape[0] if hasattr(self, 'filtered_genotypes') and self.filtered_genotypes is not None else 0
                 
                 # Save metadata version for future compatibility
                 f.attrs['metadata_version'] = '1.0'
