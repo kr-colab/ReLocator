@@ -481,7 +481,13 @@ class AnalysisMixin:
                 If None, uses self.na_action
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
-                for each holdout replicate, otherwise None
+                for each holdout replicate containing columns:
+                - sampleID: Sample identifier
+                - x_pred: Predicted longitude
+                - y_pred: Predicted latitude
+                - rep: Replicate number (0 to n_reps-1)
+                
+                Note: True locations are not included. Merge with sample metadata to calculate errors.
                 
         Notes:
             - With na_action='separate': Currently behaves like 'exclude' (holdouts 
@@ -654,7 +660,13 @@ class AnalysisMixin:
             
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
-                for each jacknife replicate, otherwise None
+                for each jacknife replicate containing columns:
+                - sampleID: Sample identifier
+                - x_pred: Predicted longitude  
+                - y_pred: Predicted latitude
+                - boot: Jacknife replicate number (0 to n_boots-1)
+                
+                Note: True locations are not included. Merge with sample metadata to calculate errors.
                 
         Notes:
             - With na_action='separate': Currently behaves like 'exclude' (holdouts 
@@ -1118,13 +1130,32 @@ class AnalysisMixin:
             na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
                 If None, uses self.na_action
         Returns:
-            pandas.DataFrame or None: If return_df=True, returns DataFrame with one prediction per held-out sample (columns: sampleID, x_pred, y_pred)
+            pandas.DataFrame or None: If return_df=True, returns DataFrame with one prediction 
+                per held-out sample containing columns:
+                - sampleID: Sample identifier
+                - x_pred: Predicted longitude
+                - y_pred: Predicted latitude
+                
+                Note: True locations are not included. To calculate prediction errors, merge
+                the returned DataFrame with your sample metadata using the sampleID column.
             
         Notes:
             - With na_action='separate': Currently behaves like 'exclude' (k-fold requires 
               known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
             - With na_action='fail': Raises error if any NA samples found
+            
+        Example:
+            >>> # Run k-fold cross-validation
+            >>> predictions = locator.run_k_fold_holdouts(genotypes, samples, k=10, return_df=True)
+            >>> 
+            >>> # Merge with true locations to calculate errors
+            >>> sample_data = pd.read_csv('samples.tsv', sep='\t')
+            >>> merged = predictions.merge(sample_data[['sampleID', 'x', 'y']], on='sampleID')
+            >>> merged['error_km'] = np.sqrt(
+            ...     (merged['x'] - merged['x_pred'])**2 + 
+            ...     (merged['y'] - merged['y_pred'])**2
+            ... ) * 111.32  # Convert degrees to km
         """
         self.samples = samples
         
