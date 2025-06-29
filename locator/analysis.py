@@ -109,8 +109,9 @@ class AnalysisMixin:
                 # Get genotypes for this window
                 window_genos = genotypes[in_window, :, :]
 
-                # Clear existing model
+                # Clear existing model and weights
                 self.model = None
+                self.sample_weights = None
 
                 # Train on window data
                 self.train(genotypes=window_genos, samples=samples, na_action=na_action)
@@ -122,16 +123,25 @@ class AnalysisMixin:
 
                 if return_df:
                     # Rename columns to include window start
-                    boot_preds = preds[["x", "y"]].copy()
-                    boot_preds.columns = [f"x_win{start}", f"y_win{start}"]
-                    pred_dfs.append(boot_preds)
+                    window_preds = preds[["sampleID", "x", "y"]].copy()
+                    window_preds.columns = ["sampleID", f"x_win{start}", f"y_win{start}"]
+                    pred_dfs.append(window_preds)
 
                 # Clear keras session
                 keras.backend.clear_session()
 
         if return_df:
-            # Concatenate all predictions and add sampleIDs
-            all_predictions = pd.concat([preds[["sampleID"]], *pred_dfs], axis=1)
+            # Merge all predictions from different windows
+            if not pred_dfs:
+                print("Warning: No windows contained SNPs. No predictions generated.")
+                return None
+                
+            # Start with the first window's predictions
+            all_predictions = pred_dfs[0]
+            
+            # Merge subsequent windows
+            for pred_df in pred_dfs[1:]:
+                all_predictions = all_predictions.merge(pred_df, on='sampleID', how='outer')
 
             if save_full_pred_matrix:
                 all_predictions.to_csv(
@@ -346,8 +356,9 @@ class AnalysisMixin:
                 self.traingen.shape[1], self.traingen.shape[1], replace=True
             )
 
-            # Clear existing model
+            # Clear existing model and weights
             self.model = None
+            self.sample_weights = None
 
             # Store site order for use in training
             self._bootstrap_site_order = site_order
@@ -483,8 +494,9 @@ class AnalysisMixin:
         print(f"Running {n_reps} holdout replicates")
 
         for rep in tqdm(range(n_reps)):
-            # Clear existing model
+            # Clear existing model and weights
             self.model = None
+            self.sample_weights = None
 
             # Select holdout indices for this replicate
             if holdout_indices is not None and rep < len(holdout_indices):
@@ -700,15 +712,36 @@ class AnalysisMixin:
             - With na_action='exclude': Only uses samples with known locations (current behavior)
             - With na_action='fail': Raises error if any NA samples found
         """
-        # Store samples
+        # Store samples and genotypes for efficient access
         self.samples = samples
+        self.genotypes = genotypes
         
         # Use instance default if na_action not specified
         if na_action is None:
             na_action = self.na_action
             
-        # Get sample status
+        # Get sample status and create NA mask
         status = self.get_sample_status(samples)
+        na_mask = None
+        if status['n_na'] > 0:
+            # Create boolean mask for NA samples
+            if isinstance(samples, pd.DataFrame):
+                na_mask = samples['x'].isna() | samples['y'].isna()
+            else:
+                # Use stored sample data or load from config
+                if hasattr(self, "_sample_data_df"):
+                    sample_data = self._sample_data_df
+                else:
+                    sample_data_path = self.config.get("sample_data")
+                    if sample_data_path:
+                        sample_data = pd.read_csv(sample_data_path, sep="\t")
+                    else:
+                        raise ValueError("No sample data available")
+                
+                merged = pd.DataFrame({"sampleID": samples})
+                merged = merged.merge(sample_data, on="sampleID", how="left")
+                na_mask = merged['x'].isna() | merged['y'].isna()
+            na_mask = na_mask.values
         
         # Report status
         print(f"Windows holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
@@ -724,7 +757,7 @@ class AnalysisMixin:
                 f"Set na_action='separate' or 'exclude' to proceed."
             )
 
-        # Get positions
+        # Get positions and create holdout IndexSet
         if not hasattr(self, "positions"):
             if hasattr(self, "_genotype_df"):
                 self.positions = np.array(self._genotype_df.columns, dtype=int)
@@ -736,6 +769,35 @@ class AnalysisMixin:
                     "SNP positions required for windowed analysis. Use zarr input or "
                     "genotype DataFrame with position-labeled columns."
                 )
+        
+        # Create IndexSet for holdout splitting
+        n_samples = len(samples)
+        if holdout_indices is not None:
+            # Use provided holdout indices
+            holdout_idx = np.array(holdout_indices)
+            train_idx = np.setdiff1d(np.arange(n_samples), holdout_idx)
+            
+            # Apply NA mask if needed
+            if na_mask is not None and (na_action == 'exclude' or na_action == 'separate'):
+                # Only keep samples with known coordinates
+                valid_mask = ~na_mask
+                holdout_idx = holdout_idx[valid_mask[holdout_idx]]
+                train_idx = train_idx[valid_mask[train_idx]]
+            
+            index_set = IndexSet(
+                indices={'train': train_idx, 'test': holdout_idx},
+                total_samples=n_samples,
+                na_mask=na_mask
+            )
+        else:
+            # Random holdout selection using IndexSet
+            index_set = IndexSet.random_split(
+                n=n_samples,
+                splits={'train': 1.0 - k/n_samples, 'test': k/n_samples},
+                seed=self.config.get('seed', 42),
+                na_mask=na_mask,
+                na_action=na_action if na_action != 'separate' else 'exclude'
+            )
 
         if window_stop is None:
             window_stop = max(self.positions)
@@ -746,24 +808,29 @@ class AnalysisMixin:
         pred_dfs = []
 
         print(f"Running windowed analysis for holdout samples")
+        
+        # Store the full IndexSet for use across windows
+        self.index_set = index_set
 
         for start in tqdm(windows):
             stop = start + int(window_size)
-            in_window = (self.positions >= start) & (self.positions < stop)
+            snp_mask = (self.positions >= start) & (self.positions < stop)
+            snp_indices = np.where(snp_mask)[0]
 
-            if sum(in_window) > 0:
-                # Get genotypes for this window
-                window_genos = genotypes[in_window, :, :]
-
-                # Clear existing model
+            if len(snp_indices) > 0:
+                # For now, we still need to create window genotypes
+                # Future optimization: modify train_holdout to accept SNP indices
+                window_genos = genotypes[snp_mask, :, :]
+                
+                # Clear existing model and weights
                 self.model = None
+                self.sample_weights = None
 
-                # Train with holdout on window data
+                # Use the pre-computed holdout indices from IndexSet
                 self.train_holdout(
                     genotypes=window_genos,
                     samples=samples,
-                    k=k,
-                    holdout_indices=holdout_indices,
+                    holdout_indices=index_set.test,  # Use test indices from IndexSet
                 )
 
                 # Get predictions for holdout samples
@@ -784,6 +851,11 @@ class AnalysisMixin:
                 keras.backend.clear_session()
 
         if return_df:
+            # Check if any windows had predictions
+            if not pred_dfs:
+                print("Warning: No windows contained SNPs. No predictions generated.")
+                return None
+                
             # Merge all predictions
             all_predictions = pred_dfs[0]
             for df in pred_dfs[1:]:
@@ -955,6 +1027,8 @@ class AnalysisMixin:
 
         for fold_num, index_set in fold_iterator:
             self.model = None
+            # Reset sample weights to ensure proper recalculation for each fold
+            self.sample_weights = None
             # Use the test indices from this fold as holdout
             holdout_indices = index_set.test
             self.train_holdout(
