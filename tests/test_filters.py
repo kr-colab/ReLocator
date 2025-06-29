@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from unittest.mock import Mock
+import allel
 from locator.data import (
     filter_snps, 
     filter_snps_legacy,
@@ -84,58 +84,31 @@ class TestFilterSNPs:
     """Test SNP filtering functions."""
     
     def setup_method(self):
-        """Create mock GenotypeArray for testing."""
-        self.mock_genotypes = Mock()
+        """Create real GenotypeArray for testing."""
+        # Create real genotype array with controlled data
+        # 5 SNPs, 10 samples, diploid
+        # Make sure to have:
+        # - Some biallelic sites (only 0s and 1s)
+        # - One triallelic site (has 2s)
+        # - Different minor allele counts
+        genotype_data = np.array([
+            # SNP 0: Biallelic, MAC=5 (5 copies of allele 1)
+            [[0, 0], [0, 1], [0, 1], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 1], [1, 1]],
+            # SNP 1: Biallelic, MAC=8 (8 copies of allele 1)
+            [[0, 1], [1, 1], [0, 1], [1, 1], [0, 0], [0, 0], [0, 1], [0, 1], [0, 0], [0, 0]],
+            # SNP 2: Triallelic (has allele 2)
+            [[0, 0], [0, 1], [1, 2], [0, 0], [0, 0], [0, 2], [0, 0], [0, 0], [0, 0], [0, 0]],
+            # SNP 3: Biallelic, MAC=3 (3 copies of allele 1)
+            [[0, 0], [0, 1], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 1], [0, 1]],
+            # SNP 4: Biallelic, MAC=10 (10 copies of allele 1)
+            [[0, 1], [1, 1], [0, 1], [1, 1], [0, 1], [0, 1], [0, 0], [0, 0], [0, 0], [0, 0]],
+        ], dtype=np.int8)
         
-        # Mock count_alleles
-        mock_allele_counts = Mock()
-        mock_allele_counts.is_biallelic = Mock(return_value=np.array([True, True, False, True, True]))
-        self.mock_genotypes.count_alleles = Mock(return_value=mock_allele_counts)
-        
-        # Mock shape
-        self.mock_genotypes.shape = (5, 10)  # 5 SNPs, 10 samples
-        
-        # Mock indexing to return filtered genotypes
-        def getitem(*args):
-            index = args[0] if len(args) == 1 else args
-            if isinstance(index, tuple) and isinstance(index[0], np.ndarray):
-                # Boolean indexing
-                filtered = Mock()
-                filtered.shape = (np.sum(index[0]), 10)
-                # Set up count_alleles return value
-                derived_counts = np.array([5, 8, 3, 10])[:np.sum(index[0])]
-                mock_counts = Mock()
-                mock_counts.__getitem__ = Mock(side_effect=lambda x: derived_counts if x == (slice(None), 1) else None)
-                filtered.count_alleles = Mock(return_value=mock_counts)
-                filtered.to_allele_counts = Mock(return_value=np.random.randint(0, 3, (np.sum(index[0]), 10, 2)))
-                filtered.is_missing = Mock(return_value=np.zeros((np.sum(index[0]), 10), dtype=bool))
-                # Allow further indexing
-                filtered.__getitem__ = Mock(side_effect=getitem)
-                return filtered
-            elif isinstance(index, tuple) and isinstance(index[0], list):
-                # List indexing for MAC filtering
-                filtered = Mock()
-                filtered.shape = (len([x for x in index[0] if x]), 10)
-                filtered.to_allele_counts = Mock(return_value=np.random.randint(0, 3, (filtered.shape[0], 10, 2)))
-                filtered.is_missing = Mock(return_value=np.zeros((filtered.shape[0], 10), dtype=bool))
-                return filtered
-            return self.mock_genotypes
-            
-        self.mock_genotypes.__getitem__ = Mock(side_effect=getitem)
-        
-        # Mock to_allele_counts
-        self.mock_genotypes.to_allele_counts = Mock(
-            return_value=np.random.randint(0, 3, (5, 10, 2))
-        )
-        
-        # Mock is_missing
-        self.mock_genotypes.is_missing = Mock(
-            return_value=np.zeros((5, 10), dtype=bool)
-        )
+        self.genotypes = allel.GenotypeArray(genotype_data)
         
     def test_filter_snps_basic(self):
         """Test basic SNP filtering."""
-        ac, stats = filter_snps(self.mock_genotypes, min_mac=1)
+        ac, stats = filter_snps(self.genotypes, min_mac=1)
         
         assert isinstance(stats, FilterStats)
         assert stats.n_snps_original == 5
@@ -145,20 +118,23 @@ class TestFilterSNPs:
         
     def test_filter_snps_with_mac(self):
         """Test filtering with minimum allele count."""
-        ac, stats = filter_snps(self.mock_genotypes, min_mac=5)
+        ac, stats = filter_snps(self.genotypes, min_mac=5)
         
         assert stats.mac_threshold == 5
         assert isinstance(stats, FilterStats)
         assert isinstance(ac, np.ndarray)
+        # We should have 3 SNPs left after filtering (SNPs 0, 1, and 4 have MAC >= 5)
+        assert ac.shape[0] == 3
+        assert stats.n_mac_filtered == 1  # SNP 3 has MAC=3, filtered out
         
     def test_filter_snps_legacy(self):
         """Test legacy wrapper returns only allele counts."""
-        ac = filter_snps_legacy(self.mock_genotypes)
+        ac = filter_snps_legacy(self.genotypes)
         assert isinstance(ac, np.ndarray)
         
     def test_filter_snps_with_max_snps(self):
         """Test random subsampling."""
-        ac, stats = filter_snps(self.mock_genotypes, max_snps=2)
+        ac, stats = filter_snps(self.genotypes, max_snps=2)
         
         assert ac.shape[0] == 2
         assert stats.n_random_subset > 0
@@ -169,35 +145,29 @@ class TestImputation:
     
     def test_impute_missing(self):
         """Test basic imputation functionality."""
-        # Create mock genotype array
-        mock_genotypes = Mock()
+        # Create genotype array with missing data (-1 indicates missing)
+        genotype_data = np.array([
+            # SNP 0: has missing data in sample 2
+            [[0, 0], [0, 1], [-1, -1], [1, 1], [0, 1]],
+            # SNP 1: has missing data in sample 1  
+            [[0, 1], [-1, -1], [0, 0], [1, 1], [0, 1]],
+            # SNP 2: no missing data
+            [[0, 0], [0, 1], [1, 1], [0, 1], [1, 1]],
+        ], dtype=np.int8)
         
-        # Set up allele counts with some missing data
-        ac_with_missing = np.array([
-            [[0, 2], [1, 1], [0, 0], [2, 0]],  # SNP 1
-            [[1, 1], [0, 0], [1, 1], [0, 2]],  # SNP 2
-        ])
+        genotypes = allel.GenotypeArray(genotype_data)
         
-        # Mock required methods
-        mock_genotypes.count_alleles = Mock(
-            return_value=np.array([[4, 4], [4, 4]])  # Total allele counts
-        )
-        mock_genotypes.to_allele_counts = Mock(return_value=ac_with_missing)
-        
-        # Create missingness mask
-        missingness = np.array([
-            [False, False, True, False],  # SNP 1, sample 3 missing
-            [False, True, False, False],  # SNP 2, sample 2 missing
-        ])
-        mock_genotypes.is_missing = Mock(return_value=missingness)
+        # Check that we have missing data
+        assert genotypes.is_missing().any()
         
         # Run imputation
-        imputed = impute_missing(mock_genotypes)
+        imputed = impute_missing(genotypes)
         
         # Check that missing values were replaced
-        assert imputed.shape == (2, 4)
-        # The previously missing values should now have values
-        # (actual values depend on random binomial draws)
+        assert imputed.shape == (3, 5)  # 3 SNPs, 5 samples
+        # The imputed array should have no negative values
+        assert (imputed >= 0).all()
+        assert (imputed <= 2).all()  # diploid, so max is 2
         
         
 def test_imports_backward_compatible():

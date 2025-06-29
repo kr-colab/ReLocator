@@ -18,7 +18,7 @@ from datetime import datetime
 class TrainingMixin:
     """Mixin class providing training functionality for Locator."""
     
-    def _split_train_test(self, genotypes, locations, train_split=0.9):
+    def _split_train_test(self, genotypes, locations, train_split=0.9, na_action='separate'):
         """Split genotype and location data into training and test sets.
 
         Args:
@@ -26,6 +26,7 @@ class TrainingMixin:
             locations: Array of geographic coordinates (x,y) for each sample,
                       with NaN values for samples with unknown locations
             train_split: Proportion of samples to use for training (default: 0.9)
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail')
 
         Returns:
             tuple: (index_set, train_gen, test_gen, train_locs, test_locs, pred_gen)
@@ -34,7 +35,7 @@ class TrainingMixin:
                 test_gen: Genotype data for test samples
                 train_locs: Location data for training samples
                 test_locs: Location data for test samples
-                pred_gen: Genotype data for samples with unknown locations
+                pred_gen: Genotype data for prediction samples (all samples in 'separate' mode)
         """
         # Create NA mask
         na_mask = np.isnan(locations[:, 0])
@@ -46,13 +47,18 @@ class TrainingMixin:
             n=n_samples,
             splits=splits,
             na_mask=na_mask,
-            na_action='separate'  # This will create a 'predict' split for NA samples
+            na_action=na_action
         )
         
         # Get indices
         train_idx = index_set.train
         test_idx = index_set.test
-        pred_idx = index_set.get_split('predict') if 'predict' in index_set.indices else np.array([], dtype=int)
+        
+        # For 'separate' mode, prediction set should include ALL samples
+        if na_action == 'separate':
+            pred_idx = np.arange(n_samples)
+        else:
+            pred_idx = index_set.get_split('predict') if 'predict' in index_set.indices else np.array([], dtype=int)
         
         # Prepare data arrays (still need to return these for backward compatibility)
         traingen = np.transpose(genotypes[:, train_idx])
@@ -261,6 +267,7 @@ class TrainingMixin:
                 filtered_genotypes,
                 normalized_locs,
                 train_split=self.config.get("train_split", 0.9),
+                na_action=na_action,
             )
 
             # Apply sample weighting only if enabled in config

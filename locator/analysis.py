@@ -83,6 +83,13 @@ class AnalysisMixin:
                     "SNP positions required for windowed analysis. Use zarr input or "
                     "genotype DataFrame with position-labeled columns."
                 )
+        
+        # Ensure positions were found
+        if not hasattr(self, "positions") or self.positions is None:
+            raise ValueError(
+                "SNP positions required for windowed analysis. Use zarr input or "
+                "genotype DataFrame with position-labeled columns."
+            )
 
         if window_stop is None:
             window_stop = max(self.positions)
@@ -341,6 +348,34 @@ class AnalysisMixin:
         # Store original locations
         original_trainlocs = self.trainlocs
         original_testlocs = self.testlocs
+        
+        # Pre-calculate KDE bandwidth if needed
+        original_bandwidth = None
+        bandwidth_calculated = False
+        
+        if (self.config.get("weight_samples", {}).get("enabled", False) and
+            self.config.get("weight_samples", {}).get("method") == "KD"):
+            
+            existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
+            
+            if existing_bandwidth is None and len(original_trainlocs) > 1:
+                print("Pre-calculating optimal KDE bandwidth for bootstrap analysis...")
+                
+                from .sample_weights import get_global_bandwidth_optimizer
+                optimizer = get_global_bandwidth_optimizer()
+                
+                optimal_bandwidth = optimizer.get_bandwidth(
+                    original_trainlocs,
+                    cache_key=f"bootstrap_n{len(original_trainlocs)}",
+                    n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
+                    verbose=True
+                )
+                
+                # Temporarily set in config
+                self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
+                bandwidth_calculated = True
+                
+                print(f"Using bandwidth: {optimal_bandwidth:.3f}")
 
         # Create lists to store predictions
         pred_dfs = []
@@ -400,6 +435,14 @@ class AnalysisMixin:
 
             # Clear keras session
             keras.backend.clear_session()
+        
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                self.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                self.config["weight_samples"]["bandwidth"] = original_bandwidth
 
         if return_df:
             # Concatenate all predictions and add sampleIDs
@@ -491,6 +534,38 @@ class AnalysisMixin:
                 f"k ({k}) must be less than number of samples with known locations ({len(known_idx)})"
             )
 
+        # Pre-calculate KDE bandwidth if needed
+        original_bandwidth = None
+        bandwidth_calculated = False
+        
+        if (self.config.get("weight_samples", {}).get("enabled", False) and
+            self.config.get("weight_samples", {}).get("method") == "KD"):
+            
+            existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
+            
+            if existing_bandwidth is None:
+                # Get all samples with coordinates for bandwidth calculation
+                all_train_locs = locs[known_idx]
+                
+                if len(all_train_locs) > 1:
+                    print("Pre-calculating optimal KDE bandwidth for holdout analysis...")
+                    
+                    from .sample_weights import get_global_bandwidth_optimizer
+                    optimizer = get_global_bandwidth_optimizer()
+                    
+                    optimal_bandwidth = optimizer.get_bandwidth(
+                        all_train_locs,
+                        cache_key=f"holdouts_k{k}_n{len(all_train_locs)}",
+                        n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
+                        verbose=True
+                    )
+                    
+                    # Temporarily set in config
+                    self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
+                    bandwidth_calculated = True
+                    
+                    print(f"Using bandwidth: {optimal_bandwidth:.3f}")
+
         print(f"Running {n_reps} holdout replicates")
 
         for rep in tqdm(range(n_reps)):
@@ -528,6 +603,14 @@ class AnalysisMixin:
 
             # Clear keras session
             keras.backend.clear_session()
+
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                self.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                self.config["weight_samples"]["bandwidth"] = original_bandwidth
 
         if return_df:
             # Merge all predictions
@@ -615,6 +698,34 @@ class AnalysisMixin:
             holdout_indices=holdout_indices,
         )
 
+        # Pre-calculate KDE bandwidth if needed
+        original_bandwidth = None
+        bandwidth_calculated = False
+        
+        if (self.config.get("weight_samples", {}).get("enabled", False) and
+            self.config.get("weight_samples", {}).get("method") == "KD"):
+            
+            existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
+            
+            if existing_bandwidth is None and hasattr(self, 'trainlocs') and len(self.trainlocs) > 1:
+                print("Pre-calculating optimal KDE bandwidth for jacknife holdout analysis...")
+                
+                from .sample_weights import get_global_bandwidth_optimizer
+                optimizer = get_global_bandwidth_optimizer()
+                
+                optimal_bandwidth = optimizer.get_bandwidth(
+                    self.trainlocs,
+                    cache_key=f"jacknife_holdouts_n{len(self.trainlocs)}",
+                    n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
+                    verbose=True
+                )
+                
+                # Temporarily set in config
+                self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
+                bandwidth_calculated = True
+                
+                print(f"Using bandwidth: {optimal_bandwidth:.3f}")
+
         # Calculate allele frequencies
         print("Calculating allele frequencies...")
         ac = genotypes.to_allele_counts()[:, :, 1]
@@ -659,6 +770,14 @@ class AnalysisMixin:
             )
 
             pred_dfs.append(boot_df)
+
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                self.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                self.config["weight_samples"]["bandwidth"] = original_bandwidth
 
         if return_df:
             # Merge all predictions
@@ -807,6 +926,50 @@ class AnalysisMixin:
         # Create lists to store predictions
         pred_dfs = []
 
+        # Pre-calculate KDE bandwidth if needed
+        original_bandwidth = None
+        bandwidth_calculated = False
+        
+        if (self.config.get("weight_samples", {}).get("enabled", False) and
+            self.config.get("weight_samples", {}).get("method") == "KD"):
+            
+            existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
+            
+            if existing_bandwidth is None:
+                # Get sample data and locations
+                if hasattr(self, "_sample_data_df"):
+                    sample_data, locs = self.sort_samples(samples)
+                else:
+                    sample_data_path = self.config.get("sample_data")
+                    if not sample_data_path:
+                        raise ValueError("sample_data file path must be provided in config")
+                    sample_data, locs = self.sort_samples(samples, sample_data_path)
+                
+                # Get training locations (exclude holdout samples)
+                train_mask = np.ones(len(samples), dtype=bool)
+                train_mask[index_set.test] = False
+                train_mask = train_mask & ~np.isnan(locs[:, 0])
+                train_locs = locs[train_mask]
+                
+                if len(train_locs) > 1:
+                    print("Pre-calculating optimal KDE bandwidth for windows holdout analysis...")
+                    
+                    from .sample_weights import get_global_bandwidth_optimizer
+                    optimizer = get_global_bandwidth_optimizer()
+                    
+                    optimal_bandwidth = optimizer.get_bandwidth(
+                        train_locs,
+                        cache_key=f"windows_holdouts_n{len(train_locs)}",
+                        n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
+                        verbose=True
+                    )
+                    
+                    # Temporarily set in config
+                    self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
+                    bandwidth_calculated = True
+                    
+                    print(f"Using bandwidth: {optimal_bandwidth:.3f}")
+
         print(f"Running windowed analysis for holdout samples")
         
         # Store the full IndexSet for use across windows
@@ -849,6 +1012,14 @@ class AnalysisMixin:
 
                 # Clear keras session
                 keras.backend.clear_session()
+
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                self.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                self.config["weight_samples"]["bandwidth"] = original_bandwidth
 
         if return_df:
             # Check if any windows had predictions
@@ -1019,6 +1190,41 @@ class AnalysisMixin:
         if not verbose:
             self.config['keras_verbose'] = 0
         
+        # Pre-calculate KDE bandwidth if needed
+        original_bandwidth = None
+        bandwidth_calculated = False
+        
+        if (self.config.get("weight_samples", {}).get("enabled", False) and
+            self.config.get("weight_samples", {}).get("method") == "KD"):
+            
+            existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
+            
+            if existing_bandwidth is None:
+                # Get all samples with coordinates for bandwidth calculation
+                coords_mask = ~na_mask
+                all_train_locs = locs[coords_mask]
+                
+                if len(all_train_locs) > 1:
+                    if verbose:
+                        print("Pre-calculating optimal KDE bandwidth for k-fold CV...")
+                    
+                    from .sample_weights import get_global_bandwidth_optimizer
+                    optimizer = get_global_bandwidth_optimizer()
+                    
+                    optimal_bandwidth = optimizer.get_bandwidth(
+                        all_train_locs,
+                        cache_key=f"kfold_k{k}_n{len(all_train_locs)}",
+                        n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
+                        verbose=verbose
+                    )
+                    
+                    # Temporarily set in config
+                    self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
+                    bandwidth_calculated = True
+                    
+                    if verbose:
+                        print(f"Using bandwidth: {optimal_bandwidth:.3f}")
+        
         if verbose:
             print(f"Running true {k}-fold cross-validation with nonoverlapping holdout sets")
             fold_iterator = tqdm(enumerate(fold_index_sets), total=k, desc="K-fold progress")
@@ -1053,6 +1259,14 @@ class AnalysisMixin:
 
         # Restore original keras_verbose setting
         self.config['keras_verbose'] = original_keras_verbose
+        
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                self.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                self.config["weight_samples"]["bandwidth"] = original_bandwidth
 
         if return_df:
             all_predictions = pd.DataFrame(pred_rows)

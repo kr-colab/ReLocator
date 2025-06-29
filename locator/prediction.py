@@ -42,6 +42,14 @@ class PredictionMixin:
             prediction_genotypes if prediction_genotypes is not None else self.predgen
         )
 
+        # Check if there are any samples to predict
+        if predgen is None or len(predgen) == 0:
+            # Return empty DataFrame with correct columns
+            empty_df = pd.DataFrame(columns=["sampleID", "x", "y"])
+            if save_preds_to_disk:
+                empty_df.to_csv(f"{self.config['out']}_predlocs.csv", index=False)
+            return empty_df if return_df else None
+
         # Get predictions
         predictions = self.model.predict(predgen)
 
