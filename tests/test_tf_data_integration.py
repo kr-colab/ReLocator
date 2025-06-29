@@ -55,7 +55,6 @@ class TestTFDataIntegration:
             "out": str(tmp_path / "test"),
             "sample_data": str(sample_file),
             "max_epochs": 1,
-            "use_efficient_pipeline": True,
         }
         locator = Locator(config)
         
@@ -89,7 +88,6 @@ class TestTFDataIntegration:
             "out": str(tmp_path / "test"),
             "sample_data": str(sample_file),
             "max_epochs": 1,
-            "use_efficient_pipeline": True,
         }
         locator = Locator(config)
         
@@ -122,7 +120,6 @@ class TestTFDataIntegration:
             "out": str(tmp_path / "test"),
             "sample_data": str(sample_file),
             "max_epochs": 1,
-            "use_efficient_pipeline": True,
         }
         locator = Locator(config)
         

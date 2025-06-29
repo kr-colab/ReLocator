@@ -28,10 +28,9 @@ Locator supports multiple input formats for genotype data:
    
    locator = Locator(config)
    
-   # Note: GPU optimizations and memory-efficient pipeline are enabled by default!
-   # To disable them:
+   # Note: GPU optimizations are enabled by default!
+   # To disable mixed precision:
    # config["use_mixed_precision"] = False
-   # config["use_efficient_pipeline"] = False
    
    # Load data from various formats:
    #
@@ -203,8 +202,7 @@ Basic GPU configuration:
    config = {
        "out": "custom_gpu",
        "use_mixed_precision": False,  # Disable mixed precision
-       "gpu_batch_size": 128,         # Use fixed batch size instead of auto
-       "use_efficient_pipeline": False # Disable tf.data optimizations
+       "gpu_batch_size": 128          # Use fixed batch size instead of auto
    }
 
 For detailed GPU optimization information, see :doc:`gpu_optimization_guide`.

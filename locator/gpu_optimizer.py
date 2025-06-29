@@ -360,7 +360,6 @@ def create_optimized_training_config(base_config: Dict[str, Any]) -> Dict[str, A
     gpu_defaults = {
         'use_mixed_precision': True,
         'gpu_batch_size': 'auto',  # Will be determined dynamically
-        'use_efficient_pipeline': True,
         'gradient_accumulation_steps': 1,  # Increase for larger effective batch size
         'gpu_memory_mode': 'growth',
         'enable_xla': False,  # Experimental

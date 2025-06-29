@@ -54,7 +54,6 @@ class TestBootstrapTFData:
             "out": str(tmp_path / "test"),
             "sample_data": str(sample_file),
             "max_epochs": 1,
-            "use_efficient_pipeline": True,
             "keras_verbose": 0,
         }
         locator = Locator(config)
@@ -86,7 +85,6 @@ class TestBootstrapTFData:
             "out": str(tmp_path / "test"),
             "sample_data": str(sample_file),
             "max_epochs": 1,
-            "use_efficient_pipeline": True,
             "keras_verbose": 0,
         }
         locator = Locator(config)
@@ -133,7 +131,6 @@ class TestBootstrapTFData:
             "out": str(tmp_path / "test"),
             "sample_data": str(sample_file),
             "max_epochs": 1,
-            "use_efficient_pipeline": True,
             "keras_verbose": 0,
         }
         locator = Locator(config)

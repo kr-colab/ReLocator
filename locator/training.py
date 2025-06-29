@@ -18,8 +18,11 @@ from datetime import datetime
 class TrainingMixin:
     """Mixin class providing training functionality for Locator."""
     
-    def _split_train_test(self, genotypes, locations, train_split=0.9, na_action='separate', create_arrays=True):
+    def _split_train_test(self, genotypes, locations, train_split=0.9, na_action='separate'):
         """Split genotype and location data into training and test sets.
+
+        This method creates an IndexSet for efficient data splitting without creating
+        full genotype arrays. The actual data loading is handled by tf.data pipeline.
 
         Args:
             genotypes: GenotypeArray containing genetic data for all samples
@@ -27,19 +30,15 @@ class TrainingMixin:
                       with NaN values for samples with unknown locations
             train_split: Proportion of samples to use for training (default: 0.9)
             na_action: How to handle NA samples ('separate', 'exclude', 'fail')
-            create_arrays: If False, skip creating genotype arrays (for efficient pipeline)
 
         Returns:
-            tuple: (index_set, train_idx, test_idx, train_gen, test_gen, train_locs, test_locs, pred_idx, pred_gen)
+            tuple: (index_set, train_idx, test_idx, train_locs, test_locs, pred_idx)
                 index_set: IndexSet containing train/test/predict indices
                 train_idx: Training sample indices
                 test_idx: Test sample indices
-                train_gen: Genotype data for training samples (None if create_arrays=False)
-                test_gen: Genotype data for test samples (None if create_arrays=False)
                 train_locs: Location data for training samples
                 test_locs: Location data for test samples
                 pred_idx: Prediction sample indices
-                pred_gen: Genotype data for prediction samples (None if create_arrays=False)
         """
         # Create NA mask
         na_mask = np.isnan(locations[:, 0])
@@ -67,26 +66,9 @@ class TrainingMixin:
         # Prepare location arrays (always needed)
         trainlocs = locations[train_idx]
         testlocs = locations[test_idx]
-        
-        # Prepare data arrays only if needed
-        if create_arrays:
-            traingen = np.transpose(genotypes[:, train_idx])
-            testgen = np.transpose(genotypes[:, test_idx])
-            
-            # Handle case when there are no samples to predict
-            if len(pred_idx) > 0:
-                predgen = np.transpose(genotypes[:, pred_idx])
-            else:
-                # Create empty array with correct shape
-                predgen = np.empty((0, genotypes.shape[0]), dtype=genotypes.dtype)
-        else:
-            # Return None for arrays when using efficient pipeline
-            traingen = None
-            testgen = None
-            predgen = None
 
-        # Return both IndexSet and data arrays for gradual migration
-        return index_set, train_idx, test_idx, traingen, testgen, trainlocs, testlocs, pred_idx, predgen
+        # Return IndexSet and indices only - no arrays created
+        return index_set, train_idx, test_idx, trainlocs, testlocs, pred_idx
 
     def _create_callbacks(self, boot=0):
         """Create Keras callbacks for training.
@@ -264,27 +246,25 @@ class TrainingMixin:
                 impute=self.config.get("impute_missing", False),
             )
 
-            # Check if we'll use the efficient pipeline
-            use_efficient = self.config.get("use_efficient_pipeline", True)
-            
-            # Split data
+            # Split data using IndexSet approach (no arrays created)
             (
                 self.index_set,
                 train,
                 test,
-                self.traingen,
-                self.testgen,
                 trainlocs,
                 testlocs,
                 pred,
-                self.predgen,
             ) = self._split_train_test(
                 self.filtered_genotypes,
                 locs,  # Use unnormalized locations for split
                 train_split=self.config.get("train_split", 0.9),
                 na_action=na_action,
-                create_arrays=not use_efficient  # Skip array creation for efficient pipeline
             )
+            
+            # Set array attributes to None for compatibility
+            self.traingen = None
+            self.testgen = None
+            self.predgen = None
 
             # Normalize locations and store for each split using helper method
             normalized_locs = self._normalize_and_store_locations(locs, samples, train, test)
@@ -357,89 +337,45 @@ class TrainingMixin:
         
         batch_size = self._determine_batch_size(dataset_size)
 
-        # Use efficient data pipeline if enabled and not explicitly disabled for GPU
-        use_efficient = self.config.get("use_efficient_pipeline", True) and not self.config.get("disable_gpu", False)
+        # Prepare sample weights if available
+        sample_weights_array = None
+        if self.sample_weights is not None:
+            sample_weights_array = self.sample_weights['sample_weights']
         
-        if use_efficient:
-            # Prepare sample weights if available
-            sample_weights_array = None
-            if self.sample_weights is not None:
-                sample_weights_array = self.sample_weights['sample_weights']
-            
-            # Create datasets using the new unified function
-            if hasattr(self, 'index_set') and self.index_set is not None and hasattr(self, 'filtered_genotypes'):
-                # Use the original filtered genotypes directly without reconstruction
-                # Create training dataset
-                train_dataset = make_tf_dataset(
-                    genotypes=self.filtered_genotypes,
-                    coordinates=normalized_locs,
-                    index_set=self.index_set,
-                    split="train",
-                    batch_size=batch_size,
-                    sample_weights=sample_weights_array,
-                    training=True,
-                    cache=True,
-                    site_order=site_order  # Pass site_order for bootstrap resampling
-                )
-                
-                # Create validation dataset
-                val_dataset = make_tf_dataset(
-                    genotypes=self.filtered_genotypes,
-                    coordinates=normalized_locs,
-                    index_set=self.index_set,
-                    split="test",
-                    batch_size=batch_size,
-                    training=False,
-                    cache=True,
-                    site_order=site_order  # Pass site_order for bootstrap resampling
-                )
-            else:
-                # Fallback: use the old GPUOptimizer for backward compatibility
-                train_dataset = GPUOptimizer.create_efficient_dataset(
-                    self.traingen, 
-                    trainlocs,
-                    batch_size=batch_size,
-                    training=True,
-                    cache=True
-                )
-                
-                val_dataset = GPUOptimizer.create_efficient_dataset(
-                    self.testgen,
-                    testlocs,
-                    batch_size=batch_size,
-                    training=False,
-                    cache=True
-                )
-                
-                # Apply sample weights if available
-                if sample_weights_array is not None:
-                    weights_dataset = tf.data.Dataset.from_tensor_slices(sample_weights_array)
-                    train_dataset = tf.data.Dataset.zip((train_dataset, weights_dataset))
-                    train_dataset = train_dataset.map(
-                        lambda data_tuple, weight: (data_tuple[0], data_tuple[1], weight),
-                        num_parallel_calls=tf.data.AUTOTUNE
-                    )
-            
-            self.history = self.model.fit(
-                train_dataset,
-                epochs=self.config.get("max_epochs", 5000),
-                verbose=self.config.get("keras_verbose", 1),
-                validation_data=val_dataset,
-                callbacks=callbacks,
-            )
-        else:
-            # Use standard fit (legacy mode)
-            self.history = self.model.fit(
-                self.traingen,
-                trainlocs,
-                epochs=self.config.get("max_epochs", 5000),
-                batch_size=batch_size,
-                shuffle=True,
-                verbose=self.config.get("keras_verbose", 1),
-                validation_data=(self.testgen, testlocs),
-                callbacks=callbacks,
-                sample_weight = None if self.sample_weights is None else self.sample_weights['sample_weights'],
-            )
+        # Always use tf.data pipeline
+        # Create training dataset
+        train_dataset = make_tf_dataset(
+            genotypes=self.filtered_genotypes,
+            coordinates=normalized_locs,
+            index_set=self.index_set,
+            split="train",
+            batch_size=batch_size,
+            sample_weights=sample_weights_array,
+            training=True,
+            cache=True,
+            site_order=site_order  # Pass site_order for bootstrap resampling
+        )
+        
+        # Create validation dataset
+        val_dataset = make_tf_dataset(
+            genotypes=self.filtered_genotypes,
+            coordinates=normalized_locs,
+            index_set=self.index_set,
+            split="test",
+            batch_size=batch_size,
+            training=False,
+            cache=True,
+            site_order=site_order  # Pass site_order for bootstrap resampling
+        )
+        
+        # Train the model
+        self.history = self.model.fit(
+            train_dataset,
+            epochs=self.config.get("max_epochs", 5000),
+            verbose=self.config.get("keras_verbose", 1),
+            validation_data=val_dataset,
+            callbacks=callbacks,
+        )
 
         # Save training history
         hist_df = pd.DataFrame(self.history.history)
@@ -554,60 +490,27 @@ class TrainingMixin:
         # Determine batch size
         batch_size = self._determine_batch_size(len(train_indices))
 
-        # Create datasets based on pipeline preference
-        use_efficient = self.config.get("use_efficient_pipeline", True) and not self.config.get("disable_gpu", False)
+        # Always use tf.data pipeline with IndexSet
+        train_dataset = make_tf_dataset(
+            genotypes=self.filtered_genotypes,
+            coordinates=normalized_locs,
+            index_set=self.index_set,
+            split="train",
+            batch_size=batch_size,
+            sample_weights=self.sample_weights['sample_weights'] if self.sample_weights else None,
+            training=True,
+            cache=True
+        )
         
-        if use_efficient:
-            # Use IndexSet-based efficient pipeline
-            train_dataset = make_tf_dataset(
-                genotypes=self.filtered_genotypes,
-                coordinates=normalized_locs,
-                index_set=self.index_set,
-                split="train",
-                batch_size=batch_size,
-                sample_weights=self.sample_weights['sample_weights'] if self.sample_weights else None,
-                training=True,
-                cache=True
-            )
-            
-            validation_dataset = make_tf_dataset(
-                genotypes=self.filtered_genotypes,
-                coordinates=normalized_locs,
-                index_set=self.index_set,
-                split="test",
-                batch_size=batch_size,
-                training=False,
-                cache=True
-            )
-        else:
-            # Legacy path - create arrays only when needed
-            self.traingen = np.transpose(self.filtered_genotypes[:, train_indices])
-            self.testgen = np.transpose(self.filtered_genotypes[:, test_indices])
-            
-            train_dataset = GPUOptimizer.create_efficient_dataset(
-                self.traingen,
-                self.trainlocs,
-                batch_size=batch_size,
-                training=True,
-                cache=True
-            )
-            
-            # Add sample weights if available
-            if self.sample_weights is not None:
-                weights_dataset = tf.data.Dataset.from_tensor_slices(self.sample_weights['sample_weights'])
-                train_dataset = tf.data.Dataset.zip((train_dataset, weights_dataset))
-                train_dataset = train_dataset.map(
-                    lambda data_tuple, weights: (data_tuple[0], data_tuple[1], weights),
-                    num_parallel_calls=tf.data.AUTOTUNE
-                )
-            
-            validation_dataset = GPUOptimizer.create_efficient_dataset(
-                self.testgen,
-                self.testlocs,
-                batch_size=batch_size,
-                training=False,
-                cache=True
-            )
+        validation_dataset = make_tf_dataset(
+            genotypes=self.filtered_genotypes,
+            coordinates=normalized_locs,
+            index_set=self.index_set,
+            split="test",
+            batch_size=batch_size,
+            training=False,
+            cache=True
+        )
 
         # Train model
         self.history = self.model.fit(
@@ -801,60 +704,27 @@ class TrainingMixin:
             na_mask=index_set.na_mask
         )
         
-        # Create datasets using efficient pipeline
-        use_efficient = self.config.get("use_efficient_pipeline", True) and not self.config.get("disable_gpu", False)
+        # Always use tf.data pipeline with IndexSet
+        train_dataset = make_tf_dataset(
+            genotypes=self.filtered_genotypes,
+            coordinates=normalized_locs,
+            index_set=self.index_set,
+            split="train",
+            batch_size=batch_size,
+            sample_weights=self.sample_weights['sample_weights'] if self.sample_weights else None,
+            training=True,
+            cache=True
+        )
         
-        if use_efficient:
-            # Use IndexSet-based efficient pipeline
-            train_dataset = make_tf_dataset(
-                genotypes=self.filtered_genotypes,
-                coordinates=normalized_locs,
-                index_set=self.index_set,
-                split="train",
-                batch_size=batch_size,
-                sample_weights=self.sample_weights['sample_weights'] if self.sample_weights else None,
-                training=True,
-                cache=True
-            )
-            
-            validation_dataset = make_tf_dataset(
-                genotypes=self.filtered_genotypes,
-                coordinates=normalized_locs,
-                index_set=self.index_set,
-                split="test",
-                batch_size=batch_size,
-                training=False,
-                cache=True
-            )
-        else:
-            # Legacy path - create arrays only when needed
-            self.traingen = np.transpose(self.filtered_genotypes[:, actual_train])
-            self.testgen = np.transpose(self.filtered_genotypes[:, actual_val])
-            
-            train_dataset = GPUOptimizer.create_efficient_dataset(
-                self.traingen,
-                self.trainlocs,
-                batch_size=batch_size,
-                training=True,
-                cache=True
-            )
-            
-            # Add sample weights if available
-            if self.sample_weights is not None:
-                weights_dataset = tf.data.Dataset.from_tensor_slices(self.sample_weights['sample_weights'])
-                train_dataset = tf.data.Dataset.zip((train_dataset, weights_dataset))
-                train_dataset = train_dataset.map(
-                    lambda data_tuple, weights: (data_tuple[0], data_tuple[1], weights),
-                    num_parallel_calls=tf.data.AUTOTUNE
-                )
-            
-            validation_dataset = GPUOptimizer.create_efficient_dataset(
-                self.testgen,
-                self.testlocs,
-                batch_size=batch_size,
-                training=False,
-                cache=True
-            )
+        validation_dataset = make_tf_dataset(
+            genotypes=self.filtered_genotypes,
+            coordinates=normalized_locs,
+            index_set=self.index_set,
+            split="test",
+            batch_size=batch_size,
+            training=False,
+            cache=True
+        )
         
         # Train model (reduced verbosity for window analysis)
         self.history = self.model.fit(

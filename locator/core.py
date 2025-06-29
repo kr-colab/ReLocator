@@ -240,7 +240,6 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             # GPU optimization parameters
             "use_mixed_precision": True,  # Enable mixed precision training
             "gpu_batch_size": "auto",  # 'auto' or specific number
-            "use_efficient_pipeline": True,  # Use tf.data pipeline
             "gradient_accumulation_steps": 1,  # For simulating larger batches
             "gpu_memory_mode": "growth",  # 'growth', 'preallocate', or 'limit:MB'
             "enable_xla": False,  # Experimental XLA compilation
@@ -249,6 +248,17 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
         # Update with user config
         if config is not None:
             self.config.update(config)
+        
+        # Handle deprecated use_efficient_pipeline option
+        if 'use_efficient_pipeline' in self.config:
+            warnings.warn(
+                "The 'use_efficient_pipeline' option is deprecated and will be ignored. "
+                "Locator now always uses the efficient tf.data pipeline.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            # Remove from config to avoid confusion
+            del self.config['use_efficient_pipeline']
         
         # Validate na_action parameter
         valid_na_actions = ['separate', 'exclude', 'fail']

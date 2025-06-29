@@ -133,8 +133,7 @@ Basic Training with Memory-Efficient Pipeline
     loc = Locator({
         "out": "results/analysis",
         "sample_data": "samples.txt",
-        "max_epochs": 1000,
-        "use_efficient_pipeline": True  # Default
+        "max_epochs": 1000
     })
     
     # Load data
@@ -337,17 +336,8 @@ Migration Guide
 Updating Existing Code
 ~~~~~~~~~~~~~~~~~~~~~~
 
-If you have existing Locator code, most functionality works unchanged. The new pipeline 
-is used automatically when ``use_efficient_pipeline=True`` (default).
-
-To disable the new pipeline temporarily:
-
-.. code-block:: python
-
-    loc = Locator({
-        "use_efficient_pipeline": False,
-        # ... other config
-    })
+If you have existing Locator code, most functionality works unchanged. Locator now
+always uses the efficient tf.data pipeline for optimal memory usage and performance.
 
 Custom Training Loops
 ~~~~~~~~~~~~~~~~~~~~~

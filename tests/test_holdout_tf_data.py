@@ -180,7 +180,6 @@ class TestHoldoutTFData:
             "sample_data": str(sample_file),
             "max_epochs": 1,
             "keras_verbose": 0,
-            "use_efficient_pipeline": True,
         }
         locator = Locator(config)
         

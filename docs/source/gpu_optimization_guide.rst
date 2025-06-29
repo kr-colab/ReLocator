@@ -33,7 +33,6 @@ To disable GPU optimizations:
         "out": "my_analysis",
         "use_mixed_precision": False,
         "gpu_batch_size": 32,  # Use fixed batch size
-        "use_efficient_pipeline": False
     }
     loc = Locator(config)
 
@@ -93,11 +92,7 @@ Efficient Data Pipeline
 
 The memory-efficient data pipeline integrates seamlessly with GPU optimization:
 
-.. code-block:: python
-
-    config = {
-        "use_efficient_pipeline": True  # Enabled by default
-    }
+Locator now always uses the efficient tf.data pipeline for optimal performance.
 
 Features:
 

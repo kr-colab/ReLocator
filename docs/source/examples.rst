@@ -221,8 +221,7 @@ Bootstrap Analysis with Site Resampling
     # Initialize Locator
     loc = Locator({
         "out": "bootstrap_analysis",
-        "sample_data": "samples.txt",
-        "use_efficient_pipeline": True  # Default
+        "sample_data": "samples.txt"
     })
     
     # Load data

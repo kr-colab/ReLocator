@@ -280,7 +280,6 @@ The default configuration for Locator includes:
        # GPU optimization (enabled by default)
        "use_mixed_precision": True,
        "gpu_batch_size": "auto",
-       "use_efficient_pipeline": True,
        "gradient_accumulation_steps": 1,
        "gpu_memory_mode": "growth",
        "enable_xla": False

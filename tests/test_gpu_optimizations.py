@@ -135,7 +135,6 @@ class TestLocatorGPUIntegration:
             "out": "test",
             "use_mixed_precision": True,
             "gpu_batch_size": "auto",
-            "use_efficient_pipeline": True,
             "gpu_memory_mode": "growth",
             "disable_gpu": True  # Disable for testing
         }
@@ -145,7 +144,7 @@ class TestLocatorGPUIntegration:
         # Check that GPU options are set
         assert locator.config["use_mixed_precision"] == False  # Should be False when GPU disabled
         assert locator.config["gpu_batch_size"] == "auto"
-        assert locator.config["use_efficient_pipeline"] == True
+        # use_efficient_pipeline option removed - always uses tf.data
         assert locator.config["gpu_memory_mode"] == "growth"
     
     def test_optimized_training_config(self):
@@ -160,9 +159,9 @@ class TestLocatorGPUIntegration:
         # Check that GPU optimizations are added
         assert "use_mixed_precision" in optimized
         assert "gpu_batch_size" in optimized
-        assert "use_efficient_pipeline" in optimized
+        # use_efficient_pipeline option removed
         assert optimized["gpu_batch_size"] == "auto"
-        assert optimized["use_efficient_pipeline"] == True
+        # Always uses tf.data pipeline now
         
         # Check that original config is preserved
         assert optimized["out"] == "test"
