@@ -18,7 +18,7 @@ from datetime import datetime
 class TrainingMixin:
     """Mixin class providing training functionality for Locator."""
     
-    def _split_train_test(self, genotypes, locations, train_split=0.9, na_action='separate'):
+    def _split_train_test(self, genotypes, locations, train_split=0.9, na_action='separate', create_arrays=True):
         """Split genotype and location data into training and test sets.
 
         Args:
@@ -27,18 +27,19 @@ class TrainingMixin:
                       with NaN values for samples with unknown locations
             train_split: Proportion of samples to use for training (default: 0.9)
             na_action: How to handle NA samples ('separate', 'exclude', 'fail')
+            create_arrays: If False, skip creating genotype arrays (for efficient pipeline)
 
         Returns:
             tuple: (index_set, train_idx, test_idx, train_gen, test_gen, train_locs, test_locs, pred_idx, pred_gen)
                 index_set: IndexSet containing train/test/predict indices
                 train_idx: Training sample indices
                 test_idx: Test sample indices
-                train_gen: Genotype data for training samples
-                test_gen: Genotype data for test samples
+                train_gen: Genotype data for training samples (None if create_arrays=False)
+                test_gen: Genotype data for test samples (None if create_arrays=False)
                 train_locs: Location data for training samples
                 test_locs: Location data for test samples
                 pred_idx: Prediction sample indices
-                pred_gen: Genotype data for prediction samples (all samples in 'separate' mode)
+                pred_gen: Genotype data for prediction samples (None if create_arrays=False)
         """
         # Create NA mask
         na_mask = np.isnan(locations[:, 0])
@@ -63,18 +64,26 @@ class TrainingMixin:
         else:
             pred_idx = index_set.get_split('predict') if 'predict' in index_set.indices else np.array([], dtype=int)
         
-        # Prepare data arrays (still need to return these for backward compatibility)
-        traingen = np.transpose(genotypes[:, train_idx])
-        testgen = np.transpose(genotypes[:, test_idx])
+        # Prepare location arrays (always needed)
         trainlocs = locations[train_idx]
         testlocs = locations[test_idx]
         
-        # Handle case when there are no samples to predict
-        if len(pred_idx) > 0:
-            predgen = np.transpose(genotypes[:, pred_idx])
+        # Prepare data arrays only if needed
+        if create_arrays:
+            traingen = np.transpose(genotypes[:, train_idx])
+            testgen = np.transpose(genotypes[:, test_idx])
+            
+            # Handle case when there are no samples to predict
+            if len(pred_idx) > 0:
+                predgen = np.transpose(genotypes[:, pred_idx])
+            else:
+                # Create empty array with correct shape
+                predgen = np.empty((0, genotypes.shape[0]), dtype=genotypes.dtype)
         else:
-            # Create empty array with correct shape
-            predgen = np.empty((0, genotypes.shape[0]), dtype=genotypes.dtype)
+            # Return None for arrays when using efficient pipeline
+            traingen = None
+            testgen = None
+            predgen = None
 
         # Return both IndexSet and data arrays for gradual migration
         return index_set, train_idx, test_idx, traingen, testgen, trainlocs, testlocs, pred_idx, predgen
@@ -198,8 +207,9 @@ class TrainingMixin:
             ...     test_locs=boot_test_locs
             ... )
         """
-        # Store samples
+        # Store samples and site_order
         self.samples = samples
+        self.site_order = site_order
 
         # Use instance default if na_action not specified
         if na_action is None:
@@ -245,11 +255,6 @@ class TrainingMixin:
             # Update sample data to match
             sample_data = sample_data.iloc[mask]
 
-        # Normalize locations
-        self.meanlong, self.sdlong, self.meanlat, self.sdlat, self.unnormedlocs, normalized_locs = (
-            normalize_locs(locs)
-        )
-
         # Filter SNPs if not using pre-processed data
         if train_gen is None:
             self.filtered_genotypes = filter_snps(
@@ -259,6 +264,9 @@ class TrainingMixin:
                 impute=self.config.get("impute_missing", False),
             )
 
+            # Check if we'll use the efficient pipeline
+            use_efficient = self.config.get("use_efficient_pipeline", True)
+            
             # Split data
             (
                 self.index_set,
@@ -272,28 +280,24 @@ class TrainingMixin:
                 self.predgen,
             ) = self._split_train_test(
                 self.filtered_genotypes,
-                normalized_locs,
+                locs,  # Use unnormalized locations for split
                 train_split=self.config.get("train_split", 0.9),
                 na_action=na_action,
+                create_arrays=not use_efficient  # Skip array creation for efficient pipeline
             )
 
-            # Apply sample weighting only if enabled in config
-            if self.config.get("weight_samples", {}).get("enabled", False):
-                if self.sample_weights is not None:
-                    raise ValueError(
-                        "Sample weights already calculated. "
-                        "Set weight_samples to False in config to disable."
-                    )
-                wmethod = self.config.get("weight_samples", {}).get("method")
-                self.sample_weights = weight_samples(wmethod,
-                                                    trainlocs=self.unnormedlocs[train],
-                                                    trainsamps=self.samples[train],
-                                                    weightdf=self.config.get("weight_samples", {}).get("dataframe"),
-                                                    xbins=self.config.get("weight_samples", {}).get("xbins"),
-                                                    ybins=self.config.get("weight_samples", {}).get("ybins"),
-                                                    lam=self.config.get("weight_samples", {}).get("lam"),
-                                                    bandwidth=self.config.get("weight_samples", {}).get("bandwidth"),
-                                                    )
+            # Normalize locations and store for each split using helper method
+            normalized_locs = self._normalize_and_store_locations(locs, samples, train, test)
+            
+            # Store normalized locations for the splits
+            trainlocs = normalized_locs[train]
+            testlocs = normalized_locs[test]
+
+            # Calculate sample weights using helper method
+            # Pass unnormalized training locations
+            train_locs_unnormed = locs[train]
+            self._calculate_sample_weights(train, train_locs=train_locs_unnormed)
+            
             # Store prediction indices
             self.pred_indices = pred
         else:
@@ -301,6 +305,12 @@ class TrainingMixin:
             self.traingen = train_gen
             self.testgen = test_gen
             self.predgen = pred_gen
+            
+            # For pre-processed data, we still need to normalize locations to get the normalization parameters
+            self.meanlong, self.sdlong, self.meanlat, self.sdlat, self.unnormedlocs, normalized_locs = (
+                normalize_locs(locs)
+            )
+            
             # Use provided locations if available
             if train_locs is not None and test_locs is not None:
                 trainlocs = train_locs
@@ -321,44 +331,16 @@ class TrainingMixin:
         self.trainlocs = trainlocs
         self.testlocs = testlocs
 
-        # Create and train model if not already created
+        # Create model if not already created
         if self.model is None:
-            # Decide which loss function to use based on the config
-            loss_fn = None
-            if self.config.get("use_range_penalty"):
-                assert (
-                    self.config.get("species_range_shapefile") is not None
-                ), "species_range_shapefile must be provided if use_range_penalty is True"
-                assert (
-                    self.config.get("resolution") is not None
-                ), "resolution must be provided if use_range_penalty is True"
-                # Rasterize the species range from the provided shapefile.
-                mask_tensor, mask_transform = rasterize_species_range(
-                    self.config["species_range_shapefile"],
-                    resolution=self.config.get("raster_resolution", 0.1),
-                )
-
-                loss_fn = lambda y_true, y_pred: loss_with_range_penalty(
-                    y_true,
-                    y_pred,
-                    mask_tensor=mask_tensor,
-                    transform=mask_transform,
-                    resolution=self.config.get("resolution", 0.05),
-                    penalty_weight=self.config.get("penalty_weight", 1.0),
-                )
-
-            self.model = create_network(
-                input_shape=self.traingen.shape[1],
-                width=self.config.get("width", 256),
-                n_layers=self.config.get("nlayers", 8),
-                dropout_prop=self.config.get("dropout_prop", 0.25),
-                optimizer_config={
-                    "algo": self.config.get("optimizer_algo", "adam"),
-                    "learning_rate": self.config.get("learning_rate", 0.001),
-                    "weight_decay": self.config.get("weight_decay", 0.004),
-                },
-                loss_fn=loss_fn,
-            )
+            # Determine input shape
+            if self.traingen is not None:
+                input_shape = self.traingen.shape[1]
+            else:
+                # When using efficient pipeline, get shape from filtered_genotypes
+                input_shape = self.filtered_genotypes.shape[0]
+            
+            self.model = self._create_model(input_shape=input_shape)
 
         # Return early if setup_only
         if setup_only:
@@ -366,26 +348,19 @@ class TrainingMixin:
 
         callbacks = self._create_callbacks(boot=boot)
 
-        # Determine batch size
-        batch_size = self.config.get("batch_size", 32)
-        if self.config.get("gpu_batch_size") == "auto" and not self.config.get("disable_gpu", False):
-            # Try to determine optimal batch size
-            try:
-                optimal_batch = GPUOptimizer.get_optimal_batch_size(
-                    self.model, 
-                    input_shape=(self.traingen.shape[1],),
-                    target_memory_usage=0.85,
-                    dataset_size=self.traingen.shape[0]
-                )
-                print(f"Using optimized batch size: {optimal_batch}")
-                batch_size = optimal_batch
-            except Exception as e:
-                print(f"Failed to optimize batch size: {e}. Using default: {batch_size}")
-        elif isinstance(self.config.get("gpu_batch_size"), int):
-            batch_size = self.config["gpu_batch_size"]
+        # Determine batch size using helper method
+        if self.traingen is not None:
+            dataset_size = self.traingen.shape[0]
+        else:
+            # Using efficient pipeline
+            dataset_size = len(self.index_set.train) if hasattr(self, 'index_set') and self.index_set else len(trainlocs)
+        
+        batch_size = self._determine_batch_size(dataset_size)
 
-        # Use efficient data pipeline if enabled
-        if self.config.get("use_efficient_pipeline", True) and not self.config.get("disable_gpu", False):
+        # Use efficient data pipeline if enabled and not explicitly disabled for GPU
+        use_efficient = self.config.get("use_efficient_pipeline", True) and not self.config.get("disable_gpu", False)
+        
+        if use_efficient:
             # Prepare sample weights if available
             sample_weights_array = None
             if self.sample_weights is not None:
@@ -403,7 +378,8 @@ class TrainingMixin:
                     batch_size=batch_size,
                     sample_weights=sample_weights_array,
                     training=True,
-                    cache=True
+                    cache=True,
+                    site_order=site_order  # Pass site_order for bootstrap resampling
                 )
                 
                 # Create validation dataset
@@ -414,7 +390,8 @@ class TrainingMixin:
                     split="test",
                     batch_size=batch_size,
                     training=False,
-                    cache=True
+                    cache=True,
+                    site_order=site_order  # Pass site_order for bootstrap resampling
                 )
             else:
                 # Fallback: use the old GPUOptimizer for backward compatibility
@@ -890,8 +867,13 @@ class TrainingMixin:
         
         return self.history
 
-    def _calculate_sample_weights(self, train_indices):
-        """Calculate sample weights if enabled. Extracted to avoid duplication."""
+    def _calculate_sample_weights(self, train_indices, train_locs=None):
+        """Calculate sample weights if enabled. Extracted to avoid duplication.
+        
+        Args:
+            train_indices: Indices of training samples
+            train_locs: Optional unnormalized training locations. If None, uses self.unnormedlocs
+        """
         if self.config.get("weight_samples", {}).get("enabled", False):
             if self.sample_weights is not None:
                 warnings.warn(
@@ -900,9 +882,11 @@ class TrainingMixin:
                 )
             else:
                 wmethod = self.config.get("weight_samples", {}).get("method")
+                # Use provided train_locs or fall back to self.unnormedlocs
+                locs_for_weights = train_locs if train_locs is not None else self.unnormedlocs
                 self.sample_weights = weight_samples(
                     wmethod,
-                    trainlocs=self.unnormedlocs,
+                    trainlocs=locs_for_weights,
                     trainsamps=self.samples[train_indices],
                     weightdf=self.config.get("weight_samples", {}).get("dataframe"),
                     xbins=self.config.get("weight_samples", {}).get("xbins"),
