@@ -286,7 +286,10 @@ class AnalysisMixin:
         
         for boot in tqdm(range(self.config.get("nboots", 50))):
             # Generate mask for sites to keep (more efficient than sites to remove)
-            n_sites = self.traingen.shape[1] if hasattr(self, 'traingen') else ac.shape[0]
+            if hasattr(self, 'traingen') and self.traingen is not None:
+                n_sites = self.traingen.shape[1]
+            else:
+                n_sites = ac.shape[0]
             sites_to_keep = np.ones(n_sites, dtype=bool)
             n_to_remove = int(n_sites * prop)
             sites_to_remove = np.random.choice(n_sites, n_to_remove, replace=False)
@@ -390,10 +393,19 @@ class AnalysisMixin:
         original_trainlocs = self.trainlocs
         original_testlocs = self.testlocs
         original_filtered_genotypes = self.filtered_genotypes if hasattr(self, 'filtered_genotypes') else None
+        
+        # Handle prediction indices based on whether we're using tf.data pipeline
+        if hasattr(self, 'pred_indices') and self.pred_indices is not None:
+            n_pred = len(self.pred_indices)
+        elif self.predgen is not None:
+            n_pred = self.predgen.shape[0]
+        else:
+            n_pred = 0
+            
         original_normalized_locs = np.vstack([
             self.trainlocs,
             self.testlocs,
-            np.full((self.predgen.shape[0], 2), np.nan) if self.predgen.shape[0] > 0 else np.empty((0, 2))
+            np.full((n_pred, 2), np.nan) if n_pred > 0 else np.empty((0, 2))
         ])
         original_index_set = self.index_set if hasattr(self, 'index_set') else None
         
@@ -435,9 +447,15 @@ class AnalysisMixin:
             np.random.seed(np.random.choice(range(int(1e6)), 1))
 
             # Resample sites with replacement (no data copying!)
-            site_order = np.random.choice(
-                self.traingen.shape[1], self.traingen.shape[1], replace=True
-            )
+            # Get number of SNPs from filtered_genotypes when using tf.data pipeline
+            if original_filtered_genotypes is not None:
+                n_snps = original_filtered_genotypes.shape[0]
+            elif self.traingen is not None:
+                n_snps = self.traingen.shape[1]
+            else:
+                raise ValueError("Unable to determine number of SNPs for bootstrap resampling")
+                
+            site_order = np.random.choice(n_snps, n_snps, replace=True)
 
             # Clear existing model and weights
             self.model = None
@@ -449,8 +467,9 @@ class AnalysisMixin:
                 self.index_set = original_index_set
 
             # Train with bootstrapped sites using site_order parameter
+            # When using tf.data pipeline, pass original genotypes
             self.train(
-                genotypes=None,
+                genotypes=genotypes if original_filtered_genotypes is not None else None,
                 samples=samples,
                 boot=boot,
                 train_gen=self.traingen,  # Use original data
