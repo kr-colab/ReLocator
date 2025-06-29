@@ -268,27 +268,38 @@ class AnalysisMixin:
         # Initial training to set up model (but don't output predictions)
         self.train(genotypes=genotypes, samples=samples, na_action=na_action)
 
+        # Store original data for reuse
+        original_filtered_genotypes = self.filtered_genotypes if hasattr(self, 'filtered_genotypes') else None
+        original_index_set = self.index_set if hasattr(self, 'index_set') else None
+        
+        # Calculate allele frequencies for the filtered genotypes
+        if original_filtered_genotypes is not None:
+            # Use filtered genotypes for allele frequency calculation
+            ac = self.filtered_genotypes  # Already in allele count format
+            af = np.mean(ac, axis=1) / 2.0  # Calculate allele frequencies
+        else:
+            # Fallback to old method
+            ac = genotypes.to_allele_counts()[:, :, 1]
+            af = np.array([np.sum(ac[i, :]) / (ac.shape[1] * 2) for i in range(ac.shape[0])])
+        
         print("starting jacknife resampling")
-        af = []
-        # Convert genotypes to allele counts first
-        ac = genotypes.to_allele_counts()[:, :, 1]  # Get counts of alternate allele
-
-        # Calculate allele frequencies
-        for i in range(ac.shape[0]):
-            freq = np.sum(ac[i, :]) / (ac.shape[1] * 2)
-            af.append(freq)
-        af = np.array(af)
-
+        
         for boot in tqdm(range(self.config.get("nboots", 50))):
-            callbacks = self._create_callbacks(boot)
-            pg = copy.deepcopy(self.predgen)
-
-            sites_to_remove = np.random.choice(
-                pg.shape[1], int(pg.shape[1] * prop), replace=False
-            )
-
+            # Generate mask for sites to keep (more efficient than sites to remove)
+            n_sites = self.traingen.shape[1] if hasattr(self, 'traingen') else ac.shape[0]
+            sites_to_keep = np.ones(n_sites, dtype=bool)
+            n_to_remove = int(n_sites * prop)
+            sites_to_remove = np.random.choice(n_sites, n_to_remove, replace=False)
+            sites_to_keep[sites_to_remove] = False
+            
+            # Create a modified prediction genotype array
+            # Instead of deep copy, create a new array only for removed sites
+            pg = self.predgen.copy()  # Shallow copy is sufficient
+            
+            # Replace removed sites with random draws from allele frequencies
             for i in sites_to_remove:
-                pg[:, i] = np.random.binomial(2, af[i], size=pg.shape[0])
+                if i < len(af):  # Ensure we have allele frequency for this site
+                    pg[:, i] = np.random.binomial(2, af[i], size=pg.shape[0])
 
             # Get predictions
             preds = self.predict(
@@ -375,9 +386,16 @@ class AnalysisMixin:
         # Initial training to set up model and data - pass na_action
         self.train(genotypes=genotypes, samples=samples, na_action=na_action)
 
-        # Store original locations
+        # Store original locations and filtered genotypes for reuse
         original_trainlocs = self.trainlocs
         original_testlocs = self.testlocs
+        original_filtered_genotypes = self.filtered_genotypes if hasattr(self, 'filtered_genotypes') else None
+        original_normalized_locs = np.vstack([
+            self.trainlocs,
+            self.testlocs,
+            np.full((self.predgen.shape[0], 2), np.nan) if self.predgen.shape[0] > 0 else np.empty((0, 2))
+        ])
+        original_index_set = self.index_set if hasattr(self, 'index_set') else None
         
         # Pre-calculate KDE bandwidth if needed
         original_bandwidth = None
@@ -424,11 +442,13 @@ class AnalysisMixin:
             # Clear existing model and weights
             self.model = None
             self.sample_weights = None
+            
+            # Restore filtered genotypes and index set for tf.data pipeline
+            if original_filtered_genotypes is not None:
+                self.filtered_genotypes = original_filtered_genotypes
+                self.index_set = original_index_set
 
-            # Store site order for use in training
-            self._bootstrap_site_order = site_order
-
-            # Train with bootstrapped sites (data will be resampled on-the-fly)
+            # Train with bootstrapped sites using site_order parameter
             self.train(
                 genotypes=None,
                 samples=samples,
@@ -438,21 +458,16 @@ class AnalysisMixin:
                 pred_gen=self.predgen,
                 train_locs=original_trainlocs,
                 test_locs=original_testlocs,
+                site_order=site_order,  # Pass site order for bootstrap resampling
             )
 
             # Get predictions
-            # Note: The model was trained with bootstrapped sites, so predictions
-            # should also use the same site ordering
-            if self.predgen.shape[0] > 0:
-                # Resample prediction genotypes with same site order
-                predgen_resampled = self.predgen[:, site_order]
-            else:
-                predgen_resampled = self.predgen
-                
+            # The model expects predictions with the same site ordering as training
             preds = self.predict(
                 boot=boot,
                 verbose=False,
-                prediction_genotypes=predgen_resampled,
+                prediction_genotypes=self.predgen,  # Use original data
+                site_order=site_order,  # Pass same site order for consistent resampling
                 return_df=True,
                 save_preds_to_disk=not save_full_pred_matrix,
             )
@@ -628,6 +643,7 @@ class AnalysisMixin:
                 verbose=False,
                 return_df=True,
                 save_preds_to_disk=not save_full_pred_matrix,
+                plot_summary=False,  # Don't plot during analysis runs
             )
 
             if return_df:
@@ -1046,6 +1062,20 @@ class AnalysisMixin:
         
         # Store the full IndexSet for use across windows
         self.index_set = index_set
+        
+        # Pre-normalize locations for efficiency
+        if hasattr(self, "_sample_data_df"):
+            _, locs = self.sort_samples(samples)
+        else:
+            sample_data_path = self.config.get("sample_data")
+            if not sample_data_path:
+                raise ValueError("sample_data file path must be provided in config")
+            _, locs = self.sort_samples(samples, sample_data_path)
+        
+        # Normalize locations once
+        self.meanlong, self.sdlong, self.meanlat, self.sdlat, self.unnormedlocs, normalized_locs = (
+            normalize_locs(locs)
+        )
 
         for start in tqdm(windows):
             stop = start + int(window_size)
@@ -1053,19 +1083,17 @@ class AnalysisMixin:
             snp_indices = np.where(snp_mask)[0]
 
             if len(snp_indices) > 0:
-                # For now, we still need to create window genotypes
-                # Future optimization: modify train_holdout to accept SNP indices
-                window_genos = genotypes[snp_mask, :, :]
-                
                 # Clear existing model and weights
                 self.model = None
                 self.sample_weights = None
 
-                # Use the pre-computed holdout indices from IndexSet
-                self.train_holdout(
-                    genotypes=window_genos,
+                # Use efficient window training method
+                self.train_window(
+                    genotypes=genotypes,
                     samples=samples,
-                    holdout_indices=index_set.test,  # Use test indices from IndexSet
+                    window_snp_indices=snp_indices,
+                    index_set=index_set,
+                    normalized_locs=normalized_locs,
                 )
 
                 # Get predictions for holdout samples
@@ -1073,6 +1101,7 @@ class AnalysisMixin:
                     verbose=False,
                     return_df=True,
                     save_preds_to_disk=not save_full_pred_matrix,
+                    plot_summary=False,  # Don't plot during analysis runs
                 )
 
                 if return_df:
@@ -1344,7 +1373,8 @@ class AnalysisMixin:
                 pred_rows.append({
                     "sampleID": row["sampleID"],
                     "x_pred": row["x_pred"],
-                    "y_pred": row["y_pred"]
+                    "y_pred": row["y_pred"],
+                    "fold": fold_num
                 })
             keras.backend.clear_session()
 

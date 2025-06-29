@@ -18,6 +18,7 @@ class PredictionMixin:
         prediction_genotypes=None,
         return_df=False,
         save_preds_to_disk=True,
+        site_order=None,
     ):
         """Make predictions for samples with unknown locations.
 
@@ -30,6 +31,9 @@ class PredictionMixin:
                 Defaults to False.
             save_preds_to_disk (bool, optional): Whether to save predictions to disk.
                 Defaults to True.
+            site_order (np.ndarray, optional): Array of SNP indices for bootstrap resampling.
+                If provided, SNPs will be reordered according to these indices during prediction.
+                Used for bootstrap analyses to ensure consistent resampling between train and predict.
         Returns:
             numpy.ndarray or pandas.DataFrame: Array of predicted coordinates or DataFrame with
                 x,y coordinates and sampleID columns
@@ -41,6 +45,10 @@ class PredictionMixin:
         predgen = (
             prediction_genotypes if prediction_genotypes is not None else self.predgen
         )
+        
+        # Apply site resampling if site_order is provided
+        if site_order is not None and predgen is not None and len(predgen) > 0:
+            predgen = predgen[:, site_order]
 
         # Check if there are any samples to predict
         if predgen is None or len(predgen) == 0:
