@@ -46,6 +46,12 @@ class AnalysisMixin:
               can predict on samples with NA locations
             - With na_action='exclude': Only uses samples with known locations
             - With na_action='fail': Raises error if any NA samples found
+            
+        Warning:
+            Window analysis currently treats all SNP positions as continuous along a single
+            coordinate axis. If your data contains multiple chromosomes, windows may span
+            across chromosome boundaries. For accurate per-chromosome analysis, consider
+            filtering your data to single chromosomes before running window analysis.
         """
         # Store samples
         self.samples = samples
@@ -70,7 +76,7 @@ class AnalysisMixin:
             )
 
         # Get positions if not already stored
-        if not hasattr(self, "positions"):
+        if not hasattr(self, "positions") or self.positions is None:
             if hasattr(self, "_genotype_df"):
                 # Use positions from DataFrame columns
                 self.positions = np.array(self._genotype_df.columns, dtype=int)
@@ -78,9 +84,21 @@ class AnalysisMixin:
                 # Get positions from zarr file
                 callset = zarr.open_group(self.config["zarr"], mode="r")
                 self.positions = callset["variants/POS"][:]
+            elif self.config.get("vcf"):
+                # Re-read VCF to get positions and chromosomes
+                print("Loading SNP positions from VCF...")
+                import allel
+                vcf = allel.read_vcf(self.config["vcf"], fields=['POS', 'CHROM'])
+                if vcf is not None and "variants/POS" in vcf:
+                    self.positions = vcf["variants/POS"]
+                    if "variants/CHROM" in vcf:
+                        self.chromosomes = vcf["variants/CHROM"]
+                    print(f"Loaded {len(self.positions)} SNP positions")
+                else:
+                    raise ValueError(f"Could not load positions from VCF: {self.config['vcf']}")
             else:
                 raise ValueError(
-                    "SNP positions required for windowed analysis. Use zarr input or "
+                    "SNP positions required for windowed analysis. Use VCF, zarr input or "
                     "genotype DataFrame with position-labeled columns."
                 )
         
@@ -93,6 +111,18 @@ class AnalysisMixin:
 
         if window_stop is None:
             window_stop = max(self.positions)
+
+        # Check if we have chromosome information and warn if multiple chromosomes
+        if hasattr(self, "chromosomes") and self.chromosomes is not None:
+            unique_chroms = np.unique(self.chromosomes)
+            if len(unique_chroms) > 1:
+                import warnings
+                warnings.warn(
+                    f"Multiple chromosomes detected ({len(unique_chroms)}). "
+                    f"Window analysis currently treats all positions as continuous, "
+                    f"which may create windows spanning multiple chromosomes. "
+                    f"Consider filtering to single chromosomes for more accurate results."
+                )
 
         windows = range(int(window_start), int(window_stop), int(window_size))
 
@@ -842,6 +872,12 @@ class AnalysisMixin:
               must have known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
             - With na_action='fail': Raises error if any NA samples found
+            
+        Warning:
+            Window analysis currently treats all SNP positions as continuous along a single
+            coordinate axis. If your data contains multiple chromosomes, windows may span
+            across chromosome boundaries. For accurate per-chromosome analysis, consider
+            filtering your data to single chromosomes before running window analysis.
         """
         # Store samples and genotypes for efficient access
         self.samples = samples
@@ -889,15 +925,27 @@ class AnalysisMixin:
             )
 
         # Get positions and create holdout IndexSet
-        if not hasattr(self, "positions"):
+        if not hasattr(self, "positions") or self.positions is None:
             if hasattr(self, "_genotype_df"):
                 self.positions = np.array(self._genotype_df.columns, dtype=int)
             elif self.config.get("zarr"):
                 callset = zarr.open_group(self.config["zarr"], mode="r")
                 self.positions = callset["variants/POS"][:]
+            elif self.config.get("vcf"):
+                # Re-read VCF to get positions and chromosomes
+                print("Loading SNP positions from VCF...")
+                import allel
+                vcf = allel.read_vcf(self.config["vcf"], fields=['POS', 'CHROM'])
+                if vcf is not None and "variants/POS" in vcf:
+                    self.positions = vcf["variants/POS"]
+                    if "variants/CHROM" in vcf:
+                        self.chromosomes = vcf["variants/CHROM"]
+                    print(f"Loaded {len(self.positions)} SNP positions")
+                else:
+                    raise ValueError(f"Could not load positions from VCF: {self.config['vcf']}")
             else:
                 raise ValueError(
-                    "SNP positions required for windowed analysis. Use zarr input or "
+                    "SNP positions required for windowed analysis. Use VCF, zarr input or "
                     "genotype DataFrame with position-labeled columns."
                 )
         
@@ -932,6 +980,18 @@ class AnalysisMixin:
 
         if window_stop is None:
             window_stop = max(self.positions)
+
+        # Check if we have chromosome information and warn if multiple chromosomes
+        if hasattr(self, "chromosomes") and self.chromosomes is not None:
+            unique_chroms = np.unique(self.chromosomes)
+            if len(unique_chroms) > 1:
+                import warnings
+                warnings.warn(
+                    f"Multiple chromosomes detected ({len(unique_chroms)}). "
+                    f"Window analysis currently treats all positions as continuous, "
+                    f"which may create windows spanning multiple chromosomes. "
+                    f"Consider filtering to single chromosomes for more accurate results."
+                )
 
         windows = range(int(window_start), int(window_stop), int(window_size))
 
