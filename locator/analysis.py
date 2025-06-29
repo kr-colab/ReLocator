@@ -7,7 +7,7 @@ from tqdm import tqdm
 from tensorflow import keras
 import zarr
 
-from .utils import filter_snps, normalize_locs
+from .data import filter_snps_legacy as filter_snps, normalize_locs, IndexSet, make_tf_dataset
 
 
 class AnalysisMixin:
@@ -46,6 +46,12 @@ class AnalysisMixin:
               can predict on samples with NA locations
             - With na_action='exclude': Only uses samples with known locations
             - With na_action='fail': Raises error if any NA samples found
+            
+        Warning:
+            Window analysis currently treats all SNP positions as continuous along a single
+            coordinate axis. If your data contains multiple chromosomes, windows may span
+            across chromosome boundaries. For accurate per-chromosome analysis, consider
+            filtering your data to single chromosomes before running window analysis.
         """
         # Store samples
         self.samples = samples
@@ -70,7 +76,7 @@ class AnalysisMixin:
             )
 
         # Get positions if not already stored
-        if not hasattr(self, "positions"):
+        if not hasattr(self, "positions") or self.positions is None:
             if hasattr(self, "_genotype_df"):
                 # Use positions from DataFrame columns
                 self.positions = np.array(self._genotype_df.columns, dtype=int)
@@ -78,14 +84,45 @@ class AnalysisMixin:
                 # Get positions from zarr file
                 callset = zarr.open_group(self.config["zarr"], mode="r")
                 self.positions = callset["variants/POS"][:]
+            elif self.config.get("vcf"):
+                # Re-read VCF to get positions and chromosomes
+                print("Loading SNP positions from VCF...")
+                import allel
+                vcf = allel.read_vcf(self.config["vcf"], fields=['POS', 'CHROM'])
+                if vcf is not None and "variants/POS" in vcf:
+                    self.positions = vcf["variants/POS"]
+                    if "variants/CHROM" in vcf:
+                        self.chromosomes = vcf["variants/CHROM"]
+                    print(f"Loaded {len(self.positions)} SNP positions")
+                else:
+                    raise ValueError(f"Could not load positions from VCF: {self.config['vcf']}")
             else:
                 raise ValueError(
-                    "SNP positions required for windowed analysis. Use zarr input or "
+                    "SNP positions required for windowed analysis. Use VCF, zarr input or "
                     "genotype DataFrame with position-labeled columns."
                 )
+        
+        # Ensure positions were found
+        if not hasattr(self, "positions") or self.positions is None:
+            raise ValueError(
+                "SNP positions required for windowed analysis. Use zarr input or "
+                "genotype DataFrame with position-labeled columns."
+            )
 
         if window_stop is None:
             window_stop = max(self.positions)
+
+        # Check if we have chromosome information and warn if multiple chromosomes
+        if hasattr(self, "chromosomes") and self.chromosomes is not None:
+            unique_chroms = np.unique(self.chromosomes)
+            if len(unique_chroms) > 1:
+                import warnings
+                warnings.warn(
+                    f"Multiple chromosomes detected ({len(unique_chroms)}). "
+                    f"Window analysis currently treats all positions as continuous, "
+                    f"which may create windows spanning multiple chromosomes. "
+                    f"Consider filtering to single chromosomes for more accurate results."
+                )
 
         windows = range(int(window_start), int(window_stop), int(window_size))
 
@@ -109,8 +146,9 @@ class AnalysisMixin:
                 # Get genotypes for this window
                 window_genos = genotypes[in_window, :, :]
 
-                # Clear existing model
+                # Clear existing model and weights
                 self.model = None
+                self.sample_weights = None
 
                 # Train on window data
                 self.train(genotypes=window_genos, samples=samples, na_action=na_action)
@@ -122,16 +160,25 @@ class AnalysisMixin:
 
                 if return_df:
                     # Rename columns to include window start
-                    boot_preds = preds[["x", "y"]].copy()
-                    boot_preds.columns = [f"x_win{start}", f"y_win{start}"]
-                    pred_dfs.append(boot_preds)
+                    window_preds = preds[["sampleID", "x", "y"]].copy()
+                    window_preds.columns = ["sampleID", f"x_win{start}", f"y_win{start}"]
+                    pred_dfs.append(window_preds)
 
                 # Clear keras session
                 keras.backend.clear_session()
 
         if return_df:
-            # Concatenate all predictions and add sampleIDs
-            all_predictions = pd.concat([preds[["sampleID"]], *pred_dfs], axis=1)
+            # Merge all predictions from different windows
+            if not pred_dfs:
+                print("Warning: No windows contained SNPs. No predictions generated.")
+                return None
+                
+            # Start with the first window's predictions
+            all_predictions = pred_dfs[0]
+            
+            # Merge subsequent windows
+            for pred_df in pred_dfs[1:]:
+                all_predictions = all_predictions.merge(pred_df, on='sampleID', how='outer')
 
             if save_full_pred_matrix:
                 all_predictions.to_csv(
@@ -221,27 +268,38 @@ class AnalysisMixin:
         # Initial training to set up model (but don't output predictions)
         self.train(genotypes=genotypes, samples=samples, na_action=na_action)
 
+        # Store original data for reuse
+        original_filtered_genotypes = self.filtered_genotypes if hasattr(self, 'filtered_genotypes') else None
+        original_index_set = self.index_set if hasattr(self, 'index_set') else None
+        
+        # Calculate allele frequencies for the filtered genotypes
+        if original_filtered_genotypes is not None:
+            # Use filtered genotypes for allele frequency calculation
+            ac = self.filtered_genotypes  # Already in allele count format
+            af = np.mean(ac, axis=1) / 2.0  # Calculate allele frequencies
+        else:
+            # Fallback to old method
+            ac = genotypes.to_allele_counts()[:, :, 1]
+            af = np.array([np.sum(ac[i, :]) / (ac.shape[1] * 2) for i in range(ac.shape[0])])
+        
         print("starting jacknife resampling")
-        af = []
-        # Convert genotypes to allele counts first
-        ac = genotypes.to_allele_counts()[:, :, 1]  # Get counts of alternate allele
-
-        # Calculate allele frequencies
-        for i in range(ac.shape[0]):
-            freq = np.sum(ac[i, :]) / (ac.shape[1] * 2)
-            af.append(freq)
-        af = np.array(af)
-
+        
         for boot in tqdm(range(self.config.get("nboots", 50))):
-            callbacks = self._create_callbacks(boot)
-            pg = copy.deepcopy(self.predgen)
-
-            sites_to_remove = np.random.choice(
-                pg.shape[1], int(pg.shape[1] * prop), replace=False
-            )
-
+            # Generate mask for sites to keep (more efficient than sites to remove)
+            n_sites = self.traingen.shape[1] if hasattr(self, 'traingen') else ac.shape[0]
+            sites_to_keep = np.ones(n_sites, dtype=bool)
+            n_to_remove = int(n_sites * prop)
+            sites_to_remove = np.random.choice(n_sites, n_to_remove, replace=False)
+            sites_to_keep[sites_to_remove] = False
+            
+            # Create a modified prediction genotype array
+            # Instead of deep copy, create a new array only for removed sites
+            pg = self.predgen.copy()  # Shallow copy is sufficient
+            
+            # Replace removed sites with random draws from allele frequencies
             for i in sites_to_remove:
-                pg[:, i] = np.random.binomial(2, af[i], size=pg.shape[0])
+                if i < len(af):  # Ensure we have allele frequency for this site
+                    pg[:, i] = np.random.binomial(2, af[i], size=pg.shape[0])
 
             # Get predictions
             preds = self.predict(
@@ -328,9 +386,44 @@ class AnalysisMixin:
         # Initial training to set up model and data - pass na_action
         self.train(genotypes=genotypes, samples=samples, na_action=na_action)
 
-        # Store original locations
+        # Store original locations and filtered genotypes for reuse
         original_trainlocs = self.trainlocs
         original_testlocs = self.testlocs
+        original_filtered_genotypes = self.filtered_genotypes if hasattr(self, 'filtered_genotypes') else None
+        original_normalized_locs = np.vstack([
+            self.trainlocs,
+            self.testlocs,
+            np.full((self.predgen.shape[0], 2), np.nan) if self.predgen.shape[0] > 0 else np.empty((0, 2))
+        ])
+        original_index_set = self.index_set if hasattr(self, 'index_set') else None
+        
+        # Pre-calculate KDE bandwidth if needed
+        original_bandwidth = None
+        bandwidth_calculated = False
+        
+        if (self.config.get("weight_samples", {}).get("enabled", False) and
+            self.config.get("weight_samples", {}).get("method") == "KD"):
+            
+            existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
+            
+            if existing_bandwidth is None and len(original_trainlocs) > 1:
+                print("Pre-calculating optimal KDE bandwidth for bootstrap analysis...")
+                
+                from .sample_weights import get_global_bandwidth_optimizer
+                optimizer = get_global_bandwidth_optimizer()
+                
+                optimal_bandwidth = optimizer.get_bandwidth(
+                    original_trainlocs,
+                    cache_key=f"bootstrap_n{len(original_trainlocs)}",
+                    n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
+                    verbose=True
+                )
+                
+                # Temporarily set in config
+                self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
+                bandwidth_calculated = True
+                
+                print(f"Using bandwidth: {optimal_bandwidth:.3f}")
 
         # Create lists to store predictions
         pred_dfs = []
@@ -341,41 +434,40 @@ class AnalysisMixin:
             # Set random seed
             np.random.seed(np.random.choice(range(int(1e6)), 1))
 
-            # Create copies of data
-            traingen2 = copy.deepcopy(self.traingen)
-            testgen2 = copy.deepcopy(self.testgen)
-            predgen2 = copy.deepcopy(self.predgen)
-
-            # Resample sites with replacement
+            # Resample sites with replacement (no data copying!)
             site_order = np.random.choice(
-                traingen2.shape[1], traingen2.shape[1], replace=True
+                self.traingen.shape[1], self.traingen.shape[1], replace=True
             )
 
-            # Reorder sites in all datasets
-            traingen2 = traingen2[:, site_order]
-            testgen2 = testgen2[:, site_order]
-            predgen2 = predgen2[:, site_order]
-
-            # Clear existing model
+            # Clear existing model and weights
             self.model = None
+            self.sample_weights = None
+            
+            # Restore filtered genotypes and index set for tf.data pipeline
+            if original_filtered_genotypes is not None:
+                self.filtered_genotypes = original_filtered_genotypes
+                self.index_set = original_index_set
 
-            # Train on bootstrapped data with original locations
+            # Train with bootstrapped sites using site_order parameter
             self.train(
                 genotypes=None,
                 samples=samples,
                 boot=boot,
-                train_gen=traingen2,
-                test_gen=testgen2,
-                pred_gen=predgen2,
+                train_gen=self.traingen,  # Use original data
+                test_gen=self.testgen,
+                pred_gen=self.predgen,
                 train_locs=original_trainlocs,
                 test_locs=original_testlocs,
+                site_order=site_order,  # Pass site order for bootstrap resampling
             )
 
             # Get predictions
+            # The model expects predictions with the same site ordering as training
             preds = self.predict(
                 boot=boot,
                 verbose=False,
-                prediction_genotypes=predgen2,
+                prediction_genotypes=self.predgen,  # Use original data
+                site_order=site_order,  # Pass same site order for consistent resampling
                 return_df=True,
                 save_preds_to_disk=not save_full_pred_matrix,
             )
@@ -388,6 +480,14 @@ class AnalysisMixin:
 
             # Clear keras session
             keras.backend.clear_session()
+        
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                self.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                self.config["weight_samples"]["bandwidth"] = original_bandwidth
 
         if return_df:
             # Concatenate all predictions and add sampleIDs
@@ -426,7 +526,13 @@ class AnalysisMixin:
                 If None, uses self.na_action
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
-                for each holdout replicate, otherwise None
+                for each holdout replicate containing columns:
+                - sampleID: Sample identifier
+                - x_pred: Predicted longitude
+                - y_pred: Predicted latitude
+                - rep: Replicate number (0 to n_reps-1)
+                
+                Note: True locations are not included. Merge with sample metadata to calculate errors.
                 
         Notes:
             - With na_action='separate': Currently behaves like 'exclude' (holdouts 
@@ -479,11 +585,44 @@ class AnalysisMixin:
                 f"k ({k}) must be less than number of samples with known locations ({len(known_idx)})"
             )
 
+        # Pre-calculate KDE bandwidth if needed
+        original_bandwidth = None
+        bandwidth_calculated = False
+        
+        if (self.config.get("weight_samples", {}).get("enabled", False) and
+            self.config.get("weight_samples", {}).get("method") == "KD"):
+            
+            existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
+            
+            if existing_bandwidth is None:
+                # Get all samples with coordinates for bandwidth calculation
+                all_train_locs = locs[known_idx]
+                
+                if len(all_train_locs) > 1:
+                    print("Pre-calculating optimal KDE bandwidth for holdout analysis...")
+                    
+                    from .sample_weights import get_global_bandwidth_optimizer
+                    optimizer = get_global_bandwidth_optimizer()
+                    
+                    optimal_bandwidth = optimizer.get_bandwidth(
+                        all_train_locs,
+                        cache_key=f"holdouts_k{k}_n{len(all_train_locs)}",
+                        n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
+                        verbose=True
+                    )
+                    
+                    # Temporarily set in config
+                    self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
+                    bandwidth_calculated = True
+                    
+                    print(f"Using bandwidth: {optimal_bandwidth:.3f}")
+
         print(f"Running {n_reps} holdout replicates")
 
         for rep in tqdm(range(n_reps)):
-            # Clear existing model
+            # Clear existing model and weights
             self.model = None
+            self.sample_weights = None
 
             # Select holdout indices for this replicate
             if holdout_indices is not None and rep < len(holdout_indices):
@@ -504,6 +643,7 @@ class AnalysisMixin:
                 verbose=False,
                 return_df=True,
                 save_preds_to_disk=not save_full_pred_matrix,
+                plot_summary=False,  # Don't plot during analysis runs
             )
 
             if return_df:
@@ -515,6 +655,14 @@ class AnalysisMixin:
 
             # Clear keras session
             keras.backend.clear_session()
+
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                self.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                self.config["weight_samples"]["bandwidth"] = original_bandwidth
 
         if return_df:
             # Merge all predictions
@@ -558,7 +706,13 @@ class AnalysisMixin:
             
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
-                for each jacknife replicate, otherwise None
+                for each jacknife replicate containing columns:
+                - sampleID: Sample identifier
+                - x_pred: Predicted longitude  
+                - y_pred: Predicted latitude
+                - boot: Jacknife replicate number (0 to n_boots-1)
+                
+                Note: True locations are not included. Merge with sample metadata to calculate errors.
                 
         Notes:
             - With na_action='separate': Currently behaves like 'exclude' (holdouts 
@@ -601,6 +755,34 @@ class AnalysisMixin:
             k=k,
             holdout_indices=holdout_indices,
         )
+
+        # Pre-calculate KDE bandwidth if needed
+        original_bandwidth = None
+        bandwidth_calculated = False
+        
+        if (self.config.get("weight_samples", {}).get("enabled", False) and
+            self.config.get("weight_samples", {}).get("method") == "KD"):
+            
+            existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
+            
+            if existing_bandwidth is None and hasattr(self, 'trainlocs') and len(self.trainlocs) > 1:
+                print("Pre-calculating optimal KDE bandwidth for jacknife holdout analysis...")
+                
+                from .sample_weights import get_global_bandwidth_optimizer
+                optimizer = get_global_bandwidth_optimizer()
+                
+                optimal_bandwidth = optimizer.get_bandwidth(
+                    self.trainlocs,
+                    cache_key=f"jacknife_holdouts_n{len(self.trainlocs)}",
+                    n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
+                    verbose=True
+                )
+                
+                # Temporarily set in config
+                self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
+                bandwidth_calculated = True
+                
+                print(f"Using bandwidth: {optimal_bandwidth:.3f}")
 
         # Calculate allele frequencies
         print("Calculating allele frequencies...")
@@ -646,6 +828,14 @@ class AnalysisMixin:
             )
 
             pred_dfs.append(boot_df)
+
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                self.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                self.config["weight_samples"]["bandwidth"] = original_bandwidth
 
         if return_df:
             # Merge all predictions
@@ -698,16 +888,43 @@ class AnalysisMixin:
               must have known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
             - With na_action='fail': Raises error if any NA samples found
+            
+        Warning:
+            Window analysis currently treats all SNP positions as continuous along a single
+            coordinate axis. If your data contains multiple chromosomes, windows may span
+            across chromosome boundaries. For accurate per-chromosome analysis, consider
+            filtering your data to single chromosomes before running window analysis.
         """
-        # Store samples
+        # Store samples and genotypes for efficient access
         self.samples = samples
+        self.genotypes = genotypes
         
         # Use instance default if na_action not specified
         if na_action is None:
             na_action = self.na_action
             
-        # Get sample status
+        # Get sample status and create NA mask
         status = self.get_sample_status(samples)
+        na_mask = None
+        if status['n_na'] > 0:
+            # Create boolean mask for NA samples
+            if isinstance(samples, pd.DataFrame):
+                na_mask = samples['x'].isna() | samples['y'].isna()
+            else:
+                # Use stored sample data or load from config
+                if hasattr(self, "_sample_data_df"):
+                    sample_data = self._sample_data_df
+                else:
+                    sample_data_path = self.config.get("sample_data")
+                    if sample_data_path:
+                        sample_data = pd.read_csv(sample_data_path, sep="\t")
+                    else:
+                        raise ValueError("No sample data available")
+                
+                merged = pd.DataFrame({"sampleID": samples})
+                merged = merged.merge(sample_data, on="sampleID", how="left")
+                na_mask = merged['x'].isna() | merged['y'].isna()
+            na_mask = na_mask.values
         
         # Report status
         print(f"Windows holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
@@ -723,46 +940,160 @@ class AnalysisMixin:
                 f"Set na_action='separate' or 'exclude' to proceed."
             )
 
-        # Get positions
-        if not hasattr(self, "positions"):
+        # Get positions and create holdout IndexSet
+        if not hasattr(self, "positions") or self.positions is None:
             if hasattr(self, "_genotype_df"):
                 self.positions = np.array(self._genotype_df.columns, dtype=int)
             elif self.config.get("zarr"):
                 callset = zarr.open_group(self.config["zarr"], mode="r")
                 self.positions = callset["variants/POS"][:]
+            elif self.config.get("vcf"):
+                # Re-read VCF to get positions and chromosomes
+                print("Loading SNP positions from VCF...")
+                import allel
+                vcf = allel.read_vcf(self.config["vcf"], fields=['POS', 'CHROM'])
+                if vcf is not None and "variants/POS" in vcf:
+                    self.positions = vcf["variants/POS"]
+                    if "variants/CHROM" in vcf:
+                        self.chromosomes = vcf["variants/CHROM"]
+                    print(f"Loaded {len(self.positions)} SNP positions")
+                else:
+                    raise ValueError(f"Could not load positions from VCF: {self.config['vcf']}")
             else:
                 raise ValueError(
-                    "SNP positions required for windowed analysis. Use zarr input or "
+                    "SNP positions required for windowed analysis. Use VCF, zarr input or "
                     "genotype DataFrame with position-labeled columns."
                 )
+        
+        # Create IndexSet for holdout splitting
+        n_samples = len(samples)
+        if holdout_indices is not None:
+            # Use provided holdout indices
+            holdout_idx = np.array(holdout_indices)
+            train_idx = np.setdiff1d(np.arange(n_samples), holdout_idx)
+            
+            # Apply NA mask if needed
+            if na_mask is not None and (na_action == 'exclude' or na_action == 'separate'):
+                # Only keep samples with known coordinates
+                valid_mask = ~na_mask
+                holdout_idx = holdout_idx[valid_mask[holdout_idx]]
+                train_idx = train_idx[valid_mask[train_idx]]
+            
+            index_set = IndexSet(
+                indices={'train': train_idx, 'test': holdout_idx},
+                total_samples=n_samples,
+                na_mask=na_mask
+            )
+        else:
+            # Random holdout selection using IndexSet
+            index_set = IndexSet.random_split(
+                n=n_samples,
+                splits={'train': 1.0 - k/n_samples, 'test': k/n_samples},
+                seed=self.config.get('seed', 42),
+                na_mask=na_mask,
+                na_action=na_action if na_action != 'separate' else 'exclude'
+            )
 
         if window_stop is None:
             window_stop = max(self.positions)
+
+        # Check if we have chromosome information and warn if multiple chromosomes
+        if hasattr(self, "chromosomes") and self.chromosomes is not None:
+            unique_chroms = np.unique(self.chromosomes)
+            if len(unique_chroms) > 1:
+                import warnings
+                warnings.warn(
+                    f"Multiple chromosomes detected ({len(unique_chroms)}). "
+                    f"Window analysis currently treats all positions as continuous, "
+                    f"which may create windows spanning multiple chromosomes. "
+                    f"Consider filtering to single chromosomes for more accurate results."
+                )
 
         windows = range(int(window_start), int(window_stop), int(window_size))
 
         # Create lists to store predictions
         pred_dfs = []
 
+        # Pre-calculate KDE bandwidth if needed
+        original_bandwidth = None
+        bandwidth_calculated = False
+        
+        if (self.config.get("weight_samples", {}).get("enabled", False) and
+            self.config.get("weight_samples", {}).get("method") == "KD"):
+            
+            existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
+            
+            if existing_bandwidth is None:
+                # Get sample data and locations
+                if hasattr(self, "_sample_data_df"):
+                    sample_data, locs = self.sort_samples(samples)
+                else:
+                    sample_data_path = self.config.get("sample_data")
+                    if not sample_data_path:
+                        raise ValueError("sample_data file path must be provided in config")
+                    sample_data, locs = self.sort_samples(samples, sample_data_path)
+                
+                # Get training locations (exclude holdout samples)
+                train_mask = np.ones(len(samples), dtype=bool)
+                train_mask[index_set.test] = False
+                train_mask = train_mask & ~np.isnan(locs[:, 0])
+                train_locs = locs[train_mask]
+                
+                if len(train_locs) > 1:
+                    print("Pre-calculating optimal KDE bandwidth for windows holdout analysis...")
+                    
+                    from .sample_weights import get_global_bandwidth_optimizer
+                    optimizer = get_global_bandwidth_optimizer()
+                    
+                    optimal_bandwidth = optimizer.get_bandwidth(
+                        train_locs,
+                        cache_key=f"windows_holdouts_n{len(train_locs)}",
+                        n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
+                        verbose=True
+                    )
+                    
+                    # Temporarily set in config
+                    self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
+                    bandwidth_calculated = True
+                    
+                    print(f"Using bandwidth: {optimal_bandwidth:.3f}")
+
         print(f"Running windowed analysis for holdout samples")
+        
+        # Store the full IndexSet for use across windows
+        self.index_set = index_set
+        
+        # Pre-normalize locations for efficiency
+        if hasattr(self, "_sample_data_df"):
+            _, locs = self.sort_samples(samples)
+        else:
+            sample_data_path = self.config.get("sample_data")
+            if not sample_data_path:
+                raise ValueError("sample_data file path must be provided in config")
+            _, locs = self.sort_samples(samples, sample_data_path)
+        
+        # Normalize locations once
+        self.meanlong, self.sdlong, self.meanlat, self.sdlat, self.unnormedlocs, normalized_locs = (
+            normalize_locs(locs)
+        )
 
         for start in tqdm(windows):
             stop = start + int(window_size)
-            in_window = (self.positions >= start) & (self.positions < stop)
+            snp_mask = (self.positions >= start) & (self.positions < stop)
+            snp_indices = np.where(snp_mask)[0]
 
-            if sum(in_window) > 0:
-                # Get genotypes for this window
-                window_genos = genotypes[in_window, :, :]
-
-                # Clear existing model
+            if len(snp_indices) > 0:
+                # Clear existing model and weights
                 self.model = None
+                self.sample_weights = None
 
-                # Train with holdout on window data
-                self.train_holdout(
-                    genotypes=window_genos,
+                # Use efficient window training method
+                self.train_window(
+                    genotypes=genotypes,
                     samples=samples,
-                    k=k,
-                    holdout_indices=holdout_indices,
+                    window_snp_indices=snp_indices,
+                    index_set=index_set,
+                    normalized_locs=normalized_locs,
                 )
 
                 # Get predictions for holdout samples
@@ -770,6 +1101,7 @@ class AnalysisMixin:
                     verbose=False,
                     return_df=True,
                     save_preds_to_disk=not save_full_pred_matrix,
+                    plot_summary=False,  # Don't plot during analysis runs
                 )
 
                 if return_df:
@@ -782,7 +1114,20 @@ class AnalysisMixin:
                 # Clear keras session
                 keras.backend.clear_session()
 
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                self.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                self.config["weight_samples"]["bandwidth"] = original_bandwidth
+
         if return_df:
+            # Check if any windows had predictions
+            if not pred_dfs:
+                print("Warning: No windows contained SNPs. No predictions generated.")
+                return None
+                
             # Merge all predictions
             all_predictions = pred_dfs[0]
             for df in pred_dfs[1:]:
@@ -874,13 +1219,32 @@ class AnalysisMixin:
             na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
                 If None, uses self.na_action
         Returns:
-            pandas.DataFrame or None: If return_df=True, returns DataFrame with one prediction per held-out sample (columns: sampleID, x_pred, y_pred)
+            pandas.DataFrame or None: If return_df=True, returns DataFrame with one prediction 
+                per held-out sample containing columns:
+                - sampleID: Sample identifier
+                - x_pred: Predicted longitude
+                - y_pred: Predicted latitude
+                
+                Note: True locations are not included. To calculate prediction errors, merge
+                the returned DataFrame with your sample metadata using the sampleID column.
             
         Notes:
             - With na_action='separate': Currently behaves like 'exclude' (k-fold requires 
               known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
             - With na_action='fail': Raises error if any NA samples found
+            
+        Example:
+            >>> # Run k-fold cross-validation
+            >>> predictions = locator.run_k_fold_holdouts(genotypes, samples, k=10, return_df=True)
+            >>> 
+            >>> # Merge with true locations to calculate errors
+            >>> sample_data = pd.read_csv('samples.tsv', sep='\t')
+            >>> merged = predictions.merge(sample_data[['sampleID', 'x', 'y']], on='sampleID')
+            >>> merged['error_km'] = np.sqrt(
+            ...     (merged['x'] - merged['x_pred'])**2 + 
+            ...     (merged['y'] - merged['y_pred'])**2
+            ... ) * 111.32  # Convert degrees to km
         """
         self.samples = samples
         
@@ -917,19 +1281,27 @@ class AnalysisMixin:
                 raise ValueError("sample_data file path must be provided in config")
             sample_data, locs = self.sort_samples(samples, sample_data_path)
 
-        # Get indices of samples with known locations
-        known_idx = np.argwhere(~np.isnan(locs[:, 0]))
-        known_idx = np.array([x[0] for x in known_idx])
-        n_samples = len(known_idx)
-        if k > n_samples:
+        # Create NA mask
+        na_mask = np.isnan(locs[:, 0])
+        n_total_samples = len(locs)
+        n_samples_with_coords = np.sum(~na_mask)
+        
+        if k > n_samples_with_coords:
             raise ValueError(
-                f"k ({k}) must be less than or equal to number of samples with known locations ({n_samples})"
+                f"k ({k}) must be less than or equal to number of samples with known locations ({n_samples_with_coords})"
             )
 
-        # Shuffle and split known_idx into k folds
-        rng = np.random.default_rng()
-        shuffled_idx = rng.permutation(known_idx)
-        folds = np.array_split(shuffled_idx, k)
+        # Create list to store IndexSets for each fold
+        fold_index_sets = []
+        for fold_idx in range(k):
+            index_set = IndexSet.from_k_fold(
+                n=n_total_samples,
+                k=k,
+                fold=fold_idx,
+                seed=None,  # Will use numpy's global random state
+                na_mask=na_mask
+            )
+            fold_index_sets.append(index_set)
 
         # Store original keras_verbose setting
         original_keras_verbose = self.config.get('keras_verbose', 1)
@@ -938,18 +1310,57 @@ class AnalysisMixin:
         if not verbose:
             self.config['keras_verbose'] = 0
         
+        # Pre-calculate KDE bandwidth if needed
+        original_bandwidth = None
+        bandwidth_calculated = False
+        
+        if (self.config.get("weight_samples", {}).get("enabled", False) and
+            self.config.get("weight_samples", {}).get("method") == "KD"):
+            
+            existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
+            
+            if existing_bandwidth is None:
+                # Get all samples with coordinates for bandwidth calculation
+                coords_mask = ~na_mask
+                all_train_locs = locs[coords_mask]
+                
+                if len(all_train_locs) > 1:
+                    if verbose:
+                        print("Pre-calculating optimal KDE bandwidth for k-fold CV...")
+                    
+                    from .sample_weights import get_global_bandwidth_optimizer
+                    optimizer = get_global_bandwidth_optimizer()
+                    
+                    optimal_bandwidth = optimizer.get_bandwidth(
+                        all_train_locs,
+                        cache_key=f"kfold_k{k}_n{len(all_train_locs)}",
+                        n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
+                        verbose=verbose
+                    )
+                    
+                    # Temporarily set in config
+                    self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
+                    bandwidth_calculated = True
+                    
+                    if verbose:
+                        print(f"Using bandwidth: {optimal_bandwidth:.3f}")
+        
         if verbose:
             print(f"Running true {k}-fold cross-validation with nonoverlapping holdout sets")
-            fold_iterator = tqdm(enumerate(folds), total=k, desc="K-fold progress")
+            fold_iterator = tqdm(enumerate(fold_index_sets), total=k, desc="K-fold progress")
         else:
-            fold_iterator = enumerate(folds)
+            fold_iterator = enumerate(fold_index_sets)
 
-        for _, fold_indices in fold_iterator:
+        for fold_num, index_set in fold_iterator:
             self.model = None
+            # Reset sample weights to ensure proper recalculation for each fold
+            self.sample_weights = None
+            # Use the test indices from this fold as holdout
+            holdout_indices = index_set.test
             self.train_holdout(
                 genotypes=genotypes,
                 samples=samples,
-                holdout_indices=fold_indices,
+                holdout_indices=holdout_indices,
             )
             preds = self.predict_holdout(
                 verbose=False,
@@ -962,12 +1373,21 @@ class AnalysisMixin:
                 pred_rows.append({
                     "sampleID": row["sampleID"],
                     "x_pred": row["x_pred"],
-                    "y_pred": row["y_pred"]
+                    "y_pred": row["y_pred"],
+                    "fold": fold_num
                 })
             keras.backend.clear_session()
 
         # Restore original keras_verbose setting
         self.config['keras_verbose'] = original_keras_verbose
+        
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                self.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                self.config["weight_samples"]["bandwidth"] = original_bandwidth
 
         if return_df:
             all_predictions = pd.DataFrame(pred_rows)

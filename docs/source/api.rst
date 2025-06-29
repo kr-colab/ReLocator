@@ -23,37 +23,6 @@ Locator
    :inherited-members:
    :show-inheritance:
 
-NA Handling Methods
-^^^^^^^^^^^^^^^^^^^
-.. automethod:: Locator.get_sample_status
-
-   Analyze which samples have known coordinates vs NA coordinates.
-
-   Args:
-       samples: Array of sample IDs
-       sample_data: Optional DataFrame with coordinate data. If None, uses instance sample_data.
-
-   Returns:
-       dict: Dictionary containing:
-           - known_indices: Indices of samples with coordinates
-           - na_indices: Indices of samples without coordinates
-           - known_samples: Sample IDs with coordinates
-           - na_samples: Sample IDs without coordinates
-           - n_known: Count of samples with coordinates
-           - n_na: Count of samples without coordinates
-           - total: Total number of samples
-
-.. automethod:: Locator.check_data
-
-   Check data quality and report sample coordinate status.
-
-   Args:
-       genotypes: Genotype array
-       samples: Sample IDs
-       verbose: Whether to print detailed report
-
-   Returns:
-       dict: Sample status information from get_sample_status()
 
 Ensemble Module
 ---------------
@@ -82,29 +51,106 @@ Models Module
 
    Converts species range shapefile to raster format.
 
+Data Module
+-----------
+.. module:: locator.data
+
+This module contains the memory-efficient data pipeline components.
+
+IndexSet
+^^^^^^^^
+.. autoclass:: IndexSet
+   :members:
+   :show-inheritance:
+
+   Memory-efficient data splitting using indices instead of array copies.
+
+   Class Methods:
+       - random_split: Create random train/test/validation splits
+       - k_fold: Create k-fold cross-validation splits
+       - group_split: Create splits based on group membership
+       - leave_one_out: Create leave-one-out splits
+
+   Attributes:
+       - indices: Dictionary mapping split names to index arrays
+       - n: Total number of samples
+
+Data Pipeline Functions
+^^^^^^^^^^^^^^^^^^^^^^^
+.. autofunction:: make_tf_dataset
+
+   Create an optimized TensorFlow dataset for training or evaluation.
+
+   Args:
+       genotypes: Genotype array of shape (n_snps, n_samples)
+       coordinates: Coordinate array of shape (n_samples, 2)
+       index_set: IndexSet object defining data splits
+       split: Which split to use ('train', 'test', 'val', etc.)
+       batch_size: Batch size for the dataset
+       training: Whether this is for training (enables shuffling)
+       cache: Whether to cache the dataset in memory
+       augment_flip_rate: Rate for genotype flipping augmentation
+       sample_weights: Optional array of sample weights
+       site_order: Optional array for SNP resampling (bootstrap)
+
+   Returns:
+       tf.data.Dataset: Optimized TensorFlow dataset
+
+Preprocessing Functions
+^^^^^^^^^^^^^^^^^^^^^^^
+.. autofunction:: filter_snps
+
+   Filter SNPs based on criteria and return statistics.
+
+   Args:
+       genotypes: GenotypeArray to filter
+       min_mac: Minimum minor allele count
+       max_snps: Maximum number of SNPs to retain
+       impute: Whether to impute missing data
+
+   Returns:
+       tuple: (filtered_array, FilterStats)
+
+.. autofunction:: normalize_locs
+
+   Normalize geographic coordinates to zero mean and unit variance.
+
+   Args:
+       locs: Array of [longitude, latitude] coordinates
+
+   Returns:
+       tuple: (NormalizationParams, normalized_coordinates)
+
+.. autofunction:: impute_missing
+
+   Impute missing genotype values.
+
+   Args:
+       allele_counts: Allele count array with missing values
+       verbose: Whether to print progress
+
+   Returns:
+       numpy.ndarray: Imputed allele counts
+
+Data Classes
+^^^^^^^^^^^^
+.. autoclass:: FilterStats
+   :members:
+
+   Statistics from SNP filtering operations.
+
+.. autoclass:: NormalizationParams
+   :members:
+
+   Parameters for coordinate normalization with apply/reverse methods.
+
 Utils Module
 ------------
 .. module:: locator.utils
 
-.. autofunction:: normalize_locs
+.. autofunction:: weight_samples
 
-   Normalizes geographic coordinates.
-
-   Args:
-       locs (numpy.ndarray): Array of [longitude, latitude] coordinates
-
-   Returns:
-       tuple: (mean_long, sd_long, mean_lat, sd_lat, normalized_locs)
-
-.. autofunction:: filter_snps
-
-   Filters SNPs based on minor allele count and other criteria.
-
-   Args:
-       genotypes (allel.GenotypeArray): Input genotype data
-       min_mac (int): Minimum minor allele count
-       max_snps (int, optional): Maximum number of SNPs to retain
-       impute (bool): Whether to impute missing values
+   Calculate sample weights based on geographic density.
 
 GPU Optimizer Module
 --------------------
@@ -166,11 +212,11 @@ Analysis Module
    :members:
    :noindex:
 
-Visualization Module
-^^^^^^^^^^^^^^^^^^^^
-.. module:: locator.visualization
+Plotting Module
+^^^^^^^^^^^^^^^
+.. module:: locator.plotting
 
-.. autoclass:: VisualizationMixin
+.. autoclass:: PlottingMixin
    :members:
    :noindex:
 
@@ -234,7 +280,6 @@ The default configuration for Locator includes:
        # GPU optimization (enabled by default)
        "use_mixed_precision": True,
        "gpu_batch_size": "auto",
-       "use_efficient_pipeline": True,
        "gradient_accumulation_steps": 1,
        "gpu_memory_mode": "growth",
        "enable_xla": False

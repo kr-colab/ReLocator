@@ -29,9 +29,8 @@ Locator supports multiple input formats for genotype data:
    locator = Locator(config)
    
    # Note: GPU optimizations are enabled by default!
-   # To disable them:
+   # To disable mixed precision:
    # config["use_mixed_precision"] = False
-   # config["use_efficient_pipeline"] = False
    
    # Load data from various formats:
    #
@@ -152,6 +151,33 @@ Incorporate species range constraints:
    
    locator = Locator(config)
 
+Memory-Efficient Data Pipeline
+------------------------------
+Locator uses a memory-efficient data pipeline that is **enabled by default**. This pipeline:
+
+- Uses index-based operations instead of copying arrays
+- Provides up to 50% memory savings for large datasets
+- Enables efficient bootstrap resampling without data duplication
+- Integrates seamlessly with GPU optimizations
+
+The pipeline works automatically, but you can access its components directly:
+
+.. code-block:: python
+
+   from locator.data import IndexSet, make_tf_dataset
+   
+   # Create memory-efficient data splits
+   index_set = IndexSet.random_split(
+       n=len(samples),
+       splits={"train": 0.8, "test": 0.2}
+   )
+   
+   # Access data without copying
+   train_data = genotypes[:, index_set.train]
+   test_data = genotypes[:, index_set.test]
+
+For detailed information, see :doc:`data_pipeline_guide`.
+
 GPU Configuration
 -----------------
 Locator includes automatic GPU optimizations that are **enabled by default**. These provide 3-5x speedup on large datasets.
@@ -176,8 +202,7 @@ Basic GPU configuration:
    config = {
        "out": "custom_gpu",
        "use_mixed_precision": False,  # Disable mixed precision
-       "gpu_batch_size": 128,         # Use fixed batch size instead of auto
-       "use_efficient_pipeline": False # Disable tf.data optimizations
+       "gpu_batch_size": 128          # Use fixed batch size instead of auto
    }
 
 For detailed GPU optimization information, see :doc:`gpu_optimization_guide`.

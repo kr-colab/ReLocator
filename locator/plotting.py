@@ -18,6 +18,24 @@ import base64
 __all__ = ["kde_predict", "plot_predictions", "plot_error_summary", "plot_sample_weights", "PlottingMixin"]
 
 
+def _handle_plot_display(show=None):
+    """Handle whether to display a plot based on environment.
+    
+    Args:
+        show: None (auto-detect), True (always show), or False (never show)
+    """
+    if show is None:
+        # Auto-detect: show only if in interactive environment (Jupyter/IPython)
+        try:
+            get_ipython()  # This is defined in IPython/Jupyter
+            plt.show()
+        except NameError:
+            # Not in interactive environment, don't show
+            pass
+    elif show:
+        plt.show()
+
+
 def kde_predict(x_coords, y_coords, xlim=(0, 50), ylim=(0, 50), n_points=100):
     """Calculate kernel density estimate of predictions
 
@@ -64,6 +82,7 @@ def plot_predictions(
     height=4,
     dpi=300,
     n_levels=3,
+    show=None,
 ):
     """Plot locator predictions from jacknife, bootstrap, or windows analyses.
 
@@ -239,7 +258,8 @@ def plot_predictions(
     plt.tight_layout()
     if out_prefix:
         plt.savefig(f"{out_prefix}_predictions.pdf")
-    plt.show()
+    _handle_plot_display(show)
+    plt.close()
     return None
 
 
@@ -253,6 +273,7 @@ def plot_error_summary(
     dpi=300,
     use_geodesic=True,
     include_training_locs=True,
+    show=None,
 ):
     """Plot summary of prediction errors from holdout analysis
 
@@ -266,6 +287,7 @@ def plot_error_summary(
         dpi: Figure resolution
         use_geodesic: Use geodesic distances (km) if True, else Euclidean distances
         include_training_locs: Whether to plot training locations and use their extent
+        show: Whether to display plot (None=auto-detect, True=always show, False=never show)
     """
     # Validate predictions input
     if predictions.empty:
@@ -442,7 +464,8 @@ def plot_error_summary(
     plt.tight_layout()
     if out_prefix:
         plt.savefig(f"{out_prefix}_error_summary.png")
-    plt.show()
+    
+    _handle_plot_display(show)
     plt.close()
     return None
 
@@ -453,6 +476,7 @@ def plot_sample_weights(
     width=5,
     height=3,
     dpi=300,
+    show=None,
 ):
     """Plot sample weights assined to training locations
 
@@ -574,7 +598,7 @@ def plot_sample_weights(
         if out_prefix:
             plt.savefig(f"{out_prefix}_sample_weights.png")
 
-        plt.show()
+        _handle_plot_display(show)
         plt.close()
     else:
         # Create figure
@@ -625,7 +649,7 @@ def plot_sample_weights(
         if out_prefix:
             plt.savefig(f"{out_prefix}_sample_weights.png")
 
-        plt.show()
+        _handle_plot_display(show)
         plt.close()
     return None
 
