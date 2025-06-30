@@ -539,7 +539,7 @@ class PredictionMixin:
         verbose=True,
         return_df=False,
         save_preds_to_disk=True,
-        plot_summary=True,
+        plot_summary=None,
         plot_map=True,
     ):
         """Predict locations for held out samples.
@@ -548,7 +548,7 @@ class PredictionMixin:
             verbose: Print progress and metrics
             return_df: Return predictions as pandas DataFrame
             save_preds_to_disk: Save predictions to disk
-            plot_summary: Display error summary plot in notebook (only if return_df=True)
+            plot_summary: Display error summary plot in notebook. If None, uses config['plot_by_default']
             plot_map: Display map of predictions (only if plot_summary=True)
 
         Returns:
@@ -557,6 +557,10 @@ class PredictionMixin:
         """
         if not hasattr(self, "holdout_idx") or not hasattr(self, "holdout_locs"):
             raise ValueError("No holdout data found. Run train_holdout() first.")
+        
+        # Use config default if plot_summary not specified
+        if plot_summary is None:
+            plot_summary = self.config.get('plot_by_default', True)
 
         if verbose:
             print("Predicting locations for holdout samples...")

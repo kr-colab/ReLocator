@@ -249,6 +249,8 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             # Verbosity control
             "verbose_splits": False,  # Show train/val/test split sizes
             "verbose_batch_size": False,  # Show batch size optimization details
+            # Plotting control
+            "plot_by_default": True,  # Whether predict_holdout plots by default
         }
 
         # Update with user config
