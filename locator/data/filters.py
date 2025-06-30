@@ -56,17 +56,19 @@ def normalize_locs(locs: np.ndarray) -> Tuple[float, float, float, float, np.nda
     Returns:
         Tuple of (meanlong, sdlong, meanlat, sdlat, unnormedlocs, normedlocs)
     """
+    # Only copy if we're going to modify the original
     unnormedlocs = locs.copy()
     meanlong = np.nanmean(locs[:, 0])
     sdlong = np.nanstd(locs[:, 0])
     meanlat = np.nanmean(locs[:, 1])
     sdlat = np.nanstd(locs[:, 1])
     
-    # Create normalization params for future use
-    params = NormalizationParams(meanlong, sdlong, meanlat, sdlat)
-    locs = params.apply(locs)
+    # Create new array for normalized locations
+    normedlocs = np.empty_like(locs, dtype=np.float64)
+    normedlocs[:, 0] = (locs[:, 0] - meanlong) / sdlong
+    normedlocs[:, 1] = (locs[:, 1] - meanlat) / sdlat
     
-    return meanlong, sdlong, meanlat, sdlat, unnormedlocs, locs
+    return meanlong, sdlong, meanlat, sdlat, unnormedlocs, normedlocs
 
 
 def normalize_locs_params(locs: np.ndarray) -> Tuple[NormalizationParams, np.ndarray, np.ndarray]:
@@ -140,18 +142,25 @@ def filter_snps(genotypes,
     n_mac_filtered = 0
     n_random_subset = 0
     
-    # Filter for biallelic sites
-    tmp = genotypes.count_alleles()
-    biallel = tmp.is_biallelic()
-    n_biallelic_filtered = n_snps_original - np.sum(biallel)
-    genotypes = genotypes[biallel, :, :]
+    # Count alleles once and reuse
+    allele_counts = genotypes.count_alleles()
     
-    # Filter by minor allele count
+    # Filter for biallelic sites
+    biallel = allele_counts.is_biallelic()
+    n_biallelic_filtered = n_snps_original - np.sum(biallel)
+    
+    # Combine biallelic and MAC filters if needed
     if min_mac > 1:
-        derived_counts = genotypes.count_alleles()[:, 1]
-        ac_filter = [x >= min_mac for x in derived_counts]
-        n_mac_filtered = len(ac_filter) - np.sum(ac_filter)
-        genotypes = genotypes[ac_filter, :, :]
+        # Get derived allele counts from already computed allele_counts
+        derived_counts = allele_counts[biallel, 1]
+        mac_filter = derived_counts >= min_mac
+        n_mac_filtered = len(mac_filter) - np.sum(mac_filter)
+        # Combine filters
+        combined_filter = np.zeros(n_snps_original, dtype=bool)
+        combined_filter[biallel] = mac_filter
+        genotypes = genotypes[combined_filter, :, :]
+    else:
+        genotypes = genotypes[biallel, :, :]
     
     # Impute or convert to allele counts
     if impute:
