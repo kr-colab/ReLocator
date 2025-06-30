@@ -289,6 +289,16 @@ class TrainingMixin:
             
             # Store prediction indices
             self.pred_indices = pred
+            
+            # Report split sizes if verbose_splits is enabled
+            if self.config.get("verbose_splits", False):
+                print(f"\nData split summary:")
+                print(f"  Training samples: {len(train)} ({len(train)/len(samples)*100:.1f}%)")
+                print(f"  Validation samples: {len(test)} ({len(test)/len(samples)*100:.1f}%)")
+                if len(pred) > 0:
+                    print(f"  Prediction samples (no coords): {len(pred)} ({len(pred)/len(samples)*100:.1f}%)")
+                print(f"  Total samples: {len(samples)}")
+                print(f"  Total SNPs: {self.filtered_genotypes.shape[0]}")
         else:
             # Use pre-processed data (for bootstrapping)
             self.traingen = train_gen
@@ -490,6 +500,15 @@ class TrainingMixin:
         self.holdout_idx = holdout_idx
         self.holdout_gen = np.transpose(self.filtered_genotypes[:, holdout_idx])
         self.holdout_locs = normalized_locs[holdout_idx]
+        
+        # Report split sizes if verbose_splits is enabled
+        if self.config.get("verbose_splits", False):
+            print(f"\nHoldout split summary:")
+            print(f"  Training samples: {len(train_indices)} ({len(train_indices)/len(samples)*100:.1f}%)")
+            print(f"  Validation samples: {len(test_indices)} ({len(test_indices)/len(samples)*100:.1f}%)")
+            print(f"  Holdout samples: {len(holdout_idx)} ({len(holdout_idx)/len(samples)*100:.1f}%)")
+            print(f"  Total samples: {len(samples)}")
+            print(f"  Total SNPs: {self.filtered_genotypes.shape[0]}")
 
         # Handle sample weights if enabled
         self._calculate_sample_weights(train_indices)
@@ -809,6 +828,7 @@ class TrainingMixin:
     def _determine_batch_size(self, dataset_size):
         """Determine optimal batch size. Extracted to avoid duplication."""
         batch_size = self.config.get("batch_size", 32)
+        verbose_batch_size = self.config.get("verbose_batch_size", False)
         
         if self.config.get("gpu_batch_size") == "auto" and not self.config.get("disable_gpu", False):
             try:
@@ -816,12 +836,15 @@ class TrainingMixin:
                     self.model, 
                     input_shape=(self.filtered_genotypes.shape[0],),
                     target_memory_usage=0.85,
-                    dataset_size=dataset_size
+                    dataset_size=dataset_size,
+                    verbose=verbose_batch_size
                 )
-                print(f"Using optimized batch size: {optimal_batch}")
+                if verbose_batch_size:
+                    print(f"Using optimized batch size: {optimal_batch}")
                 batch_size = optimal_batch
             except Exception as e:
-                print(f"Failed to optimize batch size: {e}. Using default: {batch_size}")
+                if verbose_batch_size:
+                    print(f"Failed to optimize batch size: {e}. Using default: {batch_size}")
         elif isinstance(self.config.get("gpu_batch_size"), int):
             batch_size = self.config["gpu_batch_size"]
         

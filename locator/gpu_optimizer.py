@@ -50,7 +50,8 @@ class GPUOptimizer:
                              target_memory_usage: float = 0.9,
                              min_batch_size: int = 32,
                              max_batch_size: int = 2048,
-                             dataset_size: Optional[int] = None) -> int:
+                             dataset_size: Optional[int] = None,
+                             verbose: bool = True) -> int:
         """Dynamically determine optimal batch size for GPU memory.
         
         Args:
@@ -73,7 +74,7 @@ class GPUOptimizer:
             # Don't use batch size larger than 10% of dataset
             max_reasonable_batch = max(min_batch_size, dataset_size // 10)
             max_batch_size = min(max_batch_size, max_reasonable_batch)
-            if max_batch_size < 2048:
+            if max_batch_size < 2048 and verbose:
                 print(f"Limiting max batch size to {max_batch_size} based on dataset size {dataset_size}")
             
         # Get available GPU memory
@@ -93,7 +94,8 @@ class GPUOptimizer:
                 available_memory = 24 * 1024 * 1024 * 1024 * target_memory_usage  # 24GB
             else:
                 available_memory = 8 * 1024 * 1024 * 1024 * target_memory_usage  # 8GB default
-            print(f"Using estimated GPU memory for {gpus[0].name}")
+            if verbose:
+                print(f"Using estimated GPU memory for {gpus[0].name}")
         
         # Binary search for optimal batch size
         left, right = min_batch_size, max_batch_size
@@ -139,9 +141,11 @@ class GPUOptimizer:
         if dataset_size is not None and optimal_batch_size > dataset_size // 10:
             # For small datasets, use a more conservative batch size
             optimal_batch_size = min(optimal_batch_size, max(32, dataset_size // 16))
-            print(f"Adjusted batch size for small dataset: {optimal_batch_size}")
+            if verbose:
+                print(f"Adjusted batch size for small dataset: {optimal_batch_size}")
         
-        print(f"Optimal batch size determined: {optimal_batch_size}")
+        if verbose:
+            print(f"Optimal batch size determined: {optimal_batch_size}")
         return optimal_batch_size
     
     @staticmethod
