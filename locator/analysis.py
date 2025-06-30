@@ -1273,6 +1273,16 @@ class AnalysisMixin:
         
         print(f"Running leave-one-out cross-validation for {n_known} samples")
         
+        # For large leave-one-out, warn about memory usage
+        if n_known > 50 and not self.config.get("disable_gpu", False):
+            print("Warning: Leave-one-out with many samples may accumulate GPU memory.")
+            print("Consider setting config['disable_gpu'] = True if you encounter memory issues.")
+            
+            # Also ensure HDF5 optimization is enabled for LOO
+            if not self.config.get("holdout_no_intermediate_saves", True):
+                print("Tip: Enabling holdout_no_intermediate_saves will improve performance.")
+                self.config["holdout_no_intermediate_saves"] = True
+        
         # Run k-fold with k equal to number of known samples
         # This will create folds with exactly 1 sample each
         result = self.run_k_fold_holdouts(
@@ -1456,9 +1466,20 @@ class AnalysisMixin:
             fold_iterator = enumerate(fold_index_sets)
 
         for fold_num, index_set in fold_iterator:
-            self.model = None
+            # Clear any existing model and GPU memory before starting
+            if self.model is not None:
+                del self.model
+                self.model = None
             # Reset sample weights to ensure proper recalculation for each fold
             self.sample_weights = None
+            
+            # Clear Keras session and GPU memory
+            keras.backend.clear_session()
+            if not self.config.get("disable_gpu", False):
+                # Force garbage collection to free GPU memory
+                import gc
+                gc.collect()
+            
             # Use the test indices from this fold as holdout
             holdout_indices = index_set.test
             self.train_holdout(
@@ -1480,7 +1501,11 @@ class AnalysisMixin:
                     "y_pred": row["y_pred"],
                     "fold": fold_num
                 })
-            keras.backend.clear_session()
+            
+            # Clear model reference again after prediction
+            if self.model is not None:
+                del self.model
+                self.model = None
 
         # Restore original keras_verbose setting
         self.config['keras_verbose'] = original_keras_verbose
