@@ -92,6 +92,7 @@ class TrainingMixin:
             save_weights_only=True,
             monitor="val_loss",
             save_freq="epoch",
+            mode="min",  # Explicitly set mode for clarity
         )
 
         earlystop = keras.callbacks.EarlyStopping(
@@ -497,7 +498,29 @@ class TrainingMixin:
         self.model = self._create_model(input_shape=self.filtered_genotypes.shape[0])
         
         # Create callbacks
-        callbacks = self._create_callbacks()
+        # For train_holdout, we might want to skip saving intermediate models
+        # to reduce file I/O overhead during k-fold cross-validation
+        if self.config.get("holdout_no_intermediate_saves", False):
+            # Minimal callbacks without file saves
+            callbacks = [
+                keras.callbacks.EarlyStopping(
+                    monitor="val_loss",
+                    min_delta=0,
+                    patience=self.config.get("patience", 100),
+                    restore_best_weights=True,
+                ),
+                keras.callbacks.ReduceLROnPlateau(
+                    monitor="val_loss",
+                    factor=0.5,
+                    patience=self.config.get("patience", 100) // 6,
+                    verbose=self.config.get("keras_verbose", 1),
+                    mode="auto",
+                    min_delta=0,
+                    min_lr=1e-5,
+                ),
+            ]
+        else:
+            callbacks = self._create_callbacks()
 
         # Determine batch size
         batch_size = self._determine_batch_size(len(train_indices))
@@ -536,6 +559,12 @@ class TrainingMixin:
         # Save training history
         hist_df = pd.DataFrame(self.history.history)
         hist_df.to_csv(f"{self.config['out']}_history.txt", sep="\t", index=False)
+
+        # If we skipped intermediate saves, save the final model now
+        if self.config.get("holdout_no_intermediate_saves", False):
+            filepath = f"{self.config['out']}.weights.h5"
+            self.model.save_weights(filepath)
+            print(f"Saved final model weights to {filepath}")
 
         # Save model metadata
         self._save_model_metadata()
