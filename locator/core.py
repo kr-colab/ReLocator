@@ -245,7 +245,7 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             "enable_xla": False,  # Experimental XLA compilation
             # Performance optimization
             "optimize_tf_parallelism": True,  # Reduce TF parallelism to prevent forking
-            "holdout_no_intermediate_saves": False,  # Skip intermediate model saves in k-fold CV
+            "holdout_no_intermediate_saves": True,  # Skip intermediate model saves in k-fold CV
             # Verbosity control
             "verbose_splits": False,  # Show train/val/test split sizes
             "verbose_batch_size": False,  # Show batch size optimization details
