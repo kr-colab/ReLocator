@@ -498,7 +498,8 @@ class TrainingMixin:
         
         # Store holdout data for prediction
         self.holdout_idx = holdout_idx
-        self.holdout_gen = np.transpose(self.filtered_genotypes[:, holdout_idx])
+        # Use a view with F-order to avoid copy during transpose
+        self.holdout_gen = np.asarray(self.filtered_genotypes[:, holdout_idx].T, order='C')
         self.holdout_locs = normalized_locs[holdout_idx]
         
         # Report split sizes if verbose_splits is enabled
@@ -869,14 +870,10 @@ class TrainingMixin:
             normalize_locs(train_locs)
         )
         
-        # Normalize all locations using the training parameters
-        normalized_locs = np.array([
-            [
-                (x[0] - self.meanlong) / self.sdlong if not np.isnan(x[0]) else np.nan,
-                (x[1] - self.meanlat) / self.sdlat if not np.isnan(x[1]) else np.nan,
-            ]
-            for x in locs
-        ])
+        # Normalize all locations using the training parameters (vectorized)
+        normalized_locs = np.empty_like(locs, dtype=np.float64)
+        normalized_locs[:, 0] = (locs[:, 0] - self.meanlong) / self.sdlong
+        normalized_locs[:, 1] = (locs[:, 1] - self.meanlat) / self.sdlat
         
         # Store normalized locations for each split
         self.trainlocs = normalized_train_locs
