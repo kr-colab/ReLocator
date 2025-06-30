@@ -1329,13 +1329,15 @@ class AnalysisMixin:
             )
 
         # Create list to store IndexSets for each fold
+        # Use a fixed base seed for reproducibility, but different for each run
+        base_seed = np.random.randint(0, 2**31 - 1)
         fold_index_sets = []
         for fold_idx in range(k):
             index_set = IndexSet.from_k_fold(
                 n=n_total_samples,
                 k=k,
                 fold=fold_idx,
-                seed=None,  # Will use numpy's global random state
+                seed=base_seed,  # All folds use same shuffle for consistent k-fold split
                 na_mask=na_mask
             )
             fold_index_sets.append(index_set)

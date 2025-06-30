@@ -46,11 +46,14 @@ class TrainingMixin:
         
         # Create IndexSet with custom splits for train/test
         splits = {"train": train_split, "test": 1.0 - train_split}
+        # Generate a random seed for this split
+        split_seed = np.random.randint(0, 2**31 - 1)
         index_set = IndexSet.random_split(
             n=n_samples,
             splits=splits,
             na_mask=na_mask,
-            na_action=na_action
+            na_action=na_action,
+            seed=split_seed
         )
         
         # Get indices
@@ -475,7 +478,11 @@ class TrainingMixin:
         train_split = self.config.get("train_split", 0.9)
         n_train = int(n_available * train_split)
         
-        np.random.shuffle(available_indices)
+        # Use a random seed based on holdout indices to ensure different splits
+        # for different holdout sets while maintaining reproducibility
+        split_seed = int(np.sum(holdout_idx) % (2**31 - 1))
+        rng = np.random.RandomState(split_seed)
+        rng.shuffle(available_indices)
         train_indices = available_indices[:n_train]
         test_indices = available_indices[n_train:]
 
