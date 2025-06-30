@@ -243,6 +243,9 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             "gradient_accumulation_steps": 1,  # For simulating larger batches
             "gpu_memory_mode": "growth",  # 'growth', 'preallocate', or 'limit:MB'
             "enable_xla": False,  # Experimental XLA compilation
+            # Performance optimization
+            "optimize_tf_parallelism": True,  # Reduce TF parallelism to prevent forking
+            "holdout_no_intermediate_saves": False,  # Skip intermediate model saves in k-fold CV
         }
 
         # Update with user config
@@ -359,7 +362,30 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
         else:
             print("GPU usage disabled by configuration.")
             self.config["use_mixed_precision"] = False
+        
+        # Configure TensorFlow for optimal performance
+        self._configure_tensorflow_optimization()
 
+    def _configure_tensorflow_optimization(self):
+        """Configure TensorFlow to minimize process forking and optimize performance."""
+        # Reduce inter-op parallelism to prevent excessive forking
+        if self.config.get("optimize_tf_parallelism", True):
+            # Set to 1 to prevent process forking, use threads within ops instead
+            tf.config.threading.set_inter_op_parallelism_threads(1)
+            # Keep intra-op threads reasonable for parallel operations
+            tf.config.threading.set_intra_op_parallelism_threads(4)
+            
+            # Also set environment variables for consistency
+            import os
+            os.environ['TF_NUM_INTEROP_THREADS'] = '1'
+            os.environ['TF_NUM_INTRAOP_THREADS'] = '4'
+            
+            # Disable tf.data autotune to prevent excessive parallelism
+            os.environ['TF_DATA_EXPERIMENTAL_SLACK'] = 'false'
+            
+            if self.config.get("keras_verbose", 1) >= 1:
+                print("TensorFlow threading optimized to reduce process forking")
+    
     @property
     def sample_data(self) -> pd.DataFrame:
         """
