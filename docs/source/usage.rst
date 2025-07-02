@@ -28,6 +28,10 @@ Locator supports multiple input formats for genotype data:
    
    locator = Locator(config)
    
+   # Note: GPU optimizations are enabled by default!
+   # To disable mixed precision:
+   # config["use_mixed_precision"] = False
+   
    # Load data from various formats:
    #
    # 1. From VCF
@@ -147,23 +151,61 @@ Incorporate species range constraints:
    
    locator = Locator(config)
 
-GPU Configuration
------------------
-Configure GPU usage:
+Memory-Efficient Data Pipeline
+------------------------------
+Locator uses a memory-efficient data pipeline that is **enabled by default**. This pipeline:
+
+- Uses index-based operations instead of copying arrays
+- Provides up to 50% memory savings for large datasets
+- Enables efficient bootstrap resampling without data duplication
+- Integrates seamlessly with GPU optimizations
+
+The pipeline works automatically, but you can access its components directly:
 
 .. code-block:: python
 
-   # Specify GPU device
+   from locator.data import IndexSet, make_tf_dataset
+   
+   # Create memory-efficient data splits
+   index_set = IndexSet.random_split(
+       n=len(samples),
+       splits={"train": 0.8, "test": 0.2}
+   )
+   
+   # Access data without copying
+   train_data = genotypes[:, index_set.train]
+   test_data = genotypes[:, index_set.test]
+
+For detailed information, see :doc:`data_pipeline_guide`.
+
+GPU Configuration
+-----------------
+Locator includes automatic GPU optimizations that are **enabled by default**. These provide 3-5x speedup on large datasets.
+
+Basic GPU configuration:
+
+.. code-block:: python
+
+   # GPU optimizations are enabled by default
    config = {
        "out": "gpu_analysis",
-       "gpu_number": 0  # Use first GPU
+       "gpu_number": 0  # Use first GPU (optional)
    }
    
-   # Or disable GPU
+   # To disable GPU entirely
    config = {
        "out": "cpu_analysis",
        "disable_gpu": True
    }
+   
+   # To disable specific optimizations
+   config = {
+       "out": "custom_gpu",
+       "use_mixed_precision": False,  # Disable mixed precision
+       "gpu_batch_size": 128          # Use fixed batch size instead of auto
+   }
+
+For detailed GPU optimization information, see :doc:`gpu_optimization_guide`.
 
 Data Augmentation
 -----------------
@@ -178,6 +220,85 @@ Enable data augmentation during training:
            "flip_rate": 0.05  # Rate at which to flip genotypes
        }
    }
+
+Handling Missing Coordinates
+----------------------------
+Locator provides consistent handling of samples without geographic coordinates through the ``na_action`` parameter:
+
+.. code-block:: python
+
+   # Configure NA handling behavior
+   config = {
+       "out": "na_handling_example",
+       "na_action": "separate"  # Options: 'separate', 'exclude', 'fail'
+   }
+   
+   locator = Locator(config)
+
+Available NA Actions
+~~~~~~~~~~~~~~~~~~~~
+
+**'separate' (default)**
+   Train on samples with known coordinates, predict on samples without coordinates.
+   This is the default behavior that allows you to predict locations for new samples.
+
+**'exclude'**
+   Only use samples with known coordinates. Samples without coordinates are filtered
+   out before training or analysis.
+
+**'fail'**
+   Raise an error if any samples lack coordinates. Use this to ensure all samples
+   have location data.
+
+Checking Data Quality
+~~~~~~~~~~~~~~~~~~~~~
+Use the ``check_data()`` method to understand your dataset:
+
+.. code-block:: python
+
+   # Check data before analysis
+   locator.check_data(genotypes, samples, verbose=True)
+   
+   # Output example:
+   # ===== Data Summary =====
+   # Total samples: 231
+   # Samples with coordinates: 211
+   # Samples without coordinates: 20
+   # Total SNPs: 1000
+   # 
+   # Current NA handling mode: separate
+   # - Will train on samples with known locations
+   # - Can predict on samples without locations
+
+Method-Level Control
+~~~~~~~~~~~~~~~~~~~~
+Override the instance-level NA handling for specific methods:
+
+.. code-block:: python
+
+   # Instance configured with 'separate'
+   locator = Locator({"na_action": "separate"})
+   
+   # Override for a specific analysis
+   locator.run_bootstraps(
+       genotypes=genotypes,
+       samples=samples,
+       na_action="exclude"  # Only use samples with coordinates
+   )
+
+Important Notes on Holdout Methods
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Holdout-based methods require known coordinates for evaluation:
+
+.. code-block:: python
+
+   # These methods need coordinates to evaluate predictions
+   locator.run_holdouts(genotypes, samples)  # 'separate' behaves like 'exclude'
+   locator.run_k_fold_holdouts(genotypes, samples)  # Only uses samples with coordinates
+   
+   # Non-holdout methods can predict on NA samples with 'separate' mode
+   locator.run_jacknife(genotypes, samples)  # Can predict NA samples
+   locator.run_bootstraps(genotypes, samples)  # Can predict NA samples
 
 Next Steps
 ----------

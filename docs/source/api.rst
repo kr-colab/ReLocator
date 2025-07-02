@@ -19,7 +19,14 @@ Core Module
 Locator
 ^^^^^^^
 .. autoclass:: Locator
+   :members:
+   :inherited-members:
+   :show-inheritance:
 
+
+Ensemble Module
+---------------
+.. module:: locator.ensemble
 
 EnsembleLocator
 ^^^^^^^^^^^^^^^
@@ -44,29 +51,174 @@ Models Module
 
    Converts species range shapefile to raster format.
 
+Data Module
+-----------
+.. module:: locator.data
+
+This module contains the memory-efficient data pipeline components.
+
+IndexSet
+^^^^^^^^
+.. autoclass:: IndexSet
+   :members:
+   :show-inheritance:
+
+   Memory-efficient data splitting using indices instead of array copies.
+
+   Class Methods:
+       - random_split: Create random train/test/validation splits
+       - k_fold: Create k-fold cross-validation splits
+       - group_split: Create splits based on group membership
+       - leave_one_out: Create leave-one-out splits
+
+   Attributes:
+       - indices: Dictionary mapping split names to index arrays
+       - n: Total number of samples
+
+Data Pipeline Functions
+^^^^^^^^^^^^^^^^^^^^^^^
+.. autofunction:: make_tf_dataset
+
+   Create an optimized TensorFlow dataset for training or evaluation.
+
+   Args:
+       genotypes: Genotype array of shape (n_snps, n_samples)
+       coordinates: Coordinate array of shape (n_samples, 2)
+       index_set: IndexSet object defining data splits
+       split: Which split to use ('train', 'test', 'val', etc.)
+       batch_size: Batch size for the dataset
+       training: Whether this is for training (enables shuffling)
+       cache: Whether to cache the dataset in memory
+       augment_flip_rate: Rate for genotype flipping augmentation
+       sample_weights: Optional array of sample weights
+       site_order: Optional array for SNP resampling (bootstrap)
+
+   Returns:
+       tf.data.Dataset: Optimized TensorFlow dataset
+
+Preprocessing Functions
+^^^^^^^^^^^^^^^^^^^^^^^
+.. autofunction:: filter_snps
+
+   Filter SNPs based on criteria and return statistics.
+
+   Args:
+       genotypes: GenotypeArray to filter
+       min_mac: Minimum minor allele count
+       max_snps: Maximum number of SNPs to retain
+       impute: Whether to impute missing data
+
+   Returns:
+       tuple: (filtered_array, FilterStats)
+
+.. autofunction:: normalize_locs
+
+   Normalize geographic coordinates to zero mean and unit variance.
+
+   Args:
+       locs: Array of [longitude, latitude] coordinates
+
+   Returns:
+       tuple: (NormalizationParams, normalized_coordinates)
+
+.. autofunction:: impute_missing
+
+   Impute missing genotype values.
+
+   Args:
+       allele_counts: Allele count array with missing values
+       verbose: Whether to print progress
+
+   Returns:
+       numpy.ndarray: Imputed allele counts
+
+Data Classes
+^^^^^^^^^^^^
+.. autoclass:: FilterStats
+   :members:
+
+   Statistics from SNP filtering operations.
+
+.. autoclass:: NormalizationParams
+   :members:
+
+   Parameters for coordinate normalization with apply/reverse methods.
+
 Utils Module
 ------------
 .. module:: locator.utils
 
-.. autofunction:: normalize_locs
+.. autofunction:: weight_samples
 
-   Normalizes geographic coordinates.
+   Calculate sample weights based on geographic density.
+
+GPU Optimizer Module
+--------------------
+.. module:: locator.gpu_optimizer
+
+.. autoclass:: GPUOptimizer
+   :members:
+
+   Utilities for optimizing GPU performance in TensorFlow.
+
+.. autoclass:: GradientAccumulator
+   :members:
+
+   Helper class for gradient accumulation to simulate larger batch sizes.
+
+.. autofunction:: create_optimized_training_config
+
+   Create an optimized configuration for GPU training.
 
    Args:
-       locs (numpy.ndarray): Array of [longitude, latitude] coordinates
+       base_config (dict): Base configuration dictionary
 
    Returns:
-       tuple: (mean_long, sd_long, mean_lat, sd_lat, normalized_locs)
+       dict: Optimized configuration with GPU settings
 
-.. autofunction:: filter_snps
+Internal Modules (Implementation Details)
+-----------------------------------------
+*These modules contain the implementation of Locator functionality. Users typically interact with these through the main Locator class.*
 
-   Filters SNPs based on minor allele count and other criteria.
+Loaders Module
+^^^^^^^^^^^^^^
+.. module:: locator.loaders
 
-   Args:
-       genotypes (allel.GenotypeArray): Input genotype data
-       min_mac (int): Minimum minor allele count
-       max_snps (int, optional): Maximum number of SNPs to retain
-       impute (bool): Whether to impute missing values
+.. autoclass:: DataLoaderMixin
+   :members:
+   :noindex:
+
+Training Module
+^^^^^^^^^^^^^^^
+.. module:: locator.training
+
+.. autoclass:: TrainingMixin
+   :members:
+   :noindex:
+
+Prediction Module
+^^^^^^^^^^^^^^^^^
+.. module:: locator.prediction
+
+.. autoclass:: PredictionMixin
+   :members:
+   :noindex:
+
+Analysis Module
+^^^^^^^^^^^^^^^
+.. module:: locator.analysis
+
+.. autoclass:: AnalysisMixin
+   :members:
+   :noindex:
+
+Plotting Module
+^^^^^^^^^^^^^^^
+.. module:: locator.plotting
+
+.. autoclass:: PlottingMixin
+   :members:
+   :noindex:
 
 
 
@@ -123,7 +275,14 @@ The default configuration for Locator includes:
        "use_range_penalty": False,
        "species_range_shapefile": None,
        "resolution": 0.05,
-       "penalty_weight": 1.0
+       "penalty_weight": 1.0,
+       
+       # GPU optimization (enabled by default)
+       "use_mixed_precision": True,
+       "gpu_batch_size": "auto",
+       "gradient_accumulation_steps": 1,
+       "gpu_memory_mode": "growth",
+       "enable_xla": False
    }
 
 Input Formats
@@ -238,7 +397,7 @@ Ensemble Analysis
 
 .. code-block:: python
 
-    from locator.core import EnsembleLocator
+    from locator import EnsembleLocator
     
     # Initialize ensemble
     ensemble = EnsembleLocator(

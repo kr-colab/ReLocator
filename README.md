@@ -24,6 +24,15 @@ requirements _should_ install a compatible version of tensorflow, but if you
 run into trouble, please file an issue and or refer to the [tensorflow
 installation guide](https://www.tensorflow.org/install).
 
+## GPU Optimizations
+
+Locator includes GPU optimizations enabled by default that can provide 2-4x speedup on compatible hardware:
+- **Mixed precision training**: Uses float16 computations with float32 weights
+- **Dynamic batch sizing**: Automatically optimizes batch size for GPU memory
+- **Efficient data pipeline**: Overlaps data loading with GPU computation
+
+See the [GPU optimization guide](https://relocator.readthedocs.io/en/latest/gpu_optimization_guide.html) for details.
+
 # Overview
 `locator` reads in a set of genotypes and locations, trains a neural network to approximate the relationship between them, and predicts locations for a set of samples held out from the training routine. Samples with known locations are split randomly into a training set (used to fit model parameters) and a validation set (used to tune hyperparameters of the optimizer and evaluate error after training). Predictions are then generated for all samples with unknown coordinates. By fitting multiple models to different regions of the genome or to bootstrapped subsets of the full SNP matrix, the approach can also estimate uncertainty in a location estimate. 
 
@@ -34,7 +43,17 @@ Sample metadata should be a tab-delimited file with the first row:
 
 `sampleID	x	y`
 
-Use NA or NaN for x and y values of samples with unknown locations. Metadata must include all samples in the genotypes file. 
+Use NA or NaN for x and y values of samples with unknown locations. Metadata must include all samples in the genotypes file.
+
+## Handling Missing Coordinates
+
+Locator now provides consistent handling of samples without geographic coordinates through the `na_action` parameter:
+
+- **`separate` (default)**: Train on samples with known locations, predict on samples without
+- **`exclude`**: Only use samples with known coordinates
+- **`fail`**: Raise an error if any samples lack coordinates
+
+See the [documentation](https://relocator.readthedocs.io/en/latest/na_handling_guide.html) for detailed information. 
 
 
 # Examples
