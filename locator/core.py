@@ -222,10 +222,10 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             },
             "weight_samples": {
                 "enabled": False,  # Whether to weight samples by distance
-                "method": "KD",     # Method for weighting samples ("KD", "histogram", "df")
-                "xbins": 10,       # Number of bins for histogram
-                "ybins": 10,       # Number of bins for histogram
-                "lam": 1.0,       # Exponent for weights
+                "method": None,     # Method for weighting samples ("KD", "histogram", "df")
+                "xbins": None,       # Number of bins for histogram
+                "ybins": None,       # Number of bins for histogram
+                "lam": None,       # Exponent for weights
                 "bandwidth": None, # Bandwidth for KDE
                 "weightdf": None,  # DataFrame containing sample weights
                 },
