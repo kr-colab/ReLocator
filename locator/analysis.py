@@ -1329,13 +1329,20 @@ class AnalysisMixin:
             )
 
         # Create list to store IndexSets for each fold
+        # Use a fixed seed based on config seed or numpy's current state
+        if 'seed' in self.config and self.config['seed'] is not None:
+            kfold_seed = self.config['seed']
+        else:
+            # Generate a seed from current numpy state to ensure consistency
+            kfold_seed = np.random.randint(0, 2**31)
+        
         fold_index_sets = []
         for fold_idx in range(k):
             index_set = IndexSet.from_k_fold(
                 n=n_total_samples,
                 k=k,
                 fold=fold_idx,
-                seed=None,  # Will use numpy's global random state
+                seed=kfold_seed,  # Use consistent seed for all folds
                 na_mask=na_mask
             )
             fold_index_sets.append(index_set)
