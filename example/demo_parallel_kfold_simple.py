@@ -6,15 +6,11 @@ This script:
 1. Loads genotype data from VCF and sample metadata
 2. Runs parallel k-fold cross-validation 
 3. Generates error summary plots from the predictions
+
+All output is saved to a directory named "demo_output".
 """
 
 import os
-import numpy as np
-import pandas as pd
-from pathlib import Path
-import allel
-import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend
 
 # Import locator modules
 from locator import Locator
@@ -80,6 +76,7 @@ def main():
             gpu_fraction=0.0,       # CPU mode
             return_df=True,
             verbose=True,
+            save_full_pred_matrix=False, # we will save this on our own.
         )
         
         print(f"\nPredictions completed!")
@@ -99,10 +96,10 @@ def main():
             plot_map=False,
             include_training_locs=True,
             show=False,          # Save only
-            
+            out_prefix=os.path.join(output_dir, "kfold"),
         )
   
-        print(f"Error summary plot saved to: {output_dir}/error_summary_error_summary.png")
+        print(f"Error summary plot saved to: {output_dir}/kfold_error_summary.png")
         
             
     except Exception as e:
