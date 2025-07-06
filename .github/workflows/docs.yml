@@ -1,0 +1,62 @@
+name: Documentation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+    
+    - name: Cache pip packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-docs-${{ hashFiles('**/setup.py', '**/requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-docs-
+          ${{ runner.os }}-pip-
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libproj-dev proj-data proj-bin libgeos-dev
+        sudo apt-get install -y pandoc
+    
+    - name: Install package with docs dependencies
+      env:
+        CUDA_VISIBLE_DEVICES: "-1"
+      run: |
+        python -m pip install --upgrade pip
+        pip install wheel
+        pip install -e ".[docs]"
+    
+    - name: Build documentation
+      run: |
+        cd docs
+        make clean
+        make html
+    
+    - name: Check for documentation warnings
+      run: |
+        cd docs
+        if make html 2>&1 | grep -i "warning"; then
+          echo "Documentation build produced warnings"
+          exit 1
+        fi
+    
+    - name: Upload documentation artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: documentation
+        path: docs/_build/html/
