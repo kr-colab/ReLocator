@@ -70,6 +70,12 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
         """
         # Set GPU before importing TensorFlow
         os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+        
+        # Set TensorFlow threading environment variables BEFORE import
+        # This ensures the tf.data pipeline doesn't fork excessively
+        os.environ['TF_NUM_INTEROP_THREADS'] = '1'
+        os.environ['TF_NUM_INTRAOP_THREADS'] = '4'
+        os.environ['TF_DATA_EXPERIMENTAL_SLACK'] = 'false'
     
         # Import inside worker to ensure proper GPU setup
         import tensorflow as tf
@@ -516,6 +522,12 @@ def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
         """
         # Set GPU before importing TensorFlow
         os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+        
+        # Set TensorFlow threading environment variables BEFORE import
+        # This ensures the tf.data pipeline doesn't fork excessively
+        os.environ['TF_NUM_INTEROP_THREADS'] = '1'
+        os.environ['TF_NUM_INTRAOP_THREADS'] = '4'
+        os.environ['TF_DATA_EXPERIMENTAL_SLACK'] = 'false'
     
         # Import inside worker to ensure proper GPU setup
         import tensorflow as tf
@@ -669,9 +681,10 @@ def parallel_holdouts(
             raise ValueError("sample_data file path must be provided in config")
         sample_data, locs = locator.sort_samples(samples, sample_data_path)
     
-    # Get indices of samples with known locations
-    known_idx = np.argwhere(~np.isnan(locs[:, 0]))
-    known_idx = np.array([x[0] for x in known_idx])
+    # Get indices of samples with known locations (optimized)
+    # Use boolean indexing instead of argwhere for efficiency
+    known_mask = ~np.isnan(locs[:, 0])
+    known_idx = np.where(known_mask)[0]
     
     if k >= len(known_idx):
         raise ValueError(
@@ -892,6 +905,12 @@ def _create_ray_windows_worker(gpu_fraction: float = 1.0):
         """
         # Set GPU before importing TensorFlow
         os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+        
+        # Set TensorFlow threading environment variables BEFORE import
+        # This ensures the tf.data pipeline doesn't fork excessively
+        os.environ['TF_NUM_INTEROP_THREADS'] = '1'
+        os.environ['TF_NUM_INTRAOP_THREADS'] = '4'
+        os.environ['TF_DATA_EXPERIMENTAL_SLACK'] = 'false'
     
         # Import inside worker to ensure proper GPU setup
         import tensorflow as tf
@@ -1167,7 +1186,10 @@ def parallel_windows_holdouts(
     if holdout_indices is not None:
         # Use provided holdout indices
         holdout_idx = np.array(holdout_indices)
-        train_idx = np.setdiff1d(np.arange(n_samples), holdout_idx)
+        # More efficient than setdiff1d for this use case
+        train_mask = np.ones(n_samples, dtype=bool)
+        train_mask[holdout_idx] = False
+        train_idx = np.where(train_mask)[0]
         
         # Apply NA mask if needed
         if na_mask is not None and (na_action == 'exclude' or na_action == 'separate'):
@@ -1228,10 +1250,12 @@ def parallel_windows_holdouts(
                     raise ValueError("sample_data file path must be provided in config")
                 sample_data, locs = locator.sort_samples(samples, sample_data_path)
             
-            # Get training locations (exclude holdout samples)
+            # Get training locations (exclude holdout samples) - optimized
+            # Avoid creating intermediate arrays
             train_mask = np.ones(len(samples), dtype=bool)
             train_mask[index_set.test] = False
-            train_mask = train_mask & ~np.isnan(locs[:, 0])
+            # Combine with location mask in-place
+            train_mask &= ~np.isnan(locs[:, 0])
             train_locs = locs[train_mask]
             
             if len(train_locs) > 1:
