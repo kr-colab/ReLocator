@@ -83,6 +83,7 @@ This example shows how to work with datasets where some samples lack geographic 
 
     from locator import Locator
     import pandas as pd
+    import numpy as np
     
     # Sample data with some missing coordinates
     sample_data = pd.DataFrame({
@@ -307,29 +308,37 @@ Working with Sample Weights
 
 .. code-block:: python
 
-    from locator.utils import weight_samples
+    from locator import Locator
+    from locator.plotting import plot_sample_weights
     
-    # Calculate geographic density weights
-    weights_dict = weight_samples(
-        method="gaussian",
-        trainlocs=coordinates[train_indices],
-        trainsamps=samples[train_indices],
-        bandwidth=100  # km
-    )
-    
-    # Use weights in training
+    # Use kernel density (KD) weighting to upweight undersampled regions
     loc = Locator({
         "out": "weighted_analysis",
         "sample_data": "samples.txt",
         "weight_samples": {
             "enabled": True,
-            "method": "gaussian",
-            "bandwidth": 100
+            "method": "KD",  # Kernel density method
+            "bandwidth": None  # Auto-calculate optimal bandwidth
         }
     })
     
-    # Weights are applied automatically
+    # Weights are applied automatically during training
     loc.train(genotypes=genotypes, samples=samples)
+    
+    # Visualize the sample weights
+    plot_sample_weights(loc, "sample_weight_distribution")
+    
+    # Alternative: Use histogram binning method
+    loc_hist = Locator({
+        "out": "hist_weighted",
+        "sample_data": "samples.txt",
+        "weight_samples": {
+            "enabled": True,
+            "method": "hist",
+            "xbins": 20,
+            "ybins": 20
+        }
+    })
 
 Loading and Using Saved Models
 ------------------------------
@@ -384,4 +393,263 @@ Command Line Usage
         --predict_from_weights my_model.weights.h5 \
         --zarr new_data.zarr \
         --sample_data new_samples.txt \
-        --out new_predictions 
+        --out new_predictions
+
+GPU Optimization Examples
+-------------------------
+
+Automatic GPU Optimization
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from locator import Locator
+    
+    # GPU optimizations are enabled by default
+    loc = Locator({
+        "out": "gpu_optimized",
+        "sample_data": "samples.txt",
+        # Automatic mixed precision and batch size optimization
+    })
+    
+    # Monitor GPU usage during training
+    loc.train(genotypes=genotypes, samples=samples)
+    
+    # For memory-constrained GPUs
+    loc_constrained = Locator({
+        "out": "memory_limited",
+        "sample_data": "samples.txt",
+        "gpu_batch_size": 64,  # Smaller batch size
+        "gradient_accumulation_steps": 4  # Simulate larger batches
+    })
+
+Multi-GPU Parallel Analysis
+---------------------------
+
+K-Fold Cross-Validation Across GPUs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from locator import Locator
+    from locator.parallel import parallel_k_fold_holdouts
+    from locator.plotting import plot_error_summary
+    
+    # Initialize locator
+    loc = Locator({
+        "out": "parallel_kfold",
+        "sample_data": "samples.txt",
+        "width": 256,
+        "nlayers": 10
+    })
+    
+    # Run 10-fold CV across 4 GPUs
+    predictions = parallel_k_fold_holdouts(
+        loc, genotypes, samples,
+        k=10,
+        gpu_ids=[0, 1, 2, 3],  # Use 4 GPUs
+        return_df=True,
+        verbose=True
+    )
+    
+    # Visualize results
+    plot_error_summary(
+        predictions, 
+        "samples.txt",
+        "parallel_kfold_errors",
+        use_geodesic=True
+    )
+
+Parallel Bootstrap Analysis
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from locator.parallel import parallel_holdouts
+    
+    # Run 100 bootstrap replicates across 2 GPUs
+    bootstrap_results = parallel_holdouts(
+        loc, genotypes, samples,
+        k=len(samples),  # Bootstrap: sample with replacement
+        n_reps=100,
+        gpu_ids=[0, 1],
+        return_df=True
+    )
+
+Parallel Windows Analysis
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from locator.parallel import parallel_windows_holdouts
+    
+    # Analyze specific samples across genomic windows
+    worst_samples = ['HG001', 'HG002', 'HG003']
+    
+    window_results = parallel_windows_holdouts(
+        loc, genotypes, samples,
+        holdout_sample_ids=worst_samples,
+        window_size=int(1e6),  # 1Mb windows
+        gpu_ids=[0, 1, 2, 3],
+        return_df=True
+    )
+
+Visualization Examples
+----------------------
+
+Visualizing Prediction Uncertainty
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from locator import Locator
+    from locator.plotting import plot_predictions
+    
+    # Run jacknife analysis
+    loc = Locator({"out": "jacknife_viz", "sample_data": "samples.txt"})
+    genotypes, samples = loc.load_genotypes(zarr="genotypes.zarr")
+    
+    jack_preds = loc.run_jacknife(
+        genotypes, samples,
+        prop=0.1,
+        n_replicates=100,
+        return_df=True
+    )
+    
+    # Visualize prediction distributions for specific samples
+    plot_predictions(
+        jack_preds, 
+        loc, 
+        "jacknife_uncertainty",
+        samples=['sample_001', 'sample_002', 'sample_003'],
+        n_cols=3,
+        plot_map=True  # Use geographic projection
+    )
+
+Comparing Analysis Methods
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    # Compare jacknife vs bootstrap predictions
+    boot_preds = loc.run_bootstraps(
+        genotypes, samples,
+        n_bootstraps=100,
+        return_df=True
+    )
+    
+    # Plot same samples from both analyses
+    test_samples = jack_preds['sampleID'].unique()[:6]
+    
+    plot_predictions(jack_preds, loc, "jacknife_comparison", 
+                    samples=test_samples, n_cols=2)
+    plot_predictions(boot_preds, loc, "bootstrap_comparison", 
+                    samples=test_samples, n_cols=2)
+
+Error Analysis Workflow
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from locator.plotting import plot_error_summary
+    
+    # After k-fold cross-validation
+    kfold_preds = loc.run_k_fold_holdouts(
+        genotypes, samples, 
+        k=10, 
+        return_df=True
+    )
+    
+    # Create comprehensive error visualization
+    plot_error_summary(
+        kfold_preds,
+        "samples.txt",
+        "kfold_error_analysis",
+        use_geodesic=True,  # Errors in km
+        include_training_locs=True,  # Show geographic context
+        width=15,  # Custom figure size
+        height=8
+    )
+
+Complete Workflow Example
+-------------------------
+
+From Data to Publication Figure
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from locator import Locator
+    from locator.parallel import parallel_k_fold_holdouts
+    from locator.plotting import plot_error_summary, plot_predictions
+    import matplotlib.pyplot as plt
+    
+    # 1. Setup and data loading
+    config = {
+        "out": "actinemys_analysis",
+        "sample_data": "actinemys_samples.txt",
+        "min_mac": 2,
+        "max_SNPs": 50000,
+        "width": 256,
+        "nlayers": 10,
+        "dropout_prop": 0.25,
+        "weight_samples": {
+            "enabled": True,
+            "method": "KD"
+        }
+    }
+    
+    loc = Locator(config)
+    genotypes, samples = loc.load_genotypes(zarr="actinemys.zarr")
+    
+    # 2. Check data quality
+    loc.check_data(genotypes, samples, verbose=True)
+    
+    # 3. Run parallel k-fold CV
+    predictions = parallel_k_fold_holdouts(
+        loc, genotypes, samples,
+        k=10,
+        gpu_ids=[0, 1, 2, 3],
+        return_df=True
+    )
+    
+    # 4. Create publication figure
+    plot_error_summary(
+        predictions,
+        "actinemys_samples.txt",
+        "figure_2a",
+        dpi=600,  # Publication quality
+        width=7,  # Single column
+        height=4
+    )
+    
+    # 5. Identify worst predictions for further analysis
+    import pandas as pd
+    sample_data = pd.read_csv("actinemys_samples.txt", sep="\t")
+    merged = predictions.merge(sample_data[['sampleID', 'x', 'y']], on='sampleID')
+    merged['error_km'] = merged.apply(
+        lambda r: ((r.x_pred - r.x)**2 + (r.y_pred - r.y)**2)**0.5 * 111.32, 
+        axis=1
+    )
+    worst_samples = merged.nlargest(6, 'error_km')['sampleID'].tolist()
+    
+    # 6. Run windowed analysis on worst samples
+    from locator.parallel import parallel_windows_holdouts
+    
+    window_results = parallel_windows_holdouts(
+        loc, genotypes, samples,
+        holdout_sample_ids=worst_samples,
+        window_size=int(5e5),
+        gpu_ids=[0, 1],
+        return_df=True
+    )
+    
+    # 7. Visualize window predictions
+    plot_predictions(
+        window_results,
+        loc,
+        "figure_2b",
+        samples=worst_samples,
+        n_cols=3,
+        dpi=600
+    ) 

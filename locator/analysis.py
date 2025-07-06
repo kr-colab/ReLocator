@@ -1480,6 +1480,10 @@ class AnalysisMixin:
                 import gc
                 gc.collect()
             
+            # Store original output path and modify for this fold
+            original_out = self.config.get("out", "locator")
+            self.config["out"] = f"{original_out}_fold{fold_num}"
+            
             # Use the test indices from this fold as holdout
             holdout_indices = index_set.test
             self.train_holdout(
@@ -1506,6 +1510,9 @@ class AnalysisMixin:
             if self.model is not None:
                 del self.model
                 self.model = None
+            
+            # Restore original output path
+            self.config["out"] = original_out
 
         # Restore original keras_verbose setting
         self.config['keras_verbose'] = original_keras_verbose

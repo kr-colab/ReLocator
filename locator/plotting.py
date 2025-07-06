@@ -37,17 +37,30 @@ def _handle_plot_display(show=None):
 
 
 def kde_predict(x_coords, y_coords, xlim=(0, 50), ylim=(0, 50), n_points=100):
-    """Calculate kernel density estimate of predictions
+    """Calculate kernel density estimate of predictions.
+    
+    This is a helper function used internally by plot_predictions() to compute
+    kernel density estimates for visualizing prediction uncertainty.
 
     Args:
-        x_coords: Array of x coordinates
-        y_coords: Array of y coordinates
-        xlim: Tuple of (min, max) x values for grid
-        ylim: Tuple of (min, max) y values for grid
-        n_points: Number of points for density estimation grid
+        x_coords (array-like): Array of x coordinates (longitude values)
+        y_coords (array-like): Array of y coordinates (latitude values)
+        xlim (tuple): Tuple of (min, max) x values for grid. Default: (0, 50)
+        ylim (tuple): Tuple of (min, max) y values for grid. Default: (0, 50)
+        n_points (int): Number of points for density estimation grid. Default: 100
 
     Returns:
-        Tuple of (x_grid, y_grid, density)
+        tuple: A 3-tuple containing:
+            
+            - **x_grid** (*numpy.ndarray*): X coordinates of the mesh grid
+            - **y_grid** (*numpy.ndarray*): Y coordinates of the mesh grid
+            - **density** (*numpy.ndarray*): Density values at each grid point
+            
+            Returns (None, None, None) if KDE calculation fails.
+            
+    Note:
+        The function uses scipy.stats.gaussian_kde for density estimation.
+        Grid limits should match the geographic extent of your predictions.
     """
     try:
         # Calculate kernel density
@@ -86,51 +99,70 @@ def plot_predictions(
 ):
     """Plot locator predictions from jacknife, bootstrap, or windows analyses.
 
-    This function visualizes predictions from any of locator's prediction methods:
-    - run_jacknife()
-    - run_bootstraps()
-    - run_windows()
+    This function visualizes predictions from any of locator's prediction methods
+    that generate multiple predictions per sample. It creates a grid of subplots,
+    one per sample, showing the distribution of predictions as KDE contours.
 
     The function expects prediction data with:
+    
     - A 'sampleID' column
     - Multiple prediction columns ('x_0', 'x_1'... and 'y_0', 'y_1'...)
-
+    
     For each sample, the plot shows:
+    
     - KDE contours of predictions (blue lines)
     - True location if known (red star)
     - All training sample locations (gray circles)
 
     Args:
-        predictions: DataFrame or path to predictions file. Output from any of:
-            - locator.run_jacknife(return_df=True)
-            - locator.run_bootstraps(return_df=True)
-            - locator.run_windows(return_df=True)
-        locator: Locator instance containing training data configuration
-        out_prefix: Prefix for output files
-        samples: List of sample IDs to plot. If None, randomly selects n_samples
-        n_samples: Number of samples to plot if samples not specified
-        n_cols: Number of columns in plot grid
-        plot_map: Whether to plot on a map (requires cartopy)
-        width: Width of each subplot
-        height: Height of each subplot
-        dpi: DPI for output figure
-        n_levels: Number of KDE contour levels to plot
+        predictions (pandas.DataFrame or str): DataFrame or path to predictions file. 
+            Output from any of:
+            
+            - ``locator.run_jacknife(return_df=True)``
+            - ``locator.run_bootstraps(return_df=True)``  
+            - ``locator.run_windows(return_df=True)``
+            
+        locator (Locator): Locator instance containing training data configuration
+        out_prefix (str): Prefix for output files. Plot saved as {out_prefix}_predictions.pdf
+        samples (list, optional): List of sample IDs to plot. If None, randomly selects n_samples
+        n_samples (int): Number of samples to plot if samples not specified. Default: 9
+        n_cols (int): Number of columns in plot grid. Default: 3
+        plot_map (bool): Whether to plot on a geographic map (requires cartopy). Default: False
+        width (float): Width of each subplot in inches. Default: 5
+        height (float): Height of each subplot in inches. Default: 4
+        dpi (int): DPI resolution for output figure. Default: 300
+        n_levels (int): Number of KDE contour levels to plot. Default: 3
+        show (bool or None): Whether to display plot. None=auto-detect environment. Default: None
 
     Returns:
-        matplotlib figure object
+        None: Saves plot to file and optionally displays it
 
-    Example:
-        >>> # For jacknife analysis
-        >>> predictions = locator.run_jacknife(genotypes, samples, return_df=True)
-        >>> plot_predictions(predictions, locator, "jacknife_example")
+    Examples:
+        For jacknife analysis::
+        
+            predictions = locator.run_jacknife(genotypes, samples, return_df=True)
+            plot_predictions(predictions, locator, "jacknife_example")
 
-        >>> # For bootstrap analysis
-        >>> predictions = locator.run_bootstraps(genotypes, samples, return_df=True)
-        >>> plot_predictions(predictions, locator, "bootstrap_example")
+        For bootstrap analysis::
+        
+            predictions = locator.run_bootstraps(genotypes, samples, return_df=True)
+            plot_predictions(predictions, locator, "bootstrap_example")
 
-        >>> # For windows analysis
-        >>> predictions = locator.run_windows(genotypes, samples, return_df=True)
-        >>> plot_predictions(predictions, locator, "windows_example")
+        For windows analysis::
+        
+            predictions = locator.run_windows(genotypes, samples, return_df=True)
+            plot_predictions(predictions, locator, "windows_example")
+            
+        Plot specific samples::
+        
+            plot_predictions(predictions, locator, "selected", 
+                           samples=['HG001', 'HG002', 'HG003'])
+                           
+    Note:
+        - Requires matplotlib and scipy for KDE calculation
+        - If plot_map=True, requires cartopy for geographic projections
+        - Automatically adjusts plot limits based on prediction ranges
+        - KDE may fail for samples with very few predictions
     """
     # Load predictions
     if isinstance(predictions, (str, Path)):
@@ -275,19 +307,77 @@ def plot_error_summary(
     include_training_locs=True,
     show=None,
 ):
-    """Plot summary of prediction errors from holdout analysis
+    """Plot summary of prediction errors from holdout analysis.
+    
+    Creates a comprehensive error visualization with two panels:
+    
+    1. **Map/Scatter panel**: Shows true locations colored by prediction error,
+       with lines connecting true and predicted locations
+    2. **Histogram panel**: Distribution of errors with summary statistics
+    
+    This function is designed for analyzing results from holdout methods like:
+    
+    - ``run_holdouts()``
+    - ``run_k_fold_holdouts()``
+    - ``run_leave_one_out()``
 
     Args:
-        predictions: DataFrame of predictions
-        sample_data: DataFrame or path to sample locations
-        out_prefix: Prefix for output files
-        plot_map: Whether to plot on a map
-        width: Figure width
-        height: Figure height
-        dpi: Figure resolution
-        use_geodesic: Use geodesic distances (km) if True, else Euclidean distances
-        include_training_locs: Whether to plot training locations and use their extent
-        show: Whether to display plot (None=auto-detect, True=always show, False=never show)
+        predictions (pandas.DataFrame): DataFrame with columns:
+            
+            - ``sampleID``: Sample identifiers
+            - ``x_pred``: Predicted longitude
+            - ``y_pred``: Predicted latitude
+            
+        sample_data (pandas.DataFrame or str): DataFrame or path to TSV file with columns:
+            
+            - ``sampleID``: Sample identifiers (must match predictions)
+            - ``x``: True longitude
+            - ``y``: True latitude
+            
+        out_prefix (str, optional): Prefix for output files. If provided, saves as
+            {out_prefix}_error_summary.png. Default: None
+        plot_map (bool): Whether to plot on a geographic map using cartopy projection.
+            If False, uses regular scatter plot. Default: True
+        width (float): Figure width in inches. Default: 20
+        height (float): Figure height in inches. Default: 10
+        dpi (int): Figure resolution in dots per inch. Default: 300
+        use_geodesic (bool): If True, calculate geodesic distances in kilometers.
+            If False, use Euclidean distances in coordinate units. Default: True
+        include_training_locs (bool): Whether to plot training locations (gray circles)
+            and use their extent for map bounds. Default: True
+        show (bool or None): Whether to display plot. None=auto-detect environment,
+            True=always show, False=never show. Default: None
+
+    Returns:
+        None: Saves plot to file and optionally displays it
+        
+    Raises:
+        ValueError: If predictions or sample_data are empty, have missing columns,
+            or have no matching samples
+
+    Examples:
+        Basic usage with k-fold results::
+        
+            predictions = locator.run_k_fold_holdouts(genotypes, samples, return_df=True)
+            plot_error_summary(predictions, "samples.tsv", "kfold_errors")
+            
+        With DataFrame input and Euclidean distances::
+        
+            plot_error_summary(predictions, sample_df, 
+                             out_prefix="holdout_errors",
+                             use_geodesic=False)
+                             
+        Without map projection::
+        
+            plot_error_summary(predictions, sample_df,
+                             plot_map=False,
+                             width=10, height=5)
+
+    Note:
+        - Summary statistics shown: mean, median, max error, R² for x and y
+        - Training locations help visualize geographic sampling bias
+        - Geodesic distances account for Earth's curvature
+        - Map projection requires cartopy to be installed
     """
     # Validate predictions input
     if predictions.empty:
@@ -478,16 +568,72 @@ def plot_sample_weights(
     dpi=300,
     show=None,
 ):
-    """Plot sample weights assined to training locations
+    """Plot sample weights assigned to training locations.
+    
+    Visualizes the geographic distribution of sample weights used during training.
+    This is useful for understanding which regions are upweighted or downweighted
+    based on sampling density.
+    
+    Sample weights are typically computed using:
+    
+    - Kernel density (KD) method: Upweights samples in sparse regions
+    - Histogram binning method: Based on 2D histogram counts
+    
+    The plot uses a log-scale color mapping to better show weight variations.
 
     Args:
-        sample_data: DataFrame or path to sample locations
-        sample_weights: DataFrame or path to sample weights
-        out_prefix: Prefix for output files
-        plot_map: Whether to plot on a map
-        width: Figure width
-        height: Figure height
-        dpi: Figure resolution
+        locator (Locator): Locator instance that has been trained with sample
+            weighting enabled. Must have computed sample_weights attribute.
+        out_prefix (str, optional): Prefix for output files. If provided, saves as
+            {out_prefix}_sample_weights.png. Default: None
+        plot_map (bool): Whether to plot on a geographic map using cartopy projection.
+            If False, uses regular scatter plot with equal aspect ratio. Default: True
+        width (float): Figure width in inches. Default: 5
+        height (float): Figure height in inches. Default: 3
+        dpi (int): Figure resolution in dots per inch. Default: 300
+        show (bool or None): Whether to display plot. None=auto-detect environment,
+            True=always show, False=never show. Default: None
+
+    Returns:
+        None: Saves plot to file and optionally displays it
+        
+    Raises:
+        ValueError: If locator doesn't have computed sample weights, or if
+            required data is missing
+
+    Examples:
+        After training with KDE weighting::
+        
+            config = {
+                "weight_samples": {
+                    "enabled": True,
+                    "method": "KD"
+                }
+            }
+            locator = Locator(config)
+            locator.train(genotypes, samples)
+            plot_sample_weights(locator, "kde_weights")
+            
+        With histogram binning weights::
+        
+            config = {
+                "weight_samples": {
+                    "enabled": True,
+                    "method": "hist",
+                    "xbins": 20,
+                    "ybins": 20
+                }
+            }
+            locator = Locator(config)
+            locator.train(genotypes, samples)
+            plot_sample_weights(locator, "hist_weights", plot_map=False)
+
+    Note:
+        - Requires that locator was trained with weight_samples enabled
+        - Log scale coloring helps visualize large weight variations
+        - Higher weights (yellow) indicate undersampled regions
+        - Lower weights (purple) indicate oversampled regions
+        - Map projection requires cartopy to be installed
     """
     sample_data = locator._sample_data_df
     sample_weights = locator.sample_weights['sample_weights_df']
@@ -655,16 +801,49 @@ def plot_sample_weights(
 
 
 class PlottingMixin:
-    """Mixin class providing plotting functionality for Locator."""
+    """Mixin class providing plotting functionality for Locator.
+    
+    This mixin is inherited by the main Locator class to provide visualization
+    methods for training history and Jupyter notebook integration.
+    
+    Methods:
+        plot_history: Plot training and validation loss curves
+        _repr_html_: Generate rich HTML representation for Jupyter notebooks
+    """
     
     def plot_history(self, history):
         """Plot training history and prediction error.
 
         Creates a figure with two subplots showing the validation loss and training loss
-        over epochs. Saves the plot to a PDF file using the output prefix specified in config.
+        over epochs. This helps visualize model convergence and potential overfitting.
+        
+        The plot shows:
+        
+        - Left panel: Validation loss over epochs (excluding first 3)
+        - Right panel: Training loss over epochs (excluding first 3)
+        
+        First 3 epochs are excluded as they often have very high initial losses
+        that would compress the scale of the plot.
 
         Args:
-            history: keras.callbacks.History object containing training history
+            history (keras.callbacks.History): History object returned by model.fit()
+                containing training metrics for each epoch
+                
+        Returns:
+            None: Saves plot to {config['out']}_fitplot.pdf if config['plot_history'] is True
+            
+        Note:
+            - Only creates plot if config['plot_history'] is True
+            - Uses 'agg' backend to avoid display issues on servers
+            - Creates a compact figure suitable for publication
+            
+        Example:
+            Enable history plotting in config::
+            
+                config = {"out": "analysis", "plot_history": True}
+                locator = Locator(config)
+                history = locator.train(genotypes, samples)
+                # Plot is automatically saved as analysis_fitplot.pdf
         """
         if self.config.get("plot_history", False):
             plt.switch_backend("agg")
@@ -679,7 +858,34 @@ class PlottingMixin:
             fig.savefig(self.config["out"] + "_fitplot.pdf", bbox_inches="tight")
 
     def _repr_html_(self):
-        """Return HTML representation of Locator instance for Jupyter notebooks."""
+        """Return HTML representation of Locator instance for Jupyter notebooks.
+        
+        Generates a rich HTML display showing:
+        
+        - Model configuration parameters
+        - Current model status (trained/not trained)
+        - Training history plot (if available)
+        - Data loading status
+        - Sample weighting information
+        - Holdout sample information
+        
+        This method is automatically called by Jupyter/IPython when displaying
+        a Locator instance in a notebook cell.
+        
+        Returns:
+            str: HTML string with styled content including embedded plots
+            
+        Note:
+            - Training history plot is embedded as base64 PNG
+            - Holdout samples shown in collapsible list if > 0
+            - Automatically detects which data has been loaded
+            
+        Example:
+            In a Jupyter notebook::
+            
+                locator = Locator(config)
+                locator  # Rich HTML display appears automatically
+        """
         html = [
             "<div style='font-family: monospace'>",
             "<h3>Locator Model</h3>",

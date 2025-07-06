@@ -300,8 +300,28 @@ Holdout-based methods require known coordinates for evaluation:
    locator.run_jacknife(genotypes, samples)  # Can predict NA samples
    locator.run_bootstraps(genotypes, samples)  # Can predict NA samples
 
+Multi-GPU Parallel Analysis
+---------------------------
+For large-scale analyses with multiple GPUs, Locator provides parallel implementations:
+
+.. code-block:: python
+
+   from locator.parallel import parallel_k_fold_holdouts
+   
+   # Run k-fold CV across 4 GPUs
+   predictions = parallel_k_fold_holdouts(
+       locator, genotypes, samples,
+       k=10,
+       gpu_ids=[0, 1, 2, 3],
+       return_df=True
+   )
+
+See :doc:`parallel_analysis_guide` for comprehensive documentation on multi-GPU analysis.
+
 Next Steps
 ----------
 * Check the :doc:`api` reference for detailed information about all available functions and classes.
 * See the :doc:`examples` section for more advanced usage examples.
+* Explore :doc:`parallel_analysis_guide` for multi-GPU workflows.
+* Learn about visualization in :doc:`plotting_guide`.
 * Learn how to :doc:`contributing` to the project. 

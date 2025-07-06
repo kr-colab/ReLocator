@@ -160,10 +160,13 @@ Benefits:
 
 Note: May not work with all custom operations.
 
-Multi-GPU Configuration
------------------------
+GPU Selection
+-------------
 
-Select specific GPUs:
+Single GPU Selection
+~~~~~~~~~~~~~~~~~~~~
+
+Select which GPU to use for training:
 
 .. code-block:: python
 
@@ -185,6 +188,35 @@ Command line usage:
     
     # Disable GPU
     locator --disable_gpu --vcf data.vcf --sample_data samples.txt
+
+Multi-GPU Parallel Analysis
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For using multiple GPUs simultaneously, Locator provides Ray-based parallel analysis:
+
+.. code-block:: python
+
+    from locator.parallel import parallel_k_fold_holdouts
+    
+    # Use 4 GPUs for k-fold cross-validation
+    predictions = parallel_k_fold_holdouts(
+        locator, genotypes, samples,
+        k=10,
+        gpu_ids=[0, 1, 2, 3],  # Specify which GPUs to use
+        return_df=True
+    )
+
+Key points:
+
+* Standard Locator uses one GPU at a time
+* Parallel analysis distributes work across multiple GPUs
+* Each parallel worker gets exclusive access to one GPU
+* See :doc:`parallel_analysis_guide` for comprehensive multi-GPU documentation
+
+.. note::
+   The ``gpu_number`` config option selects a single GPU for the current process.
+   To utilize multiple GPUs, use the parallel analysis functions that distribute
+   multiple processes across different GPUs.
 
 Performance Monitoring
 ----------------------

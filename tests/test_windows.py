@@ -57,7 +57,7 @@ class TestWindowAnalysis:
         
         return genotypes, samples, sample_df, geno_df, positions
     
-    def test_run_windows_basic(self):
+    def test_run_windows_basic(self, tmp_path):
         """Test basic window analysis functionality."""
         genotypes, samples, sample_df, geno_df, positions = self.create_test_data_with_positions()
         
@@ -66,7 +66,7 @@ class TestWindowAnalysis:
             'genotype_data': geno_df,
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_windows_basic'
+            'out': str(tmp_path / 'test_windows_basic')
         })
         
         # Run window analysis
@@ -92,7 +92,7 @@ class TestWindowAnalysis:
         assert result[x_cols[0]].dtype in [np.float32, np.float64]
         assert result[y_cols[0]].dtype in [np.float32, np.float64]
     
-    def test_run_windows_with_na_samples(self):
+    def test_run_windows_with_na_samples(self, tmp_path):
         """Test window analysis with samples lacking coordinates."""
         genotypes, samples, sample_df, geno_df, positions = self.create_test_data_with_positions(
             n_samples=20, n_snps=100, n_known=15
@@ -104,7 +104,7 @@ class TestWindowAnalysis:
             'na_action': 'separate',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_windows_na'
+            'out': str(tmp_path / 'test_windows_na')
         })
         
         result = locator.run_windows(
@@ -124,7 +124,7 @@ class TestWindowAnalysis:
         for na_sample in na_samples:
             assert na_sample in result_samples
     
-    def test_run_windows_exclude_mode(self):
+    def test_run_windows_exclude_mode(self, tmp_path):
         """Test window analysis with exclude mode."""
         genotypes, samples, sample_df, geno_df, positions = self.create_test_data_with_positions(
             n_samples=20, n_snps=100, n_known=15
@@ -136,7 +136,7 @@ class TestWindowAnalysis:
             'na_action': 'exclude',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_windows_exclude'
+            'out': str(tmp_path / 'test_windows_exclude')
         })
         
         result = locator.run_windows(
@@ -162,7 +162,7 @@ class TestWindowAnalysis:
             assert len(result) < n_known
         # else: Empty result is acceptable in exclude mode
     
-    def test_run_windows_window_size(self):
+    def test_run_windows_window_size(self, tmp_path):
         """Test different window sizes."""
         genotypes, samples, sample_df, geno_df, positions = self.create_test_data_with_positions(
             n_samples=10, n_snps=150, n_known=10
@@ -174,7 +174,7 @@ class TestWindowAnalysis:
             'genotype_data': geno_df,
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_windows_size_small'
+            'out': str(tmp_path / 'test_windows_size_small')
         })
         
         result_small = locator1.run_windows(
@@ -191,7 +191,7 @@ class TestWindowAnalysis:
             'genotype_data': geno_df,
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_windows_size_large'
+            'out': str(tmp_path / 'test_windows_size_large')
         })
         
         result_large = locator2.run_windows(
@@ -207,7 +207,7 @@ class TestWindowAnalysis:
         x_cols_large = [col for col in result_large.columns if col.startswith('x_')]
         assert len(x_cols_small) >= len(x_cols_large)
     
-    def test_run_windows_holdouts(self):
+    def test_run_windows_holdouts(self, tmp_path):
         """Test window analysis with holdouts."""
         genotypes, samples, sample_df, geno_df, positions = self.create_test_data_with_positions(
             n_samples=15, n_snps=100, n_known=15  # All samples need coordinates for holdout
@@ -218,7 +218,7 @@ class TestWindowAnalysis:
             'genotype_data': geno_df,
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_windows_holdouts'
+            'out': str(tmp_path / 'test_windows_holdouts')
         })
         
         result = locator.run_windows_holdouts(
@@ -241,7 +241,7 @@ class TestWindowAnalysis:
         # Should have predictions for holdout samples
         assert len(result) == 3  # k holdout samples
     
-    def test_window_analysis_without_positions(self):
+    def test_window_analysis_without_positions(self, tmp_path):
         """Test that window analysis fails gracefully without position information."""
         # Create data without position information
         samples = np.array(['s1', 's2', 's3'])
@@ -257,7 +257,7 @@ class TestWindowAnalysis:
         locator = Locator({
             'sample_data': sample_df,
             'keras_verbose': 0,
-            'out': 'test_no_positions'
+            'out': str(tmp_path / 'test_no_positions')
         })
         
         # Should raise error about missing positions
@@ -269,7 +269,7 @@ class TestWindowAnalysis:
                 return_df=True
             )
     
-    def test_window_start_stop(self):
+    def test_window_start_stop(self, tmp_path):
         """Test window start and stop parameters."""
         genotypes, samples, sample_df, geno_df, positions = self.create_test_data_with_positions(
             n_samples=10, n_snps=100, n_known=10
@@ -280,7 +280,7 @@ class TestWindowAnalysis:
             'genotype_data': geno_df,
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_window_range'
+            'out': str(tmp_path / 'test_window_range')
         })
         
         # Run with specific start and stop
@@ -298,7 +298,7 @@ class TestWindowAnalysis:
         x_cols = [col for col in result.columns if col.startswith('x_')]
         assert len(x_cols) <= 2  # At most 2 windows in 400kb range
     
-    def test_window_predictions_consistency(self):
+    def test_window_predictions_consistency(self, tmp_path):
         """Test that window predictions are reasonable."""
         genotypes, samples, sample_df, geno_df, positions = self.create_test_data_with_positions(
             n_samples=10, n_snps=100, n_known=10
@@ -309,7 +309,7 @@ class TestWindowAnalysis:
             'genotype_data': geno_df,
             'keras_verbose': 0,
             'max_epochs': 10,
-            'out': 'test_consistency'
+            'out': str(tmp_path / 'test_consistency')
         })
         
         result = locator.run_windows(
@@ -336,7 +336,7 @@ class TestWindowAnalysis:
             assert np.std(x_preds) > 0.01
             assert np.std(y_preds) > 0.01
     
-    def test_run_windows_holdouts_na_handling(self):
+    def test_run_windows_holdouts_na_handling(self, tmp_path):
         """Test run_windows_holdouts with different NA handling modes."""
         # Test with NA samples (should work with 'exclude' mode)
         genotypes, samples, sample_df, geno_df, positions = self.create_test_data_with_positions(
@@ -348,7 +348,7 @@ class TestWindowAnalysis:
             'genotype_data': geno_df,
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_windows_holdouts_na'
+            'out': str(tmp_path / 'test_windows_holdouts_na')
         })
         
         # Test exclude mode
@@ -394,7 +394,7 @@ class TestWindowAnalysis:
                 return_df=True
             )
     
-    def test_run_windows_holdouts_with_indices(self):
+    def test_run_windows_holdouts_with_indices(self, tmp_path):
         """Test run_windows_holdouts with specific holdout indices."""
         genotypes, samples, sample_df, geno_df, positions = self.create_test_data_with_positions(
             n_samples=15, n_snps=100, n_known=15
@@ -405,7 +405,7 @@ class TestWindowAnalysis:
             'genotype_data': geno_df,
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_windows_holdouts_indices'
+            'out': str(tmp_path / 'test_windows_holdouts_indices')
         })
         
         # Specify exact holdout indices
@@ -427,7 +427,7 @@ class TestWindowAnalysis:
         expected_samples = samples[holdout_indices]
         assert set(result['sampleID'].values) == set(expected_samples)
     
-    def test_run_windows_holdouts_window_parameters(self):
+    def test_run_windows_holdouts_window_parameters(self, tmp_path):
         """Test run_windows_holdouts with different window parameters."""
         genotypes, samples, sample_df, geno_df, positions = self.create_test_data_with_positions(
             n_samples=10, n_snps=150, n_known=10
@@ -438,7 +438,7 @@ class TestWindowAnalysis:
             'genotype_data': geno_df,
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_windows_holdouts_params'
+            'out': str(tmp_path / 'test_windows_holdouts_params')
         })
         
         # Test with specific window start and stop
@@ -500,7 +500,7 @@ class TestWindowAnalysis:
             assert len(saved_df) == 3  # k holdout samples
             assert 'sampleID' in saved_df.columns
     
-    def test_run_windows_holdouts_empty_windows(self):
+    def test_run_windows_holdouts_empty_windows(self, tmp_path):
         """Test behavior when some windows have no SNPs."""
         # Create sparse SNP data with gaps
         n_samples = 10
@@ -538,7 +538,7 @@ class TestWindowAnalysis:
             'genotype_data': geno_df,
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_empty_windows'
+            'out': str(tmp_path / 'test_empty_windows')
         })
         
         # Run with windows that will include empty regions

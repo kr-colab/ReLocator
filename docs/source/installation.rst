@@ -39,6 +39,35 @@ This will install:
 
 For detailed API documentation useful during development, see :doc:`api`.
 
+Optional Features
+-----------------
+
+Locator provides optional features that require additional dependencies:
+
+Parallel Analysis
+~~~~~~~~~~~~~~~~~
+
+For multi-GPU parallel analysis using Ray:
+
+.. code-block:: bash
+
+   pip install locator[parallel]
+
+This enables:
+
+* :doc:`parallel_analysis_guide` - Multi-GPU k-fold CV, holdouts, and windowed analysis
+* Ray framework for distributed computing
+* Automatic GPU load balancing
+
+All Features
+~~~~~~~~~~~~
+
+To install Locator with all optional features:
+
+.. code-block:: bash
+
+   pip install locator[dev,docs,parallel]
+
 Installing from Source
 -----------------------
 

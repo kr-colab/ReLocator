@@ -77,23 +77,31 @@ class TrainingMixin:
             boot: Bootstrap replicate number (default: 0)
 
         Returns:
-            list: List of Keras callbacks [ModelCheckpoint, EarlyStopping, ReduceLROnPlateau]
+            list: List of Keras callbacks
         """
-        filepath = (
-            f"{self.config['out']}_boot{boot}.weights.h5"
-            if self.config.get("bootstrap", False)
-            else f"{self.config['out']}.weights.h5"
-        )
+        callbacks = []
+        
+        # Check if we should save fold models (skip if this is k-fold and save_fold_models is False)
+        is_kfold = "_fold" in self.config.get("out", "")
+        should_save = not is_kfold or self.config.get("save_fold_models", True)
+        
+        if should_save:
+            filepath = (
+                f"{self.config['out']}_boot{boot}.weights.h5"
+                if self.config.get("bootstrap", False)
+                else f"{self.config['out']}.weights.h5"
+            )
 
-        checkpointer = keras.callbacks.ModelCheckpoint(
-            filepath=filepath,
-            verbose=self.config.get("keras_verbose", 1),
-            save_best_only=True,
-            save_weights_only=True,
-            monitor="val_loss",
-            save_freq="epoch",
-            mode="min",  # Explicitly set mode for clarity
-        )
+            checkpointer = keras.callbacks.ModelCheckpoint(
+                filepath=filepath,
+                verbose=self.config.get("keras_verbose", 1),
+                save_best_only=True,
+                save_weights_only=True,
+                monitor="val_loss",
+                save_freq="epoch",
+                mode="min",  # Explicitly set mode for clarity
+            )
+            callbacks.append(checkpointer)
 
         earlystop = keras.callbacks.EarlyStopping(
             monitor="val_loss",
@@ -112,7 +120,8 @@ class TrainingMixin:
             min_lr=0,
         )
 
-        return [checkpointer, earlystop, reducelr]
+        callbacks.extend([earlystop, reducelr])
+        return callbacks
 
     def set_sample_weights(self, wdict):
         """Set sample weights for training.
@@ -576,18 +585,27 @@ class TrainingMixin:
             callbacks=callbacks,
         )
 
-        # Save training history
-        hist_df = pd.DataFrame(self.history.history)
-        hist_df.to_csv(f"{self.config['out']}_history.txt", sep="\t", index=False)
+        # Check if we should save fold models (skip if this is k-fold and save_fold_models is False)
+        is_kfold = "_fold" in self.config.get("out", "")
+        should_save = not is_kfold or self.config.get("save_fold_models", True)
+        
+        if should_save:
+            # Save training history
+            hist_df = pd.DataFrame(self.history.history)
+            hist_df.to_csv(f"{self.config['out']}_history.txt", sep="\t", index=False)
 
-        # If we skipped intermediate saves, save the final model now
-        if self.config.get("holdout_no_intermediate_saves", False):
-            filepath = f"{self.config['out']}.weights.h5"
-            self.model.save_weights(filepath)
-            print(f"Saved final model weights to {filepath}")
+            # If we skipped intermediate saves, save the final model now
+            if self.config.get("holdout_no_intermediate_saves", False):
+                filepath = f"{self.config['out']}.weights.h5"
+                self.model.save_weights(filepath)
+                print(f"Saved final model weights to {filepath}")
 
-        # Save model metadata
-        self._save_model_metadata()
+            # Save model metadata
+            self._save_model_metadata()
+        else:
+            # For k-fold without saving, just print a message
+            if self.config.get("keras_verbose", 0) > 0:
+                print(f"Skipping model save for fold (save_fold_models=False)")
 
         return self.history
     
