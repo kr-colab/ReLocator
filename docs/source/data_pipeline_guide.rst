@@ -8,7 +8,7 @@ pipeline for optimal training performance.
 Overview
 --------
 
-The new data pipeline architecture provides:
+The data pipeline architecture provides:
 
 * **Memory-efficient data handling** through index-based operations instead of array copies
 * **Unified tf.data pipeline** for consistent, high-performance data loading
@@ -182,63 +182,6 @@ For custom workflows, you can build the pipeline manually:
         training=False
     )
 
-Bootstrap Analysis with Efficient Resampling
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The new pipeline enables memory-efficient bootstrap resampling:
-
-.. code-block:: python
-
-    # Bootstrap resampling without data copies
-    for boot in range(n_bootstraps):
-        # Resample sites (SNPs) instead of copying data
-        site_indices = np.random.choice(n_snps, n_snps, replace=True)
-        
-        # Create view without copying
-        boot_dataset = make_tf_dataset(
-            genotypes=genotypes,
-            coordinates=coordinates,
-            index_set=index_set,
-            split="train",
-            site_order=site_indices,  # Resampling happens in tf.gather
-            batch_size=256
-        )
-        
-        # Train on bootstrap sample
-        model.fit(boot_dataset, ...)
-
-Cross-Validation with K-Fold Splits
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    from locator.data import IndexSet
-    
-    # Create k-fold splits
-    k_fold_indices = IndexSet.k_fold(n=len(samples), k=5)
-    
-    for fold, fold_index_set in enumerate(k_fold_indices):
-        print(f"Training fold {fold + 1}/5")
-        
-        # Datasets are created efficiently for each fold
-        train_dataset = make_tf_dataset(
-            genotypes=genotypes,
-            coordinates=coordinates,
-            index_set=fold_index_set,
-            split="train",
-            batch_size=256
-        )
-        
-        val_dataset = make_tf_dataset(
-            genotypes=genotypes,
-            coordinates=coordinates,
-            index_set=fold_index_set,
-            split="test",  # 'test' is validation in k-fold
-            batch_size=256
-        )
-        
-        # Train model for this fold
-        model.fit(train_dataset, validation_data=val_dataset, ...)
 
 Working with Sample Weights
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -265,58 +208,11 @@ Working with Sample Weights
         batch_size=256
     )
 
-Performance Optimization
-------------------------
-
-Memory Usage
-~~~~~~~~~~~~
-
-The new pipeline significantly reduces memory usage:
-
-.. code-block:: python
-
-    # Old approach (creates copies)
-    train_gen = genotypes[:, train_idx]  # Copy
-    test_gen = genotypes[:, test_idx]    # Copy
-    
-    # New approach (no copies)
-    dataset = make_tf_dataset(
-        genotypes=genotypes,  # Original array
-        index_set=index_set,  # Just indices
-        split="train"
-    )
-
-For a dataset with 10,000 SNPs and 1,000 samples:
-
-* Old approach: ~152 MB (3 copies for train/test/val)
-* New approach: ~76 MB (original data only)
-
-GPU Optimization
-~~~~~~~~~~~~~~~~
-
-The pipeline automatically optimizes for GPU usage:
-
-.. code-block:: python
-
-    # Automatic optimizations include:
-    # - Prefetching to GPU
-    # - Parallel data loading
-    # - Optimized batch sizes
-    
-    dataset = make_tf_dataset(
-        genotypes=genotypes,
-        coordinates=coordinates,
-        index_set=index_set,
-        split="train",
-        batch_size=256,
-        cache=True,  # Cache in GPU memory if available
-        prefetch_buffer=tf.data.AUTOTUNE
-    )
 
 Data Augmentation
 ~~~~~~~~~~~~~~~~~
 
-Built-in augmentation improves model generalization:
+Built-in augmentation may improve model generalization:
 
 .. code-block:: python
 
@@ -330,36 +226,6 @@ Built-in augmentation improves model generalization:
         training=True
     )
 
-Migration Guide
----------------
-
-Updating Existing Code
-~~~~~~~~~~~~~~~~~~~~~~
-
-If you have existing Locator code, most functionality works unchanged. Locator now
-always uses the efficient tf.data pipeline for optimal memory usage and performance.
-
-Custom Training Loops
-~~~~~~~~~~~~~~~~~~~~~
-
-For custom training loops, replace array slicing with IndexSet:
-
-.. code-block:: python
-
-    # Old approach
-    train_idx = np.random.choice(n_samples, int(0.8 * n_samples), replace=False)
-    test_idx = np.setdiff1d(range(n_samples), train_idx)
-    train_gen = genotypes[:, train_idx]
-    test_gen = genotypes[:, test_idx]
-    
-    # New approach
-    index_set = IndexSet.random_split(n=n_samples, splits={"train": 0.8, "test": 0.2})
-    train_dataset = make_tf_dataset(
-        genotypes=genotypes,
-        coordinates=coordinates,
-        index_set=index_set,
-        split="train"
-    )
 
 API Reference
 -------------

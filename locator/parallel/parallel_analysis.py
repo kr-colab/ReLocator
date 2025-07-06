@@ -13,7 +13,7 @@ Key Features:
 GPU Fraction Settings:
 - gpu_fraction=1.0: One worker per GPU (default, safest)
 - gpu_fraction=0.5: Two workers per GPU (moderate sharing)
-- gpu_fraction=0.25: Four workers per GPU (maximum parallelism)
+- gpu_fraction=0.25: Four workers per GPU (moar parallelism)
 - gpu_fraction=0.0: CPU only execution
 """
 
@@ -42,10 +42,11 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
     Factory function to create a Ray worker with specified GPU fraction.
     
     Args:
-        gpu_fraction: Fraction of GPU to allocate per worker (0.0 to 1.0)
+        gpu_fraction: Fraction of GPU to allocate per worker (value between 0.0 to 1.0)
                      1.0 = one full GPU per worker (default)
                      0.5 = two workers can share one GPU
                      0.25 = four workers can share one GPU
+                     ...
                      0.0 = CPU only
     
     Returns:
@@ -69,7 +70,10 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
             Dictionary with predictions and metadata
         """
         # Set GPU before importing TensorFlow
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+        if gpu_id == -1:
+            os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disable GPU
+        else:
+            os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
         
         # Set TensorFlow threading environment variables BEFORE import
         # This ensures the tf.data pipeline doesn't fork excessively
@@ -115,7 +119,6 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
     
         locator = Locator(locator_config)  # Pass as dictionary
     
-        # CRITICAL FIX: Ensure samples are set correctly BEFORE train_holdout
         # This must match the exact order used when creating the IndexSets
         locator.samples = data['samples']
     
@@ -137,7 +140,7 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
             plot_map=False
         )
     
-        # CRITICAL: Verify sample IDs match expected holdout samples
+        # Verify sample IDs match expected holdout samples
         expected_samples = [data['samples'][i] for i in holdout_indices]
         actual_samples = predictions['sampleID'].tolist()
         
@@ -156,7 +159,7 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
             'train_time': train_time,
             'predictions': predictions.to_dict('records'),
             'holdout_indices': holdout_indices.tolist(),
-            'final_loss': float(history.history['loss'][-1]) if history else None
+            'final_loss': float(history.history['loss'][-1]) if history and 'loss' in history.history else None
         }
     
     return _ray_kfold_worker
@@ -339,7 +342,12 @@ def parallel_k_fold_holdouts(
     # Submit all folds to Ray
     futures = []
     for fold_idx in range(k):
-        gpu_id = gpu_ids[fold_idx % len(gpu_ids)]
+        # Handle empty gpu_ids (CPU only mode)
+        if len(gpu_ids) == 0:
+            gpu_id = -1  # Use CPU
+        else:
+            gpu_id = gpu_ids[fold_idx % len(gpu_ids)]
+        
         future = _ray_kfold_worker.remote(
             fold_idx=fold_idx,
             gpu_id=gpu_id,
@@ -347,7 +355,8 @@ def parallel_k_fold_holdouts(
         )
         futures.append(future)
         if verbose:
-            print(f"Submitted fold {fold_idx} to GPU {gpu_id}")
+            device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
+            print(f"Submitted fold {fold_idx} to {device_str}")
     
     # Wait for all folds to complete with progress bar
     if verbose:
@@ -521,7 +530,10 @@ def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
             Dictionary with predictions and metadata
         """
         # Set GPU before importing TensorFlow
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+        if gpu_id == -1:
+            os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disable GPU
+        else:
+            os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
         
         # Set TensorFlow threading environment variables BEFORE import
         # This ensures the tf.data pipeline doesn't fork excessively
@@ -590,7 +602,7 @@ def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
             'train_time': train_time,
             'predictions': predictions.to_dict('records'),
             'holdout_indices': holdout_indices.tolist(),
-            'final_loss': float(history.history['loss'][-1]) if history else None
+            'final_loss': float(history.history['loss'][-1]) if history and 'loss' in history.history else None
         }
     
     return _ray_holdout_worker
@@ -793,7 +805,12 @@ def parallel_holdouts(
     # Submit all replicates to Ray
     futures = []
     for rep_idx in range(n_reps):
-        gpu_id = gpu_ids[rep_idx % len(gpu_ids)]
+        # Handle empty gpu_ids (CPU only mode)
+        if len(gpu_ids) == 0:
+            gpu_id = -1  # Use CPU
+        else:
+            gpu_id = gpu_ids[rep_idx % len(gpu_ids)]
+        
         future = _ray_holdout_worker.remote(
             rep_idx=rep_idx,
             gpu_id=gpu_id,
@@ -802,7 +819,8 @@ def parallel_holdouts(
         )
         futures.append(future)
         if verbose:
-            print(f"Submitted replicate {rep_idx} to GPU {gpu_id}")
+            device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
+            print(f"Submitted replicate {rep_idx} to {device_str}")
     
     # Wait for all replicates to complete with progress bar
     if verbose:
@@ -904,7 +922,10 @@ def _create_ray_windows_worker(gpu_fraction: float = 1.0):
             Dictionary with predictions and metadata
         """
         # Set GPU before importing TensorFlow
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+        if gpu_id == -1:
+            os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disable GPU
+        else:
+            os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
         
         # Set TensorFlow threading environment variables BEFORE import
         # This ensures the tf.data pipeline doesn't fork excessively
@@ -1326,7 +1347,11 @@ def parallel_windows_holdouts(
     # Submit all windows to Ray
     futures = []
     for window_idx, window in enumerate(windows):
-        gpu_id = gpu_ids[window_idx % len(gpu_ids)]
+        # Handle empty gpu_ids (CPU only mode)
+        if len(gpu_ids) == 0:
+            gpu_id = -1  # Use CPU
+        else:
+            gpu_id = gpu_ids[window_idx % len(gpu_ids)]
         
         future = _ray_windows_worker.remote(
             window_idx=window_idx,
@@ -1338,7 +1363,8 @@ def parallel_windows_holdouts(
         futures.append(future)
         if verbose and window_idx < 10:  # Only print first few for brevity
             chrom_str = f" (chr{window['chromosome']})" if window['chromosome'] else ""
-            print(f"Submitted window {window_idx}{chrom_str} ({window['start']}-{window['stop']}) to GPU {gpu_id}")
+            device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
+            print(f"Submitted window {window_idx}{chrom_str} ({window['start']}-{window['stop']}) to {device_str}")
     
     if verbose and len(windows) > 10:
         print(f"... and {len(windows)-10} more windows")

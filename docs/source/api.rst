@@ -212,13 +212,119 @@ Analysis Module
    :members:
    :noindex:
 
+Parallel Analysis Module
+------------------------
+.. module:: locator.parallel.parallel_analysis
+
+This module provides Ray-based parallel implementations of analysis methods for multi-GPU execution.
+
+.. autofunction:: parallel_k_fold_holdouts
+
+   Run true k-fold cross-validation in parallel across multiple GPUs.
+
+   Args:
+       locator: Locator instance
+       genotypes: GenotypeArray
+       samples: List of sample IDs
+       k: Number of folds (default: 10)
+       gpu_ids: List of GPU IDs to use (default: [0, 1])
+       gpu_fraction: Fraction of GPU per worker (default: 1.0)
+       return_df: Whether to return DataFrame (default: True)
+       save_full_pred_matrix: Whether to save predictions (default: True)
+       verbose: Show progress (default: True)
+       na_action: NA handling mode (default: None)
+
+   Returns:
+       DataFrame with predictions or None
+
+.. autofunction:: parallel_leave_one_out
+
+   Parallel leave-one-out cross-validation across multiple GPUs.
+
+   Args:
+       locator: Locator instance
+       genotypes: GenotypeArray
+       samples: List of sample IDs
+       gpu_ids: List of GPU IDs to use
+       gpu_fraction: Fraction of GPU per worker
+       return_df: Whether to return DataFrame
+       save_full_pred_matrix: Whether to save predictions
+       na_action: NA handling mode
+
+   Returns:
+       DataFrame with predictions or None
+
+.. autofunction:: parallel_holdouts
+
+   Run multiple holdout replicates in parallel across multiple GPUs.
+
+   Args:
+       locator: Locator instance
+       genotypes: GenotypeArray
+       samples: List of sample IDs
+       k: Number of samples to hold out
+       n_reps: Number of replicates
+       holdout_indices: Optional specific indices
+       holdout_sample_ids: Optional sample IDs to hold out
+       gpu_ids: List of GPU IDs to use
+       gpu_fraction: Fraction of GPU per worker
+       return_df: Whether to return DataFrame
+       save_full_pred_matrix: Whether to save predictions
+       verbose: Show progress
+       na_action: NA handling mode
+
+   Returns:
+       DataFrame with predictions or None
+
+.. autofunction:: parallel_windows_holdouts
+
+   Run windowed analysis on holdout samples in parallel.
+
+   Args:
+       locator: Locator instance
+       genotypes: GenotypeArray
+       samples: List of sample IDs
+       k: Number of samples to hold out
+       window_start: Start position for windows
+       window_size: Size of windows in base pairs
+       window_stop: Stop position for windows
+       respect_chromosomes: Respect chromosome boundaries
+       holdout_indices: Optional specific indices
+       holdout_sample_ids: Optional sample IDs to hold out
+       gpu_ids: List of GPU IDs to use
+       gpu_fraction: Fraction of GPU per worker
+       return_df: Whether to return DataFrame
+       save_full_pred_matrix: Whether to save predictions
+       verbose: Show progress
+       na_action: NA handling mode
+
+   Returns:
+       DataFrame with window predictions or None
+
 Plotting Module
-^^^^^^^^^^^^^^^
+---------------
 .. module:: locator.plotting
+
+This module provides visualization functions for Locator predictions and analyses.
+
+Standalone Functions
+^^^^^^^^^^^^^^^^^^^^
+
+.. autofunction:: plot_predictions
+
+.. autofunction:: plot_error_summary
+
+.. autofunction:: plot_sample_weights
+
+.. autofunction:: kde_predict
+
+PlottingMixin Class
+^^^^^^^^^^^^^^^^^^^
 
 .. autoclass:: PlottingMixin
    :members:
-   :noindex:
+   :undoc-members:
+   :show-inheritance:
 
 
 

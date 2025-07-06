@@ -11,6 +11,8 @@ Locator is a deep learning-based tool for predicting geographic coordinates from
    usage
    data_pipeline_guide
    gpu_optimization_guide
+   parallel_analysis_guide
+   plotting_guide
    na_handling_guide
    api
    examples
@@ -23,6 +25,8 @@ Quick Links
 * :doc:`usage` - Basic and advanced usage guide
 * :doc:`data_pipeline_guide` - Memory-efficient data pipeline
 * :doc:`gpu_optimization_guide` - GPU optimization and performance guide
+* :doc:`parallel_analysis_guide` - Multi-GPU parallel analysis guide
+* :doc:`plotting_guide` - Visualization and plotting guide
 * :doc:`na_handling_guide` - Guide for handling missing coordinates
 * :doc:`api` - Complete API reference
 * :doc:`examples` - Example workflows
@@ -35,6 +39,7 @@ Key Features
 * GPU acceleration with automatic optimization
 * Mixed precision training for 2x speedup
 * Memory-efficient data pipeline with zero-copy splits
+* Multi-GPU parallel analysis with Ray
 * Custom loss functions for geographic constraints
 * Species range mask integration
 * Consistent handling of missing coordinates

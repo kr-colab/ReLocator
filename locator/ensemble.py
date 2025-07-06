@@ -97,8 +97,10 @@ class EnsembleLocator:
         )  # Samples not in training set
 
         # Also add samples with unknown locations from the training set
-        unknown_in_training = training_set_indices[np.isnan(subset_locations[:, 0])]
+        unknown_mask = np.isnan(subset_locations[:, 0])
+        unknown_in_training = training_set_indices[unknown_mask]
         pred_idx = np.concatenate([pred_idx, unknown_in_training])
+        pred_idx = pred_idx.astype(int)  # Ensure integer type
         pred_idx.sort()
 
         # Randomly shuffle known indices
@@ -116,7 +118,7 @@ class EnsembleLocator:
 
             # Get validation indices for this fold
             # Convert back to original sample indices
-            val_idx = training_set_indices[known_idx[start_idx:end_idx]]
+            val_idx = training_set_indices[known_idx[start_idx:end_idx]].astype(int)
 
             # Get training indices (all other known samples from training set)
             train_subset = known_idx[
@@ -124,7 +126,7 @@ class EnsembleLocator:
                     [np.arange(0, start_idx), np.arange(end_idx, len(known_idx))]
                 )
             ]
-            train_idx = training_set_indices[train_subset]
+            train_idx = training_set_indices[train_subset].astype(int)
 
             self.fold_indices[fold] = {
                 "train": train_idx,
