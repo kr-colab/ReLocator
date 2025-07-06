@@ -21,13 +21,13 @@ class TestVerbosityControl:
         assert locator.config.get('verbose_splits', False) == False
         assert locator.config.get('verbose_batch_size', False) == False
     
-    def test_verbose_splits_training(self, genotype_data, sample_data_file, capsys):
+    def test_verbose_splits_training(self, genotype_data, sample_data_file, capsys, tmp_path):
         """Test verbose_splits output during training."""
         genotypes, samples, coords, n_samples, n_snps = genotype_data
         
         config = {
             'sample_data': str(sample_data_file),
-            'out': 'test_verbose',
+            'out': str(tmp_path / 'test_verbose'),
             'verbose_splits': True,
             'max_epochs': 1,
             'keras_verbose': 0,
@@ -52,13 +52,13 @@ class TestVerbosityControl:
         assert f"Total samples: {n_samples}" in captured.out
         assert f"Total SNPs: {n_snps}" in captured.out
     
-    def test_verbose_splits_holdout(self, genotype_data, sample_data_file, capsys):
+    def test_verbose_splits_holdout(self, genotype_data, sample_data_file, capsys, tmp_path):
         """Test verbose_splits output during holdout training."""
         genotypes, samples, coords, n_samples, n_snps = genotype_data
         
         config = {
             'sample_data': str(sample_data_file),
-            'out': 'test_verbose_holdout',
+            'out': str(tmp_path / 'test_verbose_holdout'),
             'verbose_splits': True,
             'max_epochs': 1,
             'keras_verbose': 0,
@@ -79,13 +79,13 @@ class TestVerbosityControl:
         assert "Total samples:" in captured.out
         assert "Total SNPs:" in captured.out
     
-    def test_quiet_mode_splits(self, genotype_data, sample_data_file, capsys):
+    def test_quiet_mode_splits(self, genotype_data, sample_data_file, capsys, tmp_path):
         """Test that split info is not printed when verbose_splits=False."""
         genotypes, samples, coords, n_samples, n_snps = genotype_data
         
         config = {
             'sample_data': str(sample_data_file),
-            'out': 'test_quiet',
+            'out': str(tmp_path / 'test_quiet'),
             'verbose_splits': False,  # Explicitly set to False
             'max_epochs': 1,
             'keras_verbose': 0,
@@ -102,13 +102,13 @@ class TestVerbosityControl:
         assert "Data split summary:" not in captured.out
         assert "Training samples:" not in captured.out or "Training data:" in captured.out  # Allow for other training messages
     
-    def test_verbose_batch_size_cpu(self, genotype_data, sample_data_file, capsys):
+    def test_verbose_batch_size_cpu(self, genotype_data, sample_data_file, capsys, tmp_path):
         """Test verbose_batch_size with CPU (should not print GPU optimization info)."""
         genotypes, samples, coords, n_samples, n_snps = genotype_data
         
         config = {
             'sample_data': str(sample_data_file),
-            'out': 'test_batch_cpu',
+            'out': str(tmp_path / 'test_batch_cpu'),
             'verbose_batch_size': True,
             'batch_size': 32,
             'max_epochs': 1,
@@ -124,7 +124,7 @@ class TestVerbosityControl:
         assert "Optimal batch size determined:" not in captured.out
         assert "Using optimized batch size:" not in captured.out
     
-    def test_verbose_batch_size_auto(self, genotype_data, sample_data_file, monkeypatch, capsys):
+    def test_verbose_batch_size_auto(self, genotype_data, sample_data_file, monkeypatch, capsys, tmp_path):
         """Test verbose_batch_size with gpu_batch_size='auto'."""
         genotypes, samples, coords, n_samples, n_snps = genotype_data
         
@@ -141,7 +141,7 @@ class TestVerbosityControl:
         
         config = {
             'sample_data': str(sample_data_file),
-            'out': 'test_batch_auto',
+            'out': str(tmp_path / 'test_batch_auto'),
             'verbose_batch_size': True,
             'gpu_batch_size': 'auto',
             'max_epochs': 1,
@@ -161,13 +161,13 @@ class TestVerbosityControl:
         # Should attempt to print optimization info (even if it fails)
         assert "Using optimized batch size:" in captured.out or "Failed to optimize batch size:" in captured.out
     
-    def test_both_verbose_options(self, genotype_data, sample_data_file, capsys):
+    def test_both_verbose_options(self, genotype_data, sample_data_file, capsys, tmp_path):
         """Test with both verbose options enabled."""
         genotypes, samples, coords, n_samples, n_snps = genotype_data
         
         config = {
             'sample_data': str(sample_data_file),
-            'out': 'test_both_verbose',
+            'out': str(tmp_path / 'test_both_verbose'),
             'verbose_splits': True,
             'verbose_batch_size': True,
             'batch_size': 16,  # Fixed batch size
@@ -189,13 +189,13 @@ class TestVerbosityControl:
         # With fixed batch size and CPU, no batch optimization messages
         assert "Optimal batch size determined:" not in captured.out
     
-    def test_percentage_calculations(self, genotype_data, sample_data_file, capsys):
+    def test_percentage_calculations(self, genotype_data, sample_data_file, capsys, tmp_path):
         """Test that percentage calculations in verbose output are correct."""
         genotypes, samples, coords, n_samples, n_snps = genotype_data
         
         config = {
             'sample_data': str(sample_data_file),
-            'out': 'test_percentages',
+            'out': str(tmp_path / 'test_percentages'),
             'verbose_splits': True,
             'train_split': 0.8,  # 80% train
             'max_epochs': 1,

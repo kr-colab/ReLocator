@@ -284,7 +284,7 @@ class TestPhase2NAHandling:
         
         return genotypes, samples, sample_df
     
-    def test_train_with_na_action_separate(self, capsys):
+    def test_train_with_na_action_separate(self, capsys, tmp_path):
         """Test train() method with na_action='separate'."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
@@ -293,7 +293,7 @@ class TestPhase2NAHandling:
             'na_action': 'separate',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_separate'
+            'out': str(tmp_path / 'test_separate')
         })
         
         # Should work fine with separate mode
@@ -304,7 +304,7 @@ class TestPhase2NAHandling:
         assert "NA handling mode: separate" in captured.out
         assert history is not None
     
-    def test_train_with_na_action_exclude(self, capsys):
+    def test_train_with_na_action_exclude(self, capsys, tmp_path):
         """Test train() method with na_action='exclude'."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
@@ -313,7 +313,7 @@ class TestPhase2NAHandling:
             'na_action': 'exclude',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_exclude'
+            'out': str(tmp_path / 'test_exclude')
         })
         
         history = locator.train(genotypes=genotypes, samples=samples)
@@ -324,20 +324,20 @@ class TestPhase2NAHandling:
         assert "Excluding 3 samples without coordinates" in captured.out
         assert history is not None
     
-    def test_train_with_na_action_fail(self):
+    def test_train_with_na_action_fail(self, tmp_path):
         """Test train() method with na_action='fail' and NA samples."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
         locator = Locator({
             'sample_data': sample_df,
             'na_action': 'fail',
-            'out': 'test_fail'
+            'out': str(tmp_path / 'test_fail')
         })
         
         with pytest.raises(ValueError, match="Found 3 samples without coordinates"):
             locator.train(genotypes=genotypes, samples=samples)
     
-    def test_train_method_override(self, capsys):
+    def test_train_method_override(self, capsys, tmp_path):
         """Test train() with method-level na_action override."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
@@ -347,7 +347,7 @@ class TestPhase2NAHandling:
             'na_action': 'fail',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_override'
+            'out': str(tmp_path / 'test_override')
         })
         
         # Should work because we override with 'separate'
@@ -357,7 +357,7 @@ class TestPhase2NAHandling:
         assert "NA handling mode: separate" in captured.out
         assert history is not None
     
-    def test_run_bootstraps_with_na_action(self, capsys):
+    def test_run_bootstraps_with_na_action(self, capsys, tmp_path):
         """Test run_bootstraps() with NA handling."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
@@ -366,7 +366,7 @@ class TestPhase2NAHandling:
             'na_action': 'separate',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_bootstrap'
+            'out': str(tmp_path / 'test_bootstrap')
         })
         
         # Run with just 2 bootstraps for speed
@@ -383,20 +383,20 @@ class TestPhase2NAHandling:
         assert result is not None
         assert isinstance(result, pd.DataFrame)
     
-    def test_run_bootstraps_fail_mode(self):
+    def test_run_bootstraps_fail_mode(self, tmp_path):
         """Test run_bootstraps() with fail mode and NA samples."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
         locator = Locator({
             'sample_data': sample_df,
             'na_action': 'fail',
-            'out': 'test_bootstrap_fail'
+            'out': str(tmp_path / 'test_bootstrap_fail')
         })
         
         with pytest.raises(ValueError, match="Found 3 samples without coordinates"):
             locator.run_bootstraps(genotypes=genotypes, samples=samples, n_bootstraps=2)
     
-    def test_run_windows_with_na_action(self, capsys):
+    def test_run_windows_with_na_action(self, capsys, tmp_path):
         """Test run_windows() with NA handling."""
         # Create genotype data with positions
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
@@ -415,7 +415,7 @@ class TestPhase2NAHandling:
             'na_action': 'separate',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_window'
+            'out': str(tmp_path / 'test_window')
         })
         
         # Run windows analysis
@@ -479,7 +479,7 @@ class TestPhase3NAHandling:
         
         return genotypes, samples, sample_df
     
-    def test_run_holdouts_with_na_action(self, capsys):
+    def test_run_holdouts_with_na_action(self, capsys, tmp_path):
         """Test run_holdouts() with NA handling."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
@@ -488,7 +488,7 @@ class TestPhase3NAHandling:
             'na_action': 'separate',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_holdouts'
+            'out': str(tmp_path / 'test_holdouts')
         })
         
         # Run with just 2 replicates for speed
@@ -508,20 +508,20 @@ class TestPhase3NAHandling:
         assert result is not None
         assert isinstance(result, pd.DataFrame)
     
-    def test_run_holdouts_fail_mode(self):
+    def test_run_holdouts_fail_mode(self, tmp_path):
         """Test run_holdouts() with fail mode and NA samples."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
         locator = Locator({
             'sample_data': sample_df,
             'na_action': 'fail',
-            'out': 'test_holdouts_fail'
+            'out': str(tmp_path / 'test_holdouts_fail')
         })
         
         with pytest.raises(ValueError, match="Found 3 samples without coordinates"):
             locator.run_holdouts(genotypes=genotypes, samples=samples, k=2, n_reps=1)
     
-    def test_run_k_fold_holdouts_with_na_action(self, capsys):
+    def test_run_k_fold_holdouts_with_na_action(self, capsys, tmp_path):
         """Test run_k_fold_holdouts() with NA handling."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
@@ -530,7 +530,7 @@ class TestPhase3NAHandling:
             'na_action': 'separate',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_kfold'
+            'out': str(tmp_path / 'test_kfold')
         })
         
         # Run with just 2 folds for speed
@@ -549,7 +549,7 @@ class TestPhase3NAHandling:
         assert result is not None
         assert isinstance(result, pd.DataFrame)
     
-    def test_run_jacknife_with_na_action(self, capsys):
+    def test_run_jacknife_with_na_action(self, capsys, tmp_path):
         """Test run_jacknife() with NA handling."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
@@ -559,7 +559,7 @@ class TestPhase3NAHandling:
             'keras_verbose': 0,
             'max_epochs': 5,
             'nboots': 2,  # Just 2 boots for speed
-            'out': 'test_jacknife'
+            'out': str(tmp_path / 'test_jacknife')
         })
         
         result = locator.run_jacknife(
@@ -576,7 +576,7 @@ class TestPhase3NAHandling:
         assert result is not None
         assert isinstance(result, pd.DataFrame)
     
-    def test_run_jacknife_holdouts_with_na_action(self, capsys):
+    def test_run_jacknife_holdouts_with_na_action(self, capsys, tmp_path):
         """Test run_jacknife_holdouts() with NA handling."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
@@ -585,7 +585,7 @@ class TestPhase3NAHandling:
             'na_action': 'separate',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_jacknife_holdouts'
+            'out': str(tmp_path / 'test_jacknife_holdouts')
         })
         
         result = locator.run_jacknife_holdouts(
@@ -602,7 +602,7 @@ class TestPhase3NAHandling:
         assert result is not None
         assert isinstance(result, pd.DataFrame)
     
-    def test_run_windows_holdouts_with_na_action(self, capsys):
+    def test_run_windows_holdouts_with_na_action(self, capsys, tmp_path):
         """Test run_windows_holdouts() with NA handling."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
@@ -625,7 +625,7 @@ class TestPhase3NAHandling:
             'na_action': 'separate',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_windows_holdouts'
+            'out': str(tmp_path / 'test_windows_holdouts')
         })
         
         result = locator.run_windows_holdouts(
@@ -641,7 +641,7 @@ class TestPhase3NAHandling:
         assert "Note: Holdout analysis requires known locations" in captured.out
         assert result is not None
     
-    def test_holdout_method_override(self, capsys):
+    def test_holdout_method_override(self, capsys, tmp_path):
         """Test na_action override at method level for holdout methods."""
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=7)
         
@@ -651,7 +651,7 @@ class TestPhase3NAHandling:
             'na_action': 'fail',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_override'
+            'out': str(tmp_path / 'test_override')
         })
         
         # Should work because we override with 'exclude'

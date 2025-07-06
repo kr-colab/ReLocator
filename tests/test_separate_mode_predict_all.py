@@ -47,7 +47,7 @@ class TestSeparateModePredictAll:
         
         return genotypes, samples, sample_df
     
-    def test_separate_mode_predicts_all_samples(self):
+    def test_separate_mode_predicts_all_samples(self, tmp_path):
         """Test that 'separate' mode predicts on all samples (both known and NA)."""
         # Create test data with 20 samples (15 known, 5 NA)
         genotypes, samples, sample_df = self.create_test_data(n_samples=20, n_known=15)
@@ -58,7 +58,7 @@ class TestSeparateModePredictAll:
             'na_action': 'separate',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_separate_all'
+            'out': str(tmp_path / 'test_separate_all')
         })
         
         # Train the model
@@ -76,7 +76,7 @@ class TestSeparateModePredictAll:
         all_sample_ids = set(samples)
         assert pred_sample_ids == all_sample_ids, "Predictions should include all samples"
         
-    def test_separate_mode_with_no_na_samples(self):
+    def test_separate_mode_with_no_na_samples(self, tmp_path):
         """Test that 'separate' mode works correctly when all samples have coordinates."""
         # Create test data with all samples having known coordinates
         genotypes, samples, sample_df = self.create_test_data(n_samples=10, n_known=10)
@@ -87,7 +87,7 @@ class TestSeparateModePredictAll:
             'na_action': 'separate',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_separate_no_na'
+            'out': str(tmp_path / 'test_separate_no_na')
         })
         
         # Train the model
@@ -100,7 +100,7 @@ class TestSeparateModePredictAll:
         # Check that we still get predictions for all samples
         assert len(predictions) == 10, f"Expected 10 predictions but got {len(predictions)}"
         
-    def test_exclude_mode_only_predicts_na(self):
+    def test_exclude_mode_only_predicts_na(self, tmp_path):
         """Test that 'exclude' mode excludes NA samples from both training and prediction."""
         # Create test data with 20 samples (15 known, 5 NA)
         genotypes, samples, sample_df = self.create_test_data(n_samples=20, n_known=15)
@@ -111,7 +111,7 @@ class TestSeparateModePredictAll:
             'na_action': 'exclude',
             'keras_verbose': 0,
             'max_epochs': 5,
-            'out': 'test_exclude'
+            'out': str(tmp_path / 'test_exclude')
         })
         
         # Train the model
