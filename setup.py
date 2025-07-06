@@ -49,6 +49,10 @@ setup(
             "sphinx-autodoc-typehints",
             "sphinx-autobuild",
         ],
+        "ray": [
+            "ray[train]>=2.9.0",  # Ray Train for distributed training
+            "ray[data]>=2.9.0",   # Ray Data for data processing
+        ],
     },
     entry_points={
         "console_scripts": [
