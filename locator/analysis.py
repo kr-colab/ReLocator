@@ -20,6 +20,7 @@ class AnalysisMixin:
         window_start=0,
         window_size=5e5,
         window_stop=None,
+        respect_chromosomes=True,
         return_df=False,
         save_full_pred_matrix=True,
         na_action=None,
@@ -32,6 +33,9 @@ class AnalysisMixin:
             window_start: Start position for windows (default: 0)
             window_size: Size of windows in base pairs (default: 500kb)
             window_stop: Stop position for windows (default: None)
+            respect_chromosomes: Whether to respect chromosome boundaries when creating
+                windows (default: True). If True, windows will not span chromosome
+                boundaries. Requires chromosome information from VCF/Zarr input.
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
             na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
@@ -48,10 +52,10 @@ class AnalysisMixin:
             - With na_action='fail': Raises error if any NA samples found
             
         Warning:
-            Window analysis currently treats all SNP positions as continuous along a single
-            coordinate axis. If your data contains multiple chromosomes, windows may span
-            across chromosome boundaries. For accurate per-chromosome analysis, consider
-            filtering your data to single chromosomes before running window analysis.
+            When respect_chromosomes=False, window analysis treats all SNP positions as 
+            continuous along a single coordinate axis. If your data contains multiple 
+            chromosomes, windows may span across chromosome boundaries. Use 
+            respect_chromosomes=True (default) for biologically meaningful windows.
         """
         # Store samples
         self.samples = samples
@@ -112,39 +116,36 @@ class AnalysisMixin:
         if window_stop is None:
             window_stop = max(self.positions)
 
-        # Check if we have chromosome information and warn if multiple chromosomes
-        if hasattr(self, "chromosomes") and self.chromosomes is not None:
-            unique_chroms = np.unique(self.chromosomes)
-            if len(unique_chroms) > 1:
-                import warnings
-                warnings.warn(
-                    f"Multiple chromosomes detected ({len(unique_chroms)}). "
-                    f"Window analysis currently treats all positions as continuous, "
-                    f"which may create windows spanning multiple chromosomes. "
-                    f"Consider filtering to single chromosomes for more accurate results."
-                )
-
-        windows = range(int(window_start), int(window_stop), int(window_size))
+        # Generate windows using the new helper function
+        from .data.windows import generate_genomic_windows
+        
+        chromosomes = getattr(self, 'chromosomes', None)
+        windows = generate_genomic_windows(
+            positions=self.positions,
+            chromosomes=chromosomes,
+            window_start=window_start,
+            window_size=int(window_size),
+            window_stop=window_stop,
+            respect_chromosomes=respect_chromosomes,
+            min_snps_per_window=self.config.get('min_snps_per_window', 1),
+            verbose=self.config.get('verbose', False)
+        )
 
         # Initial training to set up model and data
-        first_window = (self.positions >= int(window_start)) & (
-            self.positions < int(window_start + window_size)
-        )
-        if sum(first_window) > 0:
-            window_genos = genotypes[first_window, :, :]
-            self.train(genotypes=window_genos, samples=samples, na_action=na_action)
+        if len(windows) > 0:
+            first_window_indices = windows[0]['indices']
+            if np.sum(first_window_indices) > 0:
+                window_genos = genotypes[first_window_indices, :, :]
+                self.train(genotypes=window_genos, samples=samples, na_action=na_action)
 
         # Create lists to store predictions
         pred_dfs = []
 
-        print("starting window analysis")
-        for start in tqdm(windows):
-            stop = start + int(window_size)
-            in_window = (self.positions >= start) & (self.positions < stop)
-
-            if sum(in_window) > 0:
+        print(f"Starting window analysis ({len(windows)} windows)")
+        for window in tqdm(windows):
+            if window['n_snps'] > 0:
                 # Get genotypes for this window
-                window_genos = genotypes[in_window, :, :]
+                window_genos = genotypes[window['indices'], :, :]
 
                 # Clear existing model and weights
                 self.model = None
@@ -159,9 +160,9 @@ class AnalysisMixin:
                 )
 
                 if return_df:
-                    # Rename columns to include window start
+                    # Rename columns to include window label
                     window_preds = preds[["sampleID", "x", "y"]].copy()
-                    window_preds.columns = ["sampleID", f"x_win{start}", f"y_win{start}"]
+                    window_preds.columns = ["sampleID", f"x_{window['label']}", f"y_{window['label']}"]
                     pred_dfs.append(window_preds)
 
                 # Clear keras session
@@ -545,6 +546,7 @@ class AnalysisMixin:
         k=10,
         n_reps=10,
         holdout_indices=None,
+        holdout_sample_ids=None,
         return_df=False,
         save_full_pred_matrix=True,
         na_action=None,
@@ -557,6 +559,10 @@ class AnalysisMixin:
             k: Number of samples to hold out in each replicate
             n_reps: Number of holdout replicates to run
             holdout_indices: Optional list of lists, each containing indices to hold out
+            holdout_sample_ids: Optional list of sample IDs to hold out. If provided,
+                these specific samples will be held out (overrides k and holdout_indices).
+                Can be a single list (used for all replicates) or list of lists
+                (different samples per replicate).
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
             na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
@@ -616,6 +622,38 @@ class AnalysisMixin:
         # Get indices of samples with known locations
         known_idx = np.argwhere(~np.isnan(locs[:, 0]))
         known_idx = np.array([x[0] for x in known_idx])
+
+        # Handle holdout_sample_ids if provided
+        if holdout_sample_ids is not None:
+            # Convert samples to list if it's a numpy array
+            if hasattr(samples, 'tolist'):
+                samples_list = samples.tolist()
+            else:
+                samples_list = list(samples)
+                
+            # Convert sample IDs to indices
+            if isinstance(holdout_sample_ids[0], str):
+                # Single list of sample IDs for all replicates
+                try:
+                    holdout_indices = [[samples_list.index(sid) for sid in holdout_sample_ids]]
+                except ValueError as e:
+                    missing = [sid for sid in holdout_sample_ids if sid not in samples_list]
+                    raise ValueError(f"Sample IDs not found in samples list: {missing}")
+                # Replicate for all n_reps if needed
+                holdout_indices = holdout_indices * n_reps
+                k = len(holdout_sample_ids)  # Update k to match
+            else:
+                # List of lists - different sample IDs per replicate
+                holdout_indices = []
+                for rep_ids in holdout_sample_ids:
+                    try:
+                        rep_indices = [samples_list.index(sid) for sid in rep_ids]
+                    except ValueError:
+                        missing = [sid for sid in rep_ids if sid not in samples_list]
+                        raise ValueError(f"Sample IDs not found in samples list: {missing}")
+                    holdout_indices.append(rep_indices)
+                n_reps = len(holdout_indices)  # Update n_reps to match
+                k = len(holdout_indices[0]) if holdout_indices else 0
 
         if k >= len(known_idx):
             raise ValueError(
@@ -896,7 +934,9 @@ class AnalysisMixin:
         window_start=0,
         window_size=5e5,
         window_stop=None,
+        respect_chromosomes=True,
         holdout_indices=None,
+        holdout_sample_ids=None,
         return_df=False,
         save_full_pred_matrix=True,
         na_action=None,
@@ -910,7 +950,12 @@ class AnalysisMixin:
             window_start: Start position for windows
             window_size: Size of windows in base pairs
             window_stop: Stop position for windows
+            respect_chromosomes: Whether to respect chromosome boundaries when creating
+                windows (default: True). If True, windows will not span chromosome
+                boundaries. Requires chromosome information from VCF/Zarr input.
             holdout_indices: Optional specific indices to hold out
+            holdout_sample_ids: Optional list of sample IDs to hold out. If provided,
+                these specific samples will be held out (overrides k and holdout_indices).
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
             na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
@@ -927,10 +972,10 @@ class AnalysisMixin:
             - With na_action='fail': Raises error if any NA samples found
             
         Warning:
-            Window analysis currently treats all SNP positions as continuous along a single
-            coordinate axis. If your data contains multiple chromosomes, windows may span
-            across chromosome boundaries. For accurate per-chromosome analysis, consider
-            filtering your data to single chromosomes before running window analysis.
+            When respect_chromosomes=False, window analysis treats all SNP positions as 
+            continuous along a single coordinate axis. If your data contains multiple 
+            chromosomes, windows may span across chromosome boundaries. Use 
+            respect_chromosomes=True (default) for biologically meaningful windows.
         """
         # Store samples and genotypes for efficient access
         self.samples = samples
@@ -1002,6 +1047,22 @@ class AnalysisMixin:
                     "genotype DataFrame with position-labeled columns."
                 )
         
+        # Handle holdout_sample_ids if provided
+        if holdout_sample_ids is not None:
+            # Convert samples to list if it's a numpy array
+            if hasattr(samples, 'tolist'):
+                samples_list = samples.tolist()
+            else:
+                samples_list = list(samples)
+                
+            # Convert sample IDs to indices
+            try:
+                holdout_indices = [samples_list.index(sid) for sid in holdout_sample_ids]
+            except ValueError:
+                missing = [sid for sid in holdout_sample_ids if sid not in samples_list]
+                raise ValueError(f"Sample IDs not found in samples list: {missing}")
+            k = len(holdout_indices)  # Update k to match
+
         # Create IndexSet for holdout splitting
         n_samples = len(samples)
         if holdout_indices is not None:
@@ -1034,19 +1095,20 @@ class AnalysisMixin:
         if window_stop is None:
             window_stop = max(self.positions)
 
-        # Check if we have chromosome information and warn if multiple chromosomes
-        if hasattr(self, "chromosomes") and self.chromosomes is not None:
-            unique_chroms = np.unique(self.chromosomes)
-            if len(unique_chroms) > 1:
-                import warnings
-                warnings.warn(
-                    f"Multiple chromosomes detected ({len(unique_chroms)}). "
-                    f"Window analysis currently treats all positions as continuous, "
-                    f"which may create windows spanning multiple chromosomes. "
-                    f"Consider filtering to single chromosomes for more accurate results."
-                )
-
-        windows = range(int(window_start), int(window_stop), int(window_size))
+        # Generate windows using the new helper function
+        from .data.windows import generate_genomic_windows
+        
+        chromosomes = getattr(self, 'chromosomes', None)
+        windows = generate_genomic_windows(
+            positions=self.positions,
+            chromosomes=chromosomes,
+            window_start=window_start,
+            window_size=int(window_size),
+            window_stop=window_stop,
+            respect_chromosomes=respect_chromosomes,
+            min_snps_per_window=self.config.get('min_snps_per_window', 1),
+            verbose=self.config.get('verbose', False)
+        )
 
         # Create lists to store predictions
         pred_dfs = []
@@ -1095,7 +1157,7 @@ class AnalysisMixin:
                     
                     print(f"Using bandwidth: {optimal_bandwidth:.3f}")
 
-        print(f"Running windowed analysis for holdout samples")
+        print(f"Running windowed analysis for holdout samples ({len(windows)} windows)")
         
         # Store the full IndexSet for use across windows
         self.index_set = index_set
@@ -1114,10 +1176,8 @@ class AnalysisMixin:
             normalize_locs(locs)
         )
 
-        for start in tqdm(windows):
-            stop = start + int(window_size)
-            snp_mask = (self.positions >= start) & (self.positions < stop)
-            snp_indices = np.where(snp_mask)[0]
+        for window in tqdm(windows):
+            snp_indices = np.where(window['indices'])[0]
 
             if len(snp_indices) > 0:
                 # Clear existing model and weights
@@ -1142,9 +1202,9 @@ class AnalysisMixin:
                 )
 
                 if return_df:
-                    # Rename columns to include window position
+                    # Rename columns to include window label
                     window_preds = preds[["x_pred", "y_pred"]].copy()
-                    window_preds.columns = [f"x_pos{start}", f"y_pos{start}"]
+                    window_preds.columns = [f"x_{window['label']}", f"y_{window['label']}"]
                     window_preds["sampleID"] = preds["sampleID"]
                     pred_dfs.append(window_preds)
 
