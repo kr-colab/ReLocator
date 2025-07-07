@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import tensorflow as tf
 
 from locator import EnsembleLocator, Locator
 from locator.data import IndexSet, filter_snps, make_tf_dataset, normalize_locs
@@ -619,8 +620,13 @@ class TestGPUExamples:
                 ),
             }
         )
-        # GPU optimizations are enabled by default
-        assert loc.config.get("use_mixed_precision", True) is True
+        # GPU optimizations are enabled by default if GPU is available
+        # In CI without GPU, use_mixed_precision will be False
+        if tf.config.list_physical_devices("GPU"):
+            assert loc.config.get("use_mixed_precision", True) is True
+        else:
+            # When no GPU is available, mixed precision is disabled
+            assert loc.config.get("use_mixed_precision", False) is False
 
         # Example 2: Memory-constrained GPU
         loc_constrained = Locator(
