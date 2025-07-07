@@ -1,5 +1,7 @@
 """Ensemble functionality mixin for locator"""
 
+import gc
+
 import numpy as np
 import pandas as pd
 from tensorflow import keras
@@ -8,6 +10,7 @@ from .data import IndexSet, NormalizationParams
 from .data import filter_snps_legacy as filter_snps
 from .data import make_tf_dataset, normalize_locs
 from .ensemble_model_manager import EnsembleModelManager
+from .gpu_optimizer import GPUOptimizer
 
 # from tqdm import tqdm
 
@@ -122,6 +125,8 @@ class EnsembleMixin:
         save_fold_models=True,
         verbose=True,
         use_model_manager=True,
+        use_mixed_precision=None,
+        patience_multiplier=1.0,
     ):
         """Train an ensemble of k models using k-fold cross-validation.
 
@@ -139,6 +144,9 @@ class EnsembleMixin:
             flip_rate: Rate for genotype flipping augmentation (default: 0.05)
             save_fold_models: Whether to save individual fold models (default: True)
             verbose: Whether to show training progress (default: True)
+            use_model_manager: Whether to use model manager for saving (default: True)
+            use_mixed_precision: Whether to use mixed precision training (default: None, auto-detect)
+            patience_multiplier: Multiply patience for ensemble training (default: 1.0)
 
         Returns:
             dict: Dictionary containing:
@@ -147,6 +155,15 @@ class EnsembleMixin:
                 - 'normalization_params': Averaged normalization parameters
                 - 'fold_info': Information about fold splits
         """
+        # Setup GPU optimizations for ensemble training
+        if verbose:
+            mixed_precision_enabled = self.setup_ensemble_gpu_optimization(
+                use_mixed_precision
+            )
+            if mixed_precision_enabled:
+                print("Mixed precision training enabled for ensemble")
+        else:
+            self.setup_ensemble_gpu_optimization(use_mixed_precision)
         # Store samples for later use
         self.samples = samples
 
@@ -196,6 +213,7 @@ class EnsembleMixin:
                 locs=locs,
                 augment_config=augment_config,
                 save_fold_models=save_fold_models,
+                patience_multiplier=patience_multiplier,
                 verbose=verbose,
             )
 
@@ -212,8 +230,8 @@ class EnsembleMixin:
             self._ensemble_histories.append(model_info["history"])
             self._ensemble_norm_params.append(model_info["norm_params"])
 
-            # Clear session to free memory
-            keras.backend.clear_session()
+            # Clear memory efficiently between folds
+            self._clear_fold_memory()
 
         # Calculate averaged normalization parameters
         avg_norm_params = self._average_normalization_params(self._ensemble_norm_params)
@@ -255,6 +273,7 @@ class EnsembleMixin:
         locs,
         augment_config=None,
         save_fold_models=True,
+        patience_multiplier=1.0,
         verbose=True,
     ):
         """Train a single fold model efficiently.
@@ -304,13 +323,16 @@ class EnsembleMixin:
         normalized_locs[train_idx] = normalized_train_locs
         normalized_locs[val_idx] = normalized_val_locs
 
+        # Determine optimal batch size for ensemble
+        batch_size = self.get_ensemble_batch_size(len(train_idx), fold_idx)
+
         # Create datasets
         train_dataset = make_tf_dataset(
             genotypes=filtered_genotypes,
             coordinates=normalized_locs,
             index_set=index_set,
             split="train",
-            batch_size=self._determine_batch_size(len(train_idx)),
+            batch_size=batch_size,
             augment=augment_config,
             training=True,
             cache=True,
@@ -321,13 +343,15 @@ class EnsembleMixin:
             coordinates=normalized_locs,
             index_set=index_set,
             split="test",  # k-fold uses 'test' for validation
-            batch_size=self._determine_batch_size(len(val_idx)),
+            batch_size=batch_size,
             training=False,
             cache=True,
         )
 
         # Create callbacks for this fold
-        callbacks = self._create_fold_callbacks(fold_idx, save_fold_models)
+        callbacks = self._create_fold_callbacks(
+            fold_idx, save_fold_models, patience_multiplier
+        )
 
         # Train model
         history = model.fit(
@@ -348,12 +372,15 @@ class EnsembleMixin:
             "val_indices": val_idx,
         }
 
-    def _create_fold_callbacks(self, fold_idx, save_fold_models=True):
+    def _create_fold_callbacks(
+        self, fold_idx, save_fold_models=True, patience_multiplier=1.0
+    ):
         """Create callbacks for a specific fold.
 
         Args:
             fold_idx: Fold index
             save_fold_models: Whether to save fold models
+            patience_multiplier: Multiply patience for ensemble training
 
         Returns:
             list: List of Keras callbacks
@@ -377,23 +404,9 @@ class EnsembleMixin:
             )
             callbacks.append(checkpointer)
 
-        # Add standard callbacks
-        earlystop = keras.callbacks.EarlyStopping(
-            monitor="val_loss",
-            min_delta=0,
-            patience=self.config.get("patience", 100),
-        )
-
-        reducelr = keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss",
-            factor=0.5,
-            patience=self.config.get("patience", 100) // 6,
-            verbose=self.config.get("keras_verbose", 1),
-            mode="auto",
-            min_delta=0,
-            cooldown=0,
-            min_lr=0,
-        )
+        # Use enhanced callbacks from EnsembleTrainingMixin
+        earlystop = self.create_ensemble_early_stopping(patience_multiplier)
+        reducelr = self.create_ensemble_lr_scheduler(fold_idx)
 
         callbacks.extend([earlystop, reducelr])
         return callbacks
@@ -708,3 +721,127 @@ class EnsembleMixin:
             return result_df
         else:
             return ensemble_mean
+
+    # Training improvement methods (consolidated from ensemble_improvements.py)
+    def setup_ensemble_gpu_optimization(self, use_mixed_precision=None):
+        """Setup GPU optimizations for ensemble training.
+
+        Args:
+            use_mixed_precision: Whether to use mixed precision training.
+                If None, uses config value or auto-detects based on GPU.
+
+        Returns:
+            bool: Whether mixed precision was enabled
+        """
+        # Check if we should use mixed precision
+        if use_mixed_precision is None:
+            use_mixed_precision = self.config.get("use_mixed_precision", True)
+
+        # Apply mixed precision if requested and not already applied
+        mixed_precision_enabled = False
+        if use_mixed_precision and not hasattr(self, "_mixed_precision_setup"):
+            mixed_precision_enabled = GPUOptimizer.setup_mixed_precision()
+            self._mixed_precision_setup = True
+
+        return mixed_precision_enabled
+
+    def get_ensemble_batch_size(self, dataset_size, fold_idx=0):
+        """Determine optimal batch size for ensemble training.
+
+        Uses GPUOptimizer to find the best batch size, with caching
+        to avoid recomputing for each fold.
+
+        Args:
+            dataset_size: Size of training dataset
+            fold_idx: Current fold index (for logging)
+
+        Returns:
+            int: Optimal batch size
+        """
+        # Check if we already computed batch size
+        if hasattr(self, "_ensemble_batch_size"):
+            return self._ensemble_batch_size
+
+        # Get batch size from config or auto-determine
+        batch_size = self.config.get("batch_size")
+
+        if batch_size == "auto" or batch_size is None:
+            # Only compute for first fold, reuse for others
+            if fold_idx == 0 and hasattr(self, "model") and self.model is not None:
+                batch_size = GPUOptimizer.get_optimal_batch_size(
+                    model=self.model,
+                    input_shape=(self.filtered_genotypes.shape[0],),
+                    dataset_size=dataset_size,
+                    verbose=self.config.get("keras_verbose", 1) > 0,
+                )
+                self._ensemble_batch_size = batch_size
+            else:
+                # Use reasonable default
+                batch_size = self._determine_batch_size(dataset_size)
+                self._ensemble_batch_size = batch_size
+        else:
+            self._ensemble_batch_size = batch_size
+
+        return self._ensemble_batch_size
+
+    def create_ensemble_early_stopping(self, patience_multiplier=1.5):
+        """Create early stopping callback with ensemble-specific settings.
+
+        Args:
+            patience_multiplier: Multiply base patience for ensemble training
+                (ensembles often benefit from longer training)
+
+        Returns:
+            keras.callbacks.EarlyStopping: Configured callback
+        """
+        base_patience = self.config.get("patience", 100)
+        ensemble_patience = int(base_patience * patience_multiplier)
+
+        return keras.callbacks.EarlyStopping(
+            monitor="val_loss",
+            min_delta=self.config.get("min_delta", 0),
+            patience=ensemble_patience,
+            restore_best_weights=self.config.get("restore_best_weights", True),
+            verbose=self.config.get("keras_verbose", 1) > 0,
+        )
+
+    def create_ensemble_lr_scheduler(self, fold_idx):
+        """Create learning rate scheduler for ensemble training.
+
+        Each fold can start with a slightly different learning rate
+        to improve ensemble diversity.
+
+        Args:
+            fold_idx: Current fold index
+
+        Returns:
+            keras.callbacks.ReduceLROnPlateau: Configured callback
+        """
+        # Add small variation to learning rate based on fold
+        base_lr = self.config.get("learning_rate", 0.001)
+        lr_variation = 1 + (fold_idx * 0.1) / self.config.get("k_folds", 5)
+
+        # Update optimizer learning rate if model exists
+        if hasattr(self, "model") and self.model is not None:
+            keras.backend.set_value(
+                self.model.optimizer.learning_rate, base_lr * lr_variation
+            )
+
+        return keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.5,
+            patience=self.config.get("patience", 100) // 6,
+            verbose=self.config.get("keras_verbose", 1),
+            mode="auto",
+            min_delta=0,
+            cooldown=0,
+            min_lr=base_lr * 0.01,  # Don't go below 1% of original LR
+        )
+
+    def _clear_fold_memory(self):
+        """Clear memory after training a fold."""
+        # Clear keras backend session
+        keras.backend.clear_session()
+
+        # Force garbage collection
+        gc.collect()

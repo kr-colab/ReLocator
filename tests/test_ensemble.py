@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+from unittest.mock import patch
 
 import allel
 import numpy as np
@@ -463,3 +464,70 @@ class TestEnsemble:
         assert "x_fold0" in predictions.columns
         assert "x_fold1" in predictions.columns
         assert "x_fold2" in predictions.columns
+
+    # Phase 4 tests: Training improvements
+    def test_ensemble_with_mixed_precision(self):
+        """Test ensemble training with mixed precision."""
+        genotypes, samples, coords_df = self.create_test_data(n_samples=20, n_snps=50)
+
+        config = {
+            "sample_data": coords_df,
+            "max_epochs": 1,
+            "keras_verbose": 0,
+        }
+
+        locator = Locator(config)
+
+        # Mock GPU optimizer to avoid GPU requirements
+        with patch(
+            "locator.ensemble_mixin.GPUOptimizer.setup_mixed_precision"
+        ) as mock_mp:
+            mock_mp.return_value = True
+
+            locator.train_ensemble(
+                genotypes=genotypes,
+                samples=samples,
+                k=2,
+                use_mixed_precision=True,
+                save_fold_models=False,
+                verbose=False,
+            )
+
+            # Should have called mixed precision setup
+            mock_mp.assert_called()
+
+    def test_ensemble_patience_multiplier(self):
+        """Test that patience multiplier affects training."""
+        genotypes, samples, coords_df = self.create_test_data(n_samples=20, n_snps=50)
+
+        config = {
+            "sample_data": coords_df,
+            "max_epochs": 1,
+            "keras_verbose": 0,
+            "patience": 10,
+        }
+
+        locator = Locator(config)
+
+        # Check callback creation with multiplier
+        callback = locator.create_ensemble_early_stopping(patience_multiplier=2.0)
+        assert callback.patience == 20
+
+    def test_ensemble_memory_management(self):
+        """Test memory management between folds."""
+        genotypes, samples, coords_df = self.create_test_data(n_samples=10, n_snps=20)
+
+        config = {
+            "sample_data": coords_df,
+            "keras_verbose": 0,
+        }
+
+        locator = Locator(config)
+
+        # Test the _clear_fold_memory method directly
+        with patch("locator.ensemble_mixin.keras.backend.clear_session") as mock_clear:
+            with patch("locator.ensemble_mixin.gc.collect") as mock_gc:
+                locator._clear_fold_memory()
+
+                mock_clear.assert_called_once()
+                mock_gc.assert_called_once()
