@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import tensorflow as tf
@@ -10,7 +10,7 @@ import tensorflow as tf
 from .indexset import IndexSet
 
 
-def make_tf_dataset(
+def make_tf_dataset(  # noqa: C901
     genotypes: np.ndarray,
     coordinates: np.ndarray,
     index_set: IndexSet,
@@ -240,7 +240,7 @@ def make_tf_dataset_from_arrays(
         Single dataset or tuple of datasets (train, test, val)
     """
     # Transpose to get (n_features, n_samples) shape expected by make_tf_dataset
-    n_features = train_gen.shape[1]
+    # n_features = train_gen.shape[1]  # noqa: F841
     n_train = train_gen.shape[0]
 
     # Create combined arrays

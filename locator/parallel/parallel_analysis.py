@@ -19,10 +19,8 @@ GPU Fraction Settings:
 
 import os
 import pickle
-import sys
 import tempfile
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
@@ -30,12 +28,6 @@ import pandas as pd
 
 # Ray imports
 import ray
-
-# Import types for annotation
-if sys.version_info >= (3, 8):
-    from typing import TypedDict
-else:
-    from typing_extensions import TypedDict
 
 
 def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
@@ -96,7 +88,7 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
 
         # Reconstruct GenotypeArray
         gt_array = data["genotypes_array"]
-        shape = data["genotypes_shape"]
+        # shape = data["genotypes_shape"]  # noqa: F841
         # FIXED: Simply reconstruct from the raw values
         genotypes = allel.GenotypeArray(gt_array)
 
@@ -168,7 +160,7 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
     return _ray_kfold_worker
 
 
-def parallel_k_fold_holdouts(
+def parallel_k_fold_holdouts(  # noqa: C901
     locator,
     genotypes,
     samples,
@@ -432,13 +424,13 @@ def parallel_k_fold_holdouts(
         actual_samples = set(all_predictions["sampleID"].unique())
 
         if expected_samples != actual_samples:
-            print(f"WARNING: Sample mismatch in final results!")
+            print("WARNING: Sample mismatch in final results!")
             print(f"Expected {len(expected_samples)} unique samples")
             print(f"Got {len(actual_samples)} unique samples")
             missing = expected_samples - actual_samples
             extra = actual_samples - expected_samples
             if missing:
-                print(f"Missing samples: {list(missing)[:10]}...")
+                print("Missing samples: {list(missing)[:10]}...")
             if extra:
                 print(f"Extra samples: {list(extra)[:10]}...")
 
@@ -625,7 +617,7 @@ def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
     return _ray_holdout_worker
 
 
-def parallel_holdouts(
+def parallel_holdouts(  # noqa: C901
     locator,
     genotypes,
     samples,
@@ -967,8 +959,8 @@ def _create_ray_windows_worker(gpu_fraction: float = 1.0):
         import tensorflow as tf
 
         from locator import Locator
-        from locator.data.filters import normalize_locs
-        from locator.data.indexset import IndexSet
+        from locator.data.filters import normalize_locs  # noqa: F401
+        from locator.data.indexset import IndexSet  # noqa: F401
 
         # Suppress TF warnings
         tf.get_logger().setLevel("ERROR")
@@ -1078,7 +1070,7 @@ def _create_ray_windows_worker(gpu_fraction: float = 1.0):
     return _ray_windows_worker
 
 
-def parallel_windows_holdouts(
+def parallel_windows_holdouts(  # noqa: C901
     locator,
     genotypes,
     samples,

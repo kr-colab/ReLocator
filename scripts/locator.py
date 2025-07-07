@@ -3,13 +3,15 @@ import argparse
 import copy
 import json
 import os
-import re
+
+# import re  # noqa: F401
 import subprocess
 import sys
 import time
 
 import allel
-import matplotlib
+
+# import matplotlib  # noqa: F401
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -208,7 +210,7 @@ def load_genotypes():
         gt = callset["calldata/GT"]
         genotypes = allel.GenotypeArray(gt[:])
         samples = callset["samples"][:]
-        positions = callset["variants/POS"]
+        # positions = callset["variants/POS"]  # noqa: F841
     elif args.vcf is not None:
         print("reading VCF")
         vcf = allel.read_vcf(args.vcf, log=sys.stderr)
@@ -291,7 +293,7 @@ def filter_snps(genotypes):
         ac = replace_md(genotypes)
     else:
         ac = genotypes.to_allele_counts()[:, :, 1]
-    if not args.max_SNPs == None:
+    if args.max_SNPs is not None:
         ac = ac[np.random.choice(range(ac.shape[0]), args.max_SNPs, replace=False), :]
     print("running on " + str(len(ac)) + " genotypes after filtering\n\n\n")
     return ac
@@ -311,7 +313,7 @@ def normalize_locs(locs):
 def split_train_test(ac, locs):
     train = np.argwhere(~np.isnan(locs[:, 0]))
     train = np.array([x[0] for x in train])
-    pred = np.array([x for x in range(len(locs)) if not x in train])
+    pred = np.array([x for x in range(len(locs)) if x not in train])
     test = np.random.choice(
         train, round((1 - args.train_split) * len(train)), replace=False
     )
@@ -409,7 +411,7 @@ def predict_locs(
     testgen,
     verbose=True,
 ):
-    if verbose == True:
+    if verbose is True:
         print("predicting locations...")
     prediction = model.predict(predgen)
     prediction = np.array(
@@ -449,7 +451,7 @@ def predict_locs(
     dists = [
         spatial.distance.euclidean(p2[x, :], testlocs2[x, :]) for x in range(len(p2))
     ]
-    if verbose == True:
+    if verbose is True:
         print(
             "R2(x)="
             + str(r2_long)
@@ -481,29 +483,30 @@ def plot_history(history, dists, gnuplot):
         ax2.set_xlabel("Training Loss")
         fig.savefig(args.out + "_fitplot.pdf", bbox_inches="tight")
         if gnuplot:
-            gp.plot(
-                np.array(history.history["val_loss"][3:]),
-                unset="grid",
-                terminal="dumb 60 20",
-                # set= 'logscale y',
-                title="Validation Loss by Epoch",
-            )
-            gp.plot(
-                (np.array(dists), dict(histogram="freq", binwidth=np.std(dists) / 5)),
-                unset="grid",
-                terminal="dumb 60 20",
-                title="Test Error",
-            )
+            pass  # gnuplotlib not imported
+            # gp.plot(
+            #     np.array(history.history["val_loss"][3:]),
+            #     unset="grid",
+            #     terminal="dumb 60 20",
+            #     # set= 'logscale y',
+            #     title="Validation Loss by Epoch",
+            # )
+            # gp.plot(
+            #     (np.array(dists), dict(histogram="freq", binwidth=np.std(dists) / 5)),
+            #     unset="grid",
+            #     terminal="dumb 60 20",
+            #     title="Test Error",
+            # )
 
 
 ### windows ###
-if args.windows:
+if args.windows:  # noqa: C901
     callset = zarr.open_group(args.zarr, mode="r")
     gt = callset["calldata/GT"]
     samples = callset["samples"][:]
     positions = np.array(callset["variants/POS"])
     start = int(args.window_start)
-    if args.window_stop == None:
+    if args.window_stop is None:
         stop = np.max(positions)
     else:
         stop = int(args.window_stop)
@@ -704,7 +707,7 @@ else:
             subprocess.run("rm " + args.out + "_bootFULL_weights.hdf5", shell=True)
 
 # ag1000g.phase1.ar3.pass.2L.0-5e6.zarr
-###debugging params
+# debugging params
 # args=argparse.Namespace(vcf=None,#"/Users/cj/locator/data/test_genotypes.vcf.gz",
 #                         matrix=None,#"/Users/cj/locator/data/test_genotypes.vcf.gz",
 #                         zarr="/Users/cj/locator/data/test_genotypes.zarr",

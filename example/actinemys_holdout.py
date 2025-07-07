@@ -28,7 +28,6 @@ import pandas as pd
 
 from locator import Locator
 from locator.plotting import plot_error_summary
-from locator.utils import weight_samples
 
 vcf_path = "/sietch_colab/data_share/turtles_Actinemys/58-Actinemys/QC/58-Actinemys.pruned.vcf.gz"
 coords_path = "/sietch_colab/data_share/turtles_Actinemys/actinemys_locator_metadata.tsv"
@@ -115,7 +114,7 @@ ho_preds_merged["error_km"] = (
 
 # Sort by error and get top 6
 worst_predictions = ho_preds_merged.nlargest(6, "error_km")
-print(f"\nTop 6 prediction errors (km):")
+print("\nTop 6 prediction errors (km):")
 print(
     worst_predictions[["sampleID", "error_km", "x_true", "y_true", "x_pred", "y_pred"]]
 )
@@ -135,7 +134,7 @@ print(f"Sample indices: {worst_indices}")
 print(f"\nRunning window analysis for {len(worst_indices)} worst-predicted samples...")
 
 # Need to check if we have position information (for VCF data we should)
-if hasattr(locator, "positions") or locator.config.get("vcf"):
+if hasattr(locator, "positions") or locator.config.get("vcf"):  # noqa: C901
     window_results = locator.run_windows_holdouts(
         genotypes=genotypes,
         samples=samples,
@@ -179,7 +178,7 @@ if hasattr(locator, "positions") or locator.config.get("vcf"):
             height=4,
             show=False,  # Don't display, just save
         )
-        print(f"  Saved window KDE plots for worst samples")
+        print("  Saved window KDE plots for worst samples")
 
         # Also create a custom summary plot showing prediction variance
         print("\nCreating window variance summary plot...")
@@ -302,7 +301,7 @@ if hasattr(locator, "positions") or locator.config.get("vcf"):
         plt.savefig(variance_plot_filename, dpi=150, bbox_inches="tight")
         plt.close()
 
-        print(f"  Saved window analysis summary plot")
+        print("  Saved window analysis summary plot")
 
 else:
     print("  Warning: No position information available for window analysis")

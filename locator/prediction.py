@@ -6,13 +6,12 @@ import warnings
 import h5py
 import numpy as np
 import pandas as pd
-from tensorflow import keras
 
 
 class PredictionMixin:
     """Mixin class providing prediction functionality for Locator."""
 
-    def predict(
+    def predict(  # noqa: C901
         self,
         boot=0,
         verbose=True,
@@ -323,7 +322,7 @@ class PredictionMixin:
         # Load the weights if model exists
         if self.model is not None:
             self.model.load_weights(weights_path)
-            print(f"Loaded weights into model")
+            print("Loaded weights into model")
 
         return metadata
 
@@ -429,7 +428,9 @@ class PredictionMixin:
         # Make predictions
         return self.predict(save_preds_to_disk=save_preds_to_disk, return_df=return_df)
 
-    def sort_samples(self, samples=None, sample_data_file=None, reorder=True):
+    def sort_samples(
+        self, samples=None, sample_data_file=None, reorder=True
+    ):  # noqa: C901
         """Sort samples and match with location data.
 
         This method matches samples with their location data and ensures consistent ordering
@@ -541,7 +542,7 @@ class PredictionMixin:
                 )
 
                 # Print summary of reordering
-                print(f"Reordered metadata to match genotype sample order.")
+                print("Reordered metadata to match genotype sample order.")
                 print(f"Total samples in genotypes: {len(samples)}")
                 print(f"Samples with coordinates: {len(samples) - missing_in_meta}")
                 if missing_in_meta > 0:
@@ -631,8 +632,8 @@ class PredictionMixin:
         if return_df:
             # If we're in a notebook and plot_summary is True, display the error plot
             try:
-                import matplotlib.pyplot as plt
-                from IPython.display import display
+                import matplotlib.pyplot as plt  # noqa: F401
+                from IPython.display import display  # noqa: F401
 
                 from .plotting import plot_error_summary
 

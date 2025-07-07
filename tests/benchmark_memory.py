@@ -37,9 +37,9 @@ def benchmark_old_split_method():
     pred_idx = np.arange(900, 1000)
 
     # Create copies (old method)
-    train_gen = np.transpose(genotypes[:, train_idx])
-    test_gen = np.transpose(genotypes[:, test_idx])
-    pred_gen = np.transpose(genotypes[:, pred_idx])
+    train_gen = np.transpose(genotypes[:, train_idx])  # noqa: F841
+    test_gen = np.transpose(genotypes[:, test_idx])  # noqa: F841
+    pred_gen = np.transpose(genotypes[:, pred_idx])  # noqa: F841
 
     # Get peak memory
     current, peak = tracemalloc.get_traced_memory()
@@ -97,7 +97,7 @@ def benchmark_bootstrap_old_method():
 
     # Create synthetic data
     n_snps = 500
-    n_samples = 500
+    # n_samples = 500  # noqa: F841
     train_gen = np.random.randint(0, 3, size=(400, n_snps), dtype=np.int8)
     test_gen = np.random.randint(0, 3, size=(50, n_snps), dtype=np.int8)
     pred_gen = np.random.randint(0, 3, size=(50, n_snps), dtype=np.int8)

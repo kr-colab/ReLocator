@@ -8,15 +8,13 @@ import zarr
 from tensorflow import keras
 from tqdm import tqdm
 
-from .data import IndexSet
-from .data import filter_snps_legacy as filter_snps
-from .data import make_tf_dataset, normalize_locs
+from .data import IndexSet, normalize_locs
 
 
 class AnalysisMixin:
     """Mixin class providing analysis functionality for Locator."""
 
-    def run_windows(
+    def run_windows(  # noqa: C901
         self,
         genotypes,
         samples,
@@ -203,7 +201,7 @@ class AnalysisMixin:
 
         return None
 
-    def run_jacknife(
+    def run_jacknife(  # noqa: C901
         self,
         genotypes,
         samples,
@@ -368,7 +366,7 @@ class AnalysisMixin:
 
         return None
 
-    def run_bootstraps(
+    def run_bootstraps(  # noqa: C901
         self,
         genotypes,
         samples,
@@ -437,20 +435,20 @@ class AnalysisMixin:
         )
 
         # Handle prediction indices based on whether we're using tf.data pipeline
-        if hasattr(self, "pred_indices") and self.pred_indices is not None:
-            n_pred = len(self.pred_indices)
-        elif self.predgen is not None:
-            n_pred = self.predgen.shape[0]
-        else:
-            n_pred = 0
+        # if hasattr(self, "pred_indices") and self.pred_indices is not None:
+        #     n_pred = len(self.pred_indices)
+        # elif self.predgen is not None:
+        #     n_pred = self.predgen.shape[0]
+        # else:
+        #     n_pred = 0  # noqa: F841
 
-        original_normalized_locs = np.vstack(
-            [
-                self.trainlocs,
-                self.testlocs,
-                np.full((n_pred, 2), np.nan) if n_pred > 0 else np.empty((0, 2)),
-            ]
-        )
+        # original_normalized_locs = np.vstack(  # noqa: F841
+        #     [
+        #         self.trainlocs,
+        #         self.testlocs,
+        #         np.full((n_pred, 2), np.nan) if n_pred > 0 else np.empty((0, 2)),
+        #     ]
+        # )
         original_index_set = self.index_set if hasattr(self, "index_set") else None
 
         # Pre-calculate KDE bandwidth if needed
@@ -572,7 +570,7 @@ class AnalysisMixin:
 
         return None
 
-    def run_holdouts(
+    def run_holdouts(  # noqa: C901
         self,
         genotypes,
         samples,
@@ -675,7 +673,7 @@ class AnalysisMixin:
                     holdout_indices = [
                         [samples_list.index(sid) for sid in holdout_sample_ids]
                     ]
-                except ValueError as e:
+                except ValueError:
                     missing = [
                         sid for sid in holdout_sample_ids if sid not in samples_list
                     ]
@@ -803,7 +801,7 @@ class AnalysisMixin:
             return all_predictions
         return None
 
-    def run_jacknife_holdouts(
+    def run_jacknife_holdouts(  # noqa: C901
         self,
         genotypes,
         samples,
@@ -991,7 +989,7 @@ class AnalysisMixin:
 
         return None
 
-    def run_windows_holdouts(
+    def run_windows_holdouts(  # noqa: C901
         self,
         genotypes,
         samples,
@@ -1398,7 +1396,7 @@ class AnalysisMixin:
 
         return result
 
-    def run_k_fold_holdouts(
+    def run_k_fold_holdouts(  # noqa: C901
         self,
         genotypes,
         samples,

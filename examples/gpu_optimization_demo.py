@@ -36,7 +36,6 @@ def create_demo_data(n_samples=1000, n_snps=5000):
 
 def compare_configurations():
     """Compare different GPU optimization configurations."""
-
     # Create demo data
     print("Creating demo data...")
     genotypes, samples, sample_data = create_demo_data()
@@ -146,7 +145,7 @@ def demonstrate_batch_size_optimization():
     )
 
     print(f"Optimal batch size for your GPU: {optimal_batch}")
-    print(f"(Default batch size: 32)")
+    print("(Default batch size: 32)")
     print(f"Improvement factor: {optimal_batch/32:.1f}x larger batches")
 
 

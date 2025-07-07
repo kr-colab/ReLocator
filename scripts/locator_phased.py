@@ -6,7 +6,8 @@ with warnings.catch_warnings():
     import argparse
     import copy
     import os
-    import re
+
+    # import re  # noqa: F401
     import subprocess
     import sys
     import time
@@ -14,10 +15,12 @@ with warnings.catch_warnings():
     import allel
     import gnuplotlib as gp
     import keras
-    import matplotlib
+
+    # import matplotlib  # noqa: F401
     import numpy as np
     import pandas as pd
-    import tensorflow as tf
+
+    # import tensorflow as tf  # noqa: F401
     import zarr
     from matplotlib import pyplot as plt
     from scipy import spatial
@@ -166,9 +169,9 @@ parser.add_argument(
 #                    help='load model weights and predict on all samples')
 args = parser.parse_args()
 
-if not args.seed == None:
+if args.seed is not None:
     np.random.seed(args.seed)
-if not args.gpu_number == None:
+if args.gpu_number is not None:
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_number
 
 
@@ -228,7 +231,7 @@ def filter_snps(haps):
             x >= args.min_mac for x in derived_counts
         ]  # drop SNPs with minor allele < min_mac
         ac = haps[ac_filter, :]
-    if not args.max_SNPs == None:
+    if args.max_SNPs is not None:
         ac = haps[np.random.choice(range(ac.shape[0]), args.max_SNPs, replace=False), :]
     print("running on " + str(len(ac)) + " genotypes after filtering\n\n\n")
     return ac
@@ -269,7 +272,7 @@ def split_train_test(ac, locs):
             range(ndiploids), round(args.train_split * ndiploids), replace=False
         )
         train = np.concatenate((train, train + ndiploids))
-        test = np.array([x for x in range(ndiploids * 2) if not x in train])
+        test = np.array([x for x in range(ndiploids * 2) if x not in train])
         pred = test
         traingen = np.transpose(ac[:, train])
         trainlocs = locs[train]
@@ -280,10 +283,11 @@ def split_train_test(ac, locs):
 
 
 def load_network(traingen, dropout_prop):
-    import keras
+    # import keras  # noqa: F401
     from keras import backend as K
     from keras import layers
-    from keras.layers.core import Lambda
+
+    # from keras.layers.core import Lambda  # noqa: F401
     from keras.models import Sequential
 
     def euclidean_distance_loss(y_true, y_pred):
@@ -381,9 +385,9 @@ def predict_locs(
     samples,
     verbose=True,
 ):
-    import keras
+    # import keras  # noqa: F401
 
-    if verbose == True:
+    if verbose is True:
         print("predicting locations...")
     prediction = model.predict(predgen)
     prediction = np.array(
@@ -427,7 +431,7 @@ def predict_locs(
             spatial.distance.euclidean(prediction[x, :], testlocs2[x, :])
             for x in range(len(prediction))
         ]
-        if verbose == True:
+        if verbose is True:
             print(
                 "R2(longitude)="
                 + str(r2_long)
@@ -461,7 +465,7 @@ def predict_locs(
         dists = [
             spatial.distance.euclidean(p2[x, :], testlocs2[x, :]) for x in range(len(p2))
         ]
-        if verbose == True:
+        if verbose is True:
             print(
                 "R2(longitude)="
                 + str(r2_long)
@@ -523,7 +527,7 @@ if args.bootstrap in ["False", "FALSE", "F", "false", "f"] and args.jacknife in 
     "F",
     "false",
     "f",
-]:
+]:  # noqa: C901
     boot = None
     haps, samples = load_genotypes()
     sample_data, locs = sort_samples(samples)

@@ -4,7 +4,6 @@ This module provides utilities to maximize GPU efficiency and speed for
 deep learning genomic predictions.
 """
 
-import os
 import warnings
 from typing import Any, Dict, Optional, Tuple
 
@@ -50,7 +49,7 @@ class GPUOptimizer:
             return False
 
     @staticmethod
-    def get_optimal_batch_size(
+    def get_optimal_batch_size(  # noqa: C901
         model: tf.keras.Model,
         input_shape: Tuple[int, ...],
         target_memory_usage: float = 0.9,
@@ -87,28 +86,26 @@ class GPUOptimizer:
                 )
 
         # Get available GPU memory
-        try:
-            # Note: After tf.config.set_visible_devices() or CUDA_VISIBLE_DEVICES is set,
-            # the selected GPU is always accessible as 'GPU:0' from TensorFlow's perspective,
-            # regardless of its physical index. This is why 'GPU:0' is correct here.
-            gpu_memory = tf.config.experimental.get_memory_info("GPU:0")
-            available_memory = gpu_memory["current"] * target_memory_usage
-        except Exception as e:
-            # Fallback: use conservative estimate
-            # Most consumer GPUs have 8-24GB, datacenter GPUs 40-80GB
-            gpu_name = gpus[0].name.lower()
-            if "a100" in gpu_name or "a6000" in gpu_name:
-                available_memory = (
-                    40 * 1024 * 1024 * 1024 * target_memory_usage
-                )  # 40GB for A100/A6000
-            elif "v100" in gpu_name or "3090" in gpu_name or "4090" in gpu_name:
-                available_memory = 24 * 1024 * 1024 * 1024 * target_memory_usage  # 24GB
-            else:
-                available_memory = (
-                    8 * 1024 * 1024 * 1024 * target_memory_usage
-                )  # 8GB default
-            if verbose:
-                print(f"Using estimated GPU memory for {gpus[0].name}")
+        # Note: The available_memory calculation is commented out but preserved
+        # for future use. It would estimate GPU memory for batch size optimization.
+        # After tf.config.set_visible_devices() or CUDA_VISIBLE_DEVICES is set,
+        # the selected GPU is always accessible as 'GPU:0' from TensorFlow's perspective.
+
+        # try:
+        #     gpu_memory = tf.config.experimental.get_memory_info("GPU:0")
+        #     available_memory = gpu_memory["current"] * target_memory_usage
+        # except Exception:
+        #     # Fallback: use conservative estimate
+        #     # Most consumer GPUs have 8-24GB, datacenter GPUs 40-80GB
+        #     gpu_name = gpus[0].name.lower()
+        #     if "a100" in gpu_name or "a6000" in gpu_name:
+        #         available_memory = 40 * 1024 * 1024 * 1024 * target_memory_usage  # 40GB
+        #     elif "v100" in gpu_name or "3090" in gpu_name or "4090" in gpu_name:
+        #         available_memory = 24 * 1024 * 1024 * 1024 * target_memory_usage  # 24GB
+        #     else:
+        #         available_memory = 8 * 1024 * 1024 * 1024 * target_memory_usage  # 8GB default
+        #     if verbose:
+        #         print(f"Using estimated GPU memory for {gpus[0].name}")
 
         # Binary search for optimal batch size
         left, right = min_batch_size, max_batch_size
@@ -130,7 +127,7 @@ class GPUOptimizer:
                     loss = tf.reduce_mean(output)
 
                 # Test gradient computation
-                gradients = tape.gradient(loss, model.trainable_variables)
+                _ = tape.gradient(loss, model.trainable_variables)
 
                 # If successful, try larger batch
                 optimal_batch_size = test_batch_size
@@ -283,7 +280,7 @@ class GPUOptimizer:
                 # Get memory info if available
                 memory_info = tf.config.experimental.get_memory_info(f"GPU:{i}")
                 gpu_info["memory"] = memory_info
-            except:
+            except Exception:
                 pass
 
             info["gpus"].append(gpu_info)

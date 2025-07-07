@@ -7,7 +7,6 @@ from datetime import datetime
 import h5py
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 from tensorflow import keras
 
 from .data import IndexSet
@@ -139,7 +138,7 @@ class TrainingMixin:
         for key, value in wdict.items():
             self.config["weight_samples"][key] = value
 
-    def train(
+    def train(  # noqa: C901
         self,
         *,  # Force keyword arguments
         genotypes,
@@ -314,7 +313,7 @@ class TrainingMixin:
 
             # Report split sizes if verbose_splits is enabled
             if self.config.get("verbose_splits", False):
-                print(f"\nData split summary:")
+                print("\nData split summary:")
                 print(
                     f"  Training samples: {len(train)} ({len(train)/len(samples)*100:.1f}%)"
                 )
@@ -446,7 +445,7 @@ class TrainingMixin:
 
         return self.history
 
-    def train_holdout(
+    def train_holdout(  # noqa: C901
         self,
         genotypes,
         samples,
@@ -543,7 +542,7 @@ class TrainingMixin:
 
         # Report split sizes if verbose_splits is enabled
         if self.config.get("verbose_splits", False):
-            print(f"\nHoldout split summary:")
+            print("\nHoldout split summary:")
             print(
                 f"  Training samples: {len(train_indices)} ({len(train_indices)/len(samples)*100:.1f}%)"
             )
@@ -643,7 +642,7 @@ class TrainingMixin:
         else:
             # For k-fold without saving, just print a message
             if self.config.get("keras_verbose", 0) > 0:
-                print(f"Skipping model save for fold (save_fold_models=False)")
+                print("Skipping model save for fold (save_fold_models=False)")
 
         return self.history
 
@@ -747,14 +746,16 @@ class TrainingMixin:
                 self.config["species_range_shapefile"],
                 resolution=self.config.get("raster_resolution", 0.1),
             )
-            loss_fn = lambda y_true, y_pred: loss_with_range_penalty(
-                y_true,
-                y_pred,
-                mask_tensor=mask_tensor,
-                transform=mask_transform,
-                resolution=self.config.get("resolution", 0.05),
-                penalty_weight=self.config.get("penalty_weight", 1.0),
-            )
+
+            def loss_fn(y_true, y_pred):  # noqa: F811
+                return loss_with_range_penalty(
+                    y_true,
+                    y_pred,
+                    mask_tensor=mask_tensor,
+                    transform=mask_transform,
+                    resolution=self.config.get("resolution", 0.05),
+                    penalty_weight=self.config.get("penalty_weight", 1.0),
+                )
 
         return create_network(
             input_shape=input_shape,

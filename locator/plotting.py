@@ -7,13 +7,11 @@ from pathlib import Path
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib
-import matplotlib.axes as maxes
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from geopy.distance import geodesic
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.stats import gaussian_kde
 
 __all__ = [
@@ -90,7 +88,7 @@ def kde_predict(x_coords, y_coords, xlim=(0, 50), ylim=(0, 50), n_points=100):
         return None, None, None
 
 
-def plot_predictions(
+def plot_predictions(  # noqa: C901
     predictions,
     locator,
     out_prefix,
@@ -300,7 +298,7 @@ def plot_predictions(
     return None
 
 
-def plot_error_summary(
+def plot_error_summary(  # noqa: C901
     predictions,
     sample_data,
     out_prefix=None,
@@ -681,9 +679,11 @@ def plot_sample_weights(
         samples = pd.read_csv(sample_data, sep="\t")
         # Load sample data if path provided
     if isinstance(sample_weights, pd.DataFrame):
-        weights = sample_weights.copy()
+        # weights = sample_weights.copy()  # noqa: F841
+        pass
     else:
-        weights = pd.read_csv(sample_weights, sep="\t")
+        # weights = pd.read_csv(sample_weights, sep="\t")  # noqa: F841
+        pass
 
     # Merge predictions with true locations
     merged = sample_weights.merge(samples, on="sampleID")
@@ -855,7 +855,7 @@ class PlottingMixin:
             ax2.set_xlabel("Training Loss")
             fig.savefig(self.config["out"] + "_fitplot.pdf", bbox_inches="tight")
 
-    def _repr_html_(self):
+    def _repr_html_(self):  # noqa: C901
         """Return HTML representation of Locator instance for Jupyter notebooks.
 
         Generates a rich HTML display showing:

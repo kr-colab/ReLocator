@@ -77,11 +77,11 @@ class EnsembleLocator:
                 raise ValueError("training_set_indices contains invalid indices")
 
             # Subset the relevant arrays to only include training set samples
-            subset_samples = samples[training_set_indices]
+            # subset_samples = samples[training_set_indices]  # noqa: F841
             subset_locations = locations[training_set_indices]
         else:
             # Use all samples
-            subset_samples = samples
+            # subset_samples = samples  # noqa: F841
             subset_locations = locations
             training_set_indices = np.arange(len(samples))
 
@@ -320,7 +320,7 @@ class EnsembleLocator:
 
         return histories
 
-    def predict(
+    def predict(  # noqa: C901
         self, return_df=True, save_preds_to_disk=True, include_val_predictions=True
     ):
         """Make predictions using the ensemble of models."""

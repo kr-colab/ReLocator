@@ -25,12 +25,12 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 # Add parent directory to path to import locator package
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import numpy as np
+# import numpy as np  # noqa: F401
 import tensorflow as tf
 
 from locator import Locator
@@ -40,6 +40,7 @@ class GPUBenchmark:
     """Benchmark suite for GPU optimizations."""
 
     def __init__(self, data_path: str = "data", epochs: int = 20):
+        """Initialize benchmark with data path and number of epochs."""
         self.data_path = Path(data_path)
         self.epochs = epochs
         self.results = []
@@ -131,7 +132,7 @@ class GPUBenchmark:
         batch_size = config.get("gpu_batch_size", 32)
         if batch_size > n_samples * 0.1:  # More than 10% of dataset
             print(f"  ⚠️  Batch size {batch_size} is large for {n_samples} samples")
-            print(f"     This may cause convergence issues")
+            print("     This may cause convergence issues")
 
         # Train
         print(f"\nTraining with batch_size={batch_size}...")
@@ -156,7 +157,7 @@ class GPUBenchmark:
             try:
                 # This would require nvidia-ml-py, just note it
                 memory_info = "GPU memory tracking requires nvidia-ml-py"
-            except:
+            except Exception:
                 pass
 
         result = {
@@ -185,7 +186,7 @@ class GPUBenchmark:
         }
 
         # Print summary
-        print(f"\nResults:")
+        print("\nResults:")
         print(f"  Training time: {train_time:.2f}s ({epochs_run} epochs)")
         print(f"  Throughput: {throughput:.0f} samples/s")
         print(f"  Time per epoch: {train_time/epochs_run:.2f}s")
@@ -199,7 +200,8 @@ class GPUBenchmark:
         print("=" * 70)
 
         # Check GPU
-        has_gpu = self.check_gpu()
+        # has_gpu = self.check_gpu()  # noqa: F841
+        self.check_gpu()
 
         # Get configs
         configs = self.get_configs()
@@ -251,29 +253,27 @@ class GPUBenchmark:
 
         # Dataset size analysis
         n_samples = results[0]["dataset"]["n_samples"]
-        print(f"\n📊 Dataset Analysis:")
+        print("\n📊 Dataset Analysis:")
         print(f"   - Size: {n_samples} samples (small dataset)")
-        print(f"   - GPU optimizations work best with >10k samples")
-        print(f"   - Large batches may hurt convergence on small datasets")
+        print("   - GPU optimizations work best with >10k samples")
+        print("   - Large batches may hurt convergence on small datasets")
 
         # Performance insights
-        print(f"\n🚀 Performance Insights:")
-        if has_gpu:
-            print(f"   - Mixed precision can provide 2x speedup on compatible GPUs")
-            print(f"   - Larger batches improve GPU utilization but may need tuning")
-            print(f"   - Data pipeline optimization reduces CPU bottlenecks")
+        print("\n🚀 Performance Insights:")
+        if tf.config.list_physical_devices("GPU"):
+            print("   - Mixed precision can provide 2x speedup on compatible GPUs")
+            print("   - Larger batches improve GPU utilization but may need tuning")
+            print("   - Data pipeline optimization reduces CPU bottlenecks")
         else:
-            print(f"   - No GPU detected - optimizations have limited effect")
-            print(f"   - Consider using GPU for significant speedups")
+            print("   - No GPU detected - optimizations have limited effect")
+            print("   - Consider using GPU for significant speedups")
 
         # Recommendations
-        print(f"\n💡 Recommendations:")
-        print(f"   1. For small datasets (<1k samples): use conservative batch sizes")
-        print(f"   2. For large datasets (>10k samples): use aggressive GPU settings")
-        print(
-            f"   3. Monitor validation loss - adjust batch size if convergence suffers"
-        )
-        print(f"   4. Use mixed precision by default (now enabled in Locator)")
+        print("\n💡 Recommendations:")
+        print("   1. For small datasets (<1k samples): use conservative batch sizes")
+        print("   2. For large datasets (>10k samples): use aggressive GPU settings")
+        print("   3. Monitor validation loss - adjust batch size if convergence suffers")
+        print("   4. Use mixed precision by default (now enabled in Locator)")
 
     def save_results(self, results: List[dict], output_path: str) -> None:
         """Save results to JSON file."""

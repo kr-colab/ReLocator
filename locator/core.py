@@ -1,30 +1,19 @@
 """Core functionality for locator - Refactored version"""
 
-import copy
-import sys
 import warnings
-from pathlib import Path
-from typing import List, Optional
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from tensorflow import keras
-from tqdm import tqdm
 
 from .analysis import AnalysisMixin
-from .data import filter_snps_legacy as filter_snps
-from .data import normalize_locs
-from .gpu_optimizer import GPUOptimizer, create_optimized_training_config
+from .gpu_optimizer import GPUOptimizer
 
 # Import all the mixins
 from .loaders import DataLoaderMixin
-from .models import create_network
 from .plotting import PlottingMixin
 from .prediction import PredictionMixin
 from .training import TrainingMixin
-from .utils import weight_samples
 
 
 def setup_gpu(gpu_number=None):
@@ -139,7 +128,7 @@ class Locator(
         ... })
     """
 
-    def __init__(self, config=None):
+    def __init__(self, config=None):  # noqa: C901
         """
         Initialize Locator with configuration parameters.
 
@@ -547,7 +536,7 @@ class Locator(
 
             # Show samples without coordinates
             if status["n_na"] > 0:
-                print(f"\nSamples without coordinates (first 10):")
+                print("\nSamples without coordinates (first 10):")
                 for i, sample_id in enumerate(status["na_samples"][:10]):
                     print(f"  - {sample_id}")
                 if status["n_na"] > 10:
@@ -565,4 +554,4 @@ class Locator(
 
 
 # Import EnsembleLocator from ensemble.py
-from .ensemble import EnsembleLocator
+from .ensemble import EnsembleLocator  # noqa: E402, F401
