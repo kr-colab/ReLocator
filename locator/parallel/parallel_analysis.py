@@ -15,6 +15,12 @@ GPU Fraction Settings:
 - gpu_fraction=0.5: Two workers per GPU (moderate sharing)
 - gpu_fraction=0.25: Four workers per GPU (moar parallelism)
 - gpu_fraction=0.0: CPU only execution
+
+Default Logging Settings:
+- TensorFlow logging reduced to warnings/errors only (TF_CPP_MIN_LOG_LEVEL=2)
+- Ray log deduplication enabled (RAY_DEDUP_LOGS=1)
+- Ray spill logs disabled (RAY_verbose_spill_logs=0)
+- Override by setting environment variables before importing
 """
 
 import os
@@ -25,6 +31,15 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
+
+# Set default logging levels for cleaner output
+# Users can override these by setting env vars before importing
+if "TF_CPP_MIN_LOG_LEVEL" not in os.environ:
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # Only show warnings and errors
+if "RAY_DEDUP_LOGS" not in os.environ:
+    os.environ["RAY_DEDUP_LOGS"] = "1"  # Deduplicate Ray logs
+if "RAY_verbose_spill_logs" not in os.environ:
+    os.environ["RAY_verbose_spill_logs"] = "0"  # Don't show spill logs
 
 # Ray imports
 import ray
@@ -208,7 +223,11 @@ def parallel_k_fold_holdouts(  # noqa: C901
     """
     # Initialize Ray if not already initialized
     if not ray.is_initialized():
-        ray.init()
+        ray.init(
+            log_to_driver=False,  # Don't log worker output to driver
+            logging_level="ERROR",  # Only show errors
+            include_dashboard=False,  # Don't start Ray dashboard
+        )
 
     # Use instance default if na_action not specified
     if na_action is None:
@@ -669,7 +688,11 @@ def parallel_holdouts(  # noqa: C901
     """
     # Initialize Ray if not already initialized
     if not ray.is_initialized():
-        ray.init()
+        ray.init(
+            log_to_driver=False,  # Don't log worker output to driver
+            logging_level="ERROR",  # Only show errors
+            include_dashboard=False,  # Don't start Ray dashboard
+        )
 
     # Use instance default if na_action not specified
     if na_action is None:
@@ -1134,7 +1157,11 @@ def parallel_windows_holdouts(  # noqa: C901
     """
     # Initialize Ray if not already initialized
     if not ray.is_initialized():
-        ray.init()
+        ray.init(
+            log_to_driver=False,  # Don't log worker output to driver
+            logging_level="ERROR",  # Only show errors
+            include_dashboard=False,  # Don't start Ray dashboard
+        )
 
     # Use instance default if na_action not specified
     if na_action is None:
@@ -1507,6 +1534,466 @@ def parallel_windows_holdouts(  # noqa: C901
         return all_predictions
 
     return None
+
+
+def _create_ray_ensemble_worker(gpu_fraction: float = 1.0):
+    """
+    Factory function to create a Ray worker for ensemble training.
+
+    Args:
+        gpu_fraction: Fraction of GPU to allocate per worker (value between 0.0 to 1.0)
+
+    Returns:
+        Ray remote function configured with specified GPU fraction
+    """
+
+    @ray.remote(num_gpus=gpu_fraction)
+    def _ray_ensemble_worker(
+        fold_idx: int, gpu_id: int, data_file: str
+    ) -> Dict[str, Any]:
+        """
+        Ray worker function that trains a single ensemble fold on a specific GPU.
+
+        Args:
+            fold_idx: Fold index
+            gpu_id: GPU ID to use
+            data_file: Path to pickled data file
+
+        Returns:
+            Dictionary with model information and metadata
+        """
+        # Set GPU before importing TensorFlow
+        if gpu_id == -1:
+            os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Disable GPU
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+        # Set TensorFlow threading environment variables BEFORE import
+        # This ensures the tf.data pipeline doesn't fork excessively
+        os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+        os.environ["TF_NUM_INTRAOP_THREADS"] = "4"
+        os.environ["TF_DATA_EXPERIMENTAL_SLACK"] = "false"
+
+        # Import inside worker to ensure proper GPU setup
+        import allel
+        import tensorflow as tf
+
+        from locator import Locator
+
+        # Suppress TF warnings
+        tf.get_logger().setLevel("ERROR")
+
+        print(f"Worker training ensemble fold {fold_idx} on GPU {gpu_id}")
+
+        # Load data from pickle file
+        with open(data_file, "rb") as f:
+            data = pickle.load(f)
+
+        # Reconstruct GenotypeArrays (genotypes not used but reconstructed for consistency)
+        _ = allel.GenotypeArray(data["genotypes_array"])  # noqa: F841
+        filtered_genotypes = data["filtered_genotypes_array"]  # Already a numpy array
+
+        # Create Locator instance
+        locator_config = data["config"].copy()
+        locator_config["out"] = f"{locator_config['out']}_fold{fold_idx}"
+        locator_config["disable_gpu"] = False
+        locator_config["gpu_number"] = 0  # Use first visible GPU
+        locator_config["keras_verbose"] = 0  # Suppress keras output
+
+        # Store the sample data DataFrame in the config
+        if "_sample_data_df" not in locator_config:
+            locator_config["_sample_data_df"] = data.get("sample_data")
+
+        locator = Locator(locator_config)
+
+        # Set samples to ensure consistency
+        locator.samples = data["samples"]
+
+        # Train single fold using existing method
+        start_time = time.time()
+        model_info = locator._train_single_fold(
+            fold_idx=fold_idx,
+            index_set=data["fold_info"]["index_sets"][fold_idx],
+            filtered_genotypes=filtered_genotypes,
+            samples=data["samples"],
+            locs=data["locs"],
+            augment_config=data.get("augment_config"),
+            save_fold_models=data["save_fold_models"],
+            patience_multiplier=data["patience_multiplier"],
+            verbose=False,  # Suppress individual fold output
+        )
+        train_time = time.time() - start_time
+
+        # Add weights file path if saving
+        if data["save_fold_models"]:
+            model_info["weights_file"] = f"{locator_config['out']}.weights.h5"
+        else:
+            model_info["weights_file"] = None
+
+        # Don't include the actual model in the result to avoid serialization issues
+        # We'll load it from disk if needed
+        result = {
+            "fold": fold_idx,
+            "gpu_id": gpu_id,
+            "train_time": train_time,
+            "model_info": {
+                "fold": model_info["fold"],
+                "weights_file": model_info["weights_file"],
+                "norm_params": model_info["norm_params"],
+                "train_indices": model_info["train_indices"].tolist(),
+                "val_indices": model_info["val_indices"].tolist(),
+            },
+            "history": {
+                "loss": model_info["history"].history.get("loss", []),
+                "val_loss": model_info["history"].history.get("val_loss", []),
+            },
+            "final_loss": float(model_info["history"].history["loss"][-1]),
+            "final_val_loss": float(model_info["history"].history["val_loss"][-1]),
+        }
+
+        # Clear keras session
+        tf.keras.backend.clear_session()
+
+        return result
+
+    return _ray_ensemble_worker
+
+
+def parallel_train_ensemble(  # noqa: C901
+    locator,
+    genotypes,
+    samples,
+    k: int = 5,
+    gpu_ids: List[int] = [0, 1],
+    gpu_fraction: float = 1.0,
+    training_set_indices: Optional[List[int]] = None,
+    na_action: Optional[str] = None,
+    augment_data: bool = False,
+    flip_rate: float = 0.05,
+    save_fold_models: bool = True,
+    use_model_manager: bool = True,
+    use_mixed_precision: Optional[bool] = None,
+    patience_multiplier: float = 1.0,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """
+    Train an ensemble of k models in parallel across multiple GPUs using Ray.
+
+    This is a parallel version of EnsembleMixin.train_ensemble() that distributes
+    fold training across available GPUs.
+
+    Args:
+        locator: Locator instance (for configuration and methods)
+        genotypes: GenotypeArray containing genetic data
+        samples: Array of sample IDs
+        k: Number of folds/models in ensemble (default: 5)
+        gpu_ids: List of GPU IDs to use (default: [0, 1])
+        gpu_fraction: Fraction of GPU to allocate per worker (default 1.0)
+            - 1.0: One full GPU per worker (safest, no GPU sharing)
+            - 0.5: Two workers can share one GPU
+            - 0.25: Four workers can share one GPU
+            - 0.0: CPU only execution
+        training_set_indices: Optional array of indices to restrict training
+        na_action: How to handle NA samples ('separate', 'exclude', 'fail')
+        augment_data: Whether to apply data augmentation (default: False)
+        flip_rate: Rate for genotype flipping augmentation (default: 0.05)
+        save_fold_models: Whether to save individual fold models (default: True)
+        use_model_manager: Whether to use model manager for saving (default: True)
+        use_mixed_precision: Whether to use mixed precision training (default: None, auto-detect)
+        patience_multiplier: Multiply patience for ensemble training (default: 1.0)
+        verbose: Whether to show training progress (default: True)
+
+    Returns:
+        dict: Dictionary containing:
+            - 'histories': List of training histories for each fold
+            - 'models': List of trained model configurations
+            - 'normalization_params': Averaged normalization parameters
+            - 'fold_info': Information about fold splits
+    """
+    # Initialize Ray if not already initialized
+    if not ray.is_initialized():
+        ray.init(
+            log_to_driver=False,  # Don't log worker output to driver
+            logging_level="ERROR",  # Only show errors
+            include_dashboard=False,  # Don't start Ray dashboard
+        )
+
+    # Setup GPU optimizations for ensemble training in main process
+    if verbose:
+        mixed_precision_enabled = locator.setup_ensemble_gpu_optimization(
+            use_mixed_precision
+        )
+        if mixed_precision_enabled:
+            print("Mixed precision training enabled for ensemble")
+    else:
+        locator.setup_ensemble_gpu_optimization(use_mixed_precision)
+
+    # Store samples for later use
+    locator.samples = samples
+
+    # Create folds using IndexSet
+    fold_info = locator.create_ensemble_folds(
+        genotypes, samples, k, training_set_indices, na_action
+    )
+
+    # Filter SNPs once before training
+    filtered_genotypes = locator._filter_genotypes(genotypes)
+
+    # Get locations once
+    _, locs = locator.sort_samples(samples)
+
+    # Configure augmentation if requested
+    augment_config = None
+    if augment_data:
+        augment_config = {
+            "enabled": True,
+            "flip_rate": flip_rate,
+        }
+        # Also set in config for consistency
+        locator.config["augmentation"] = augment_config
+
+    # Get sample data for serialization
+    sample_data = None
+    if hasattr(locator, "_sample_data_df"):
+        sample_data = locator._sample_data_df
+
+    # Pre-calculate KDE bandwidth if needed (same pattern as k-fold)
+    bandwidth_calculated = False
+    original_bandwidth = None
+
+    if (
+        locator.config.get("weight_samples", {}).get("enabled", False)
+        and locator.config.get("weight_samples", {}).get("method") == "KD"
+    ):
+
+        existing_bandwidth = locator.config.get("weight_samples", {}).get("bandwidth")
+
+        if existing_bandwidth is None:
+            # Get all samples with coordinates for bandwidth calculation
+            na_mask = np.isnan(locs[:, 0]) | np.isnan(locs[:, 1])
+            coords_mask = ~na_mask
+            all_train_locs = locs[coords_mask]
+
+            if len(all_train_locs) > 1:
+                if verbose:
+                    print(
+                        "Pre-calculating optimal KDE bandwidth for ensemble training..."
+                    )
+
+                from locator.sample_weights import get_global_bandwidth_optimizer
+
+                optimizer = get_global_bandwidth_optimizer()
+
+                optimal_bandwidth = optimizer.get_bandwidth(
+                    all_train_locs,
+                    cache_key=f"ensemble_k{k}_n{len(all_train_locs)}",
+                    n_bandwidths=locator.config.get("weight_samples", {}).get(
+                        "n_bandwidths", 100
+                    ),
+                    verbose=verbose,
+                )
+
+                # Store original value
+                original_bandwidth = existing_bandwidth
+                # Set in config
+                locator.config["weight_samples"]["bandwidth"] = optimal_bandwidth
+                bandwidth_calculated = True
+
+                if verbose:
+                    print(f"Using bandwidth: {optimal_bandwidth:.3f}")
+
+    # Save data to temporary file
+    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".pkl") as f:
+        data = {
+            "genotypes_array": genotypes.values,
+            "filtered_genotypes_array": filtered_genotypes,  # Already a numpy array
+            "samples": samples,
+            "sample_data": sample_data,
+            "locs": locs,
+            "config": locator.config,
+            "fold_info": fold_info,
+            "augment_config": augment_config,
+            "save_fold_models": save_fold_models,
+            "patience_multiplier": patience_multiplier,
+        }
+        pickle.dump(data, f)
+        data_file = f.name
+
+    if verbose:
+        print(f"Training {k}-fold ensemble across GPUs {gpu_ids} using Ray...")
+
+    start_time = time.time()
+
+    # Create the Ray worker with specified GPU fraction
+    _ray_ensemble_worker = _create_ray_ensemble_worker(gpu_fraction)
+
+    # Submit all folds to Ray
+    futures = []
+    for fold_idx in range(k):
+        # Handle empty gpu_ids (CPU only mode)
+        if len(gpu_ids) == 0:
+            gpu_id = -1  # Use CPU
+        else:
+            gpu_id = gpu_ids[fold_idx % len(gpu_ids)]
+
+        future = _ray_ensemble_worker.remote(
+            fold_idx=fold_idx, gpu_id=gpu_id, data_file=data_file
+        )
+        futures.append(future)
+        if verbose:
+            device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
+            print(f"Submitted fold {fold_idx} to {device_str}")
+
+    # Wait for all folds to complete with progress bar
+    if verbose:
+        print("\nTraining ensemble folds across GPUs...")
+        from tqdm import tqdm
+
+        # Process results with progress bar
+        results = []
+        with tqdm(total=k, desc="Folds completed") as pbar:
+            while futures:
+                # Wait for any task to complete
+                ready, futures = ray.wait(futures, num_returns=1)
+                result = ray.get(ready[0])
+                results.append(result)
+
+                # Update progress bar
+                pbar.set_postfix_str(
+                    f"Last: Fold {result['fold']}, GPU {result['gpu_id']}, "
+                    f"Final loss: {result['final_loss']:.4f}"
+                )
+                pbar.update(1)
+    else:
+        # No progress bar if not verbose
+        results = ray.get(futures)
+
+    total_time = time.time() - start_time
+
+    # Clean up
+    os.unlink(data_file)
+
+    if verbose:
+        print(
+            f"\nCompleted ensemble training in {total_time:.1f}s ({total_time/k:.1f}s per fold)"
+        )
+
+        # Show speedup vs sequential
+        if len(gpu_ids) > 0:
+            num_gpus = len(set(gpu_ids))
+            estimated_speedup = k / num_gpus
+            print(
+                f"Estimated speedup: {estimated_speedup:.1f}x (using {num_gpus} GPU{'s' if num_gpus > 1 else ''})"
+            )
+        else:
+            print("CPU mode - no GPU speedup available")
+
+    # Restore original bandwidth setting if we changed it
+    if bandwidth_calculated:
+        if original_bandwidth is None:
+            # Remove the key if it wasn't there originally
+            locator.config.get("weight_samples", {}).pop("bandwidth", None)
+        else:
+            locator.config["weight_samples"]["bandwidth"] = original_bandwidth
+
+    # Aggregate results (sort by fold index to ensure correct order)
+    results_sorted = sorted(results, key=lambda x: x["fold"])
+
+    # Store results on locator instance (mimicking sequential version)
+    locator._ensemble_genotypes = genotypes
+    locator._ensemble_fold_info = fold_info
+    locator._ensemble_models = []
+    locator._ensemble_histories = []
+    locator._ensemble_norm_params = []
+
+    for result in results_sorted:
+        # Reconstruct model info
+        model_info = result["model_info"]
+        model_info["model"] = None  # Model will be loaded from disk when needed
+        model_info["train_indices"] = np.array(model_info["train_indices"])
+        model_info["val_indices"] = np.array(model_info["val_indices"])
+
+        # Create history object for compatibility
+        class HistoryStub:
+            def __init__(self, history_dict):
+                self.history = history_dict
+
+        model_info["history"] = HistoryStub(result["history"])
+
+        # Store results
+        locator._ensemble_models.append(model_info)
+        locator._ensemble_histories.append(model_info["history"])
+        locator._ensemble_norm_params.append(model_info["norm_params"])
+
+    # Calculate averaged normalization parameters
+    avg_norm_params = locator._average_normalization_params(
+        locator._ensemble_norm_params
+    )
+
+    # Store averaged parameters on instance
+    locator.meanlong = avg_norm_params["meanlong"]
+    locator.sdlong = avg_norm_params["sdlong"]
+    locator.meanlat = avg_norm_params["meanlat"]
+    locator.sdlat = avg_norm_params["sdlat"]
+
+    # Save ensemble using model manager if requested
+    if use_model_manager and save_fold_models:
+        from locator.ensemble_model_manager import EnsembleModelManager
+
+        model_manager = EnsembleModelManager(f"{locator.config['out']}_ensemble")
+
+        # Create a serializable version of config (excluding DataFrames)
+        serializable_config = {
+            k: v for k, v in locator.config.items() if not isinstance(v, pd.DataFrame)
+        }
+
+        ensemble_metadata = {
+            "k_folds": k,
+            "na_action": na_action or locator.na_action,
+            "augment_data": augment_data,
+            "config": serializable_config,
+            "parallel_training": True,
+            "gpu_ids": gpu_ids,
+        }
+
+        # Check if we can load models for the model manager
+        models_loaded = False
+        if verbose:
+            print("Checking for saved model weights...")
+
+        for i, model_info in enumerate(locator._ensemble_models):
+            if model_info["weights_file"] and os.path.exists(model_info["weights_file"]):
+                if not models_loaded and verbose:
+                    print("Loading models for ensemble manager...")
+                models_loaded = True
+                # Create model and load weights
+                model = locator._create_model(input_shape=filtered_genotypes.shape[0])
+                model.load_weights(model_info["weights_file"])
+                model_info["model"] = model
+            else:
+                if verbose and model_info["weights_file"]:
+                    print(
+                        f"Warning: Expected weights file not found: {model_info['weights_file']}"
+                    )
+
+        if models_loaded:
+            model_manager.save_ensemble(locator._ensemble_models, ensemble_metadata)
+            if verbose:
+                print(f"Saved ensemble to {model_manager.ensemble_dir}")
+        else:
+            if verbose:
+                print(
+                    "Models were saved individually by workers, skipping ensemble manager."
+                )
+
+    return {
+        "histories": locator._ensemble_histories,
+        "models": locator._ensemble_models,
+        "normalization_params": avg_norm_params,
+        "fold_info": fold_info,
+        "training_time": total_time,
+        "parallel": True,
+    }
 
 
 # Additional parallel methods that could be implemented:
