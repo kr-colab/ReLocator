@@ -2,12 +2,13 @@
 
 import numpy as np
 import pandas as pd
-from tensorflow import keras
 import tensorflow as tf
+from tensorflow import keras
 
 from .core import Locator
+from .data import filter_snps_legacy as filter_snps
+from .data import normalize_locs
 from .models import create_network
-from .data import filter_snps_legacy as filter_snps, normalize_locs
 
 
 def flip_genotypes(genotypes, locations, mask_rate=0.05):

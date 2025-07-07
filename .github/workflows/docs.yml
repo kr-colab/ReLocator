@@ -9,15 +9,15 @@ on:
 jobs:
   build-docs:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: "3.11"
-    
+
     - name: Cache pip packages
       uses: actions/cache@v4
       with:
@@ -26,13 +26,13 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-docs-
           ${{ runner.os }}-pip-
-    
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y libproj-dev proj-data proj-bin libgeos-dev
         sudo apt-get install -y pandoc
-    
+
     - name: Install package with docs dependencies
       env:
         CUDA_VISIBLE_DEVICES: "-1"
@@ -40,13 +40,13 @@ jobs:
         python -m pip install --upgrade pip
         pip install wheel
         pip install -e ".[docs]"
-    
+
     - name: Build documentation
       run: |
         cd docs
         make clean
         make html
-    
+
     - name: Check for documentation warnings
       run: |
         cd docs
@@ -54,7 +54,7 @@ jobs:
           echo "Documentation build produced warnings"
           exit 1
         fi
-    
+
     - name: Upload documentation artifacts
       uses: actions/upload-artifact@v4
       with:

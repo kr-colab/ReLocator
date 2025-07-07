@@ -1,11 +1,12 @@
 """Command line interface for locator"""
 
 import argparse
-import sys
-import os
 import json
-from .core import Locator
+import os
+import sys
 import time
+
+from .core import Locator
 
 
 def parse_args():
@@ -130,8 +131,8 @@ def parse_args():
         default=None,
         type=str,
         help="Specify which GPU to use (0-based index). For example, use '1' to use the second GPU. "
-             "If not specified, uses the first available GPU. "
-             "Use --disable_gpu to force CPU usage. default: None",
+        "If not specified, uses the first available GPU. "
+        "Use --disable_gpu to force CPU usage. default: None",
     )
     parser.add_argument(
         "--plot_history",
@@ -179,7 +180,7 @@ def parse_args():
         "--disable_gpu",
         action="store_true",
         help="Disable GPU usage even if available. Useful when running multiple jobs "
-             "or when GPU memory is needed for other tasks. default: False",
+        "or when GPU memory is needed for other tasks. default: False",
     )
 
     return parser.parse_args()
@@ -229,7 +230,7 @@ def main():
             samples=samples,
             sample_data_file=args.sample_data,
             save_preds_to_disk=True,
-            return_df=True
+            return_df=True,
         )
     elif args.windows:
         if args.zarr is None:

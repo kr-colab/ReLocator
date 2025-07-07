@@ -1,18 +1,21 @@
 """Analysis functionality for locator"""
 
+import copy
+
 import numpy as np
 import pandas as pd
-import copy
-from tqdm import tqdm
-from tensorflow import keras
 import zarr
+from tensorflow import keras
+from tqdm import tqdm
 
-from .data import filter_snps_legacy as filter_snps, normalize_locs, IndexSet, make_tf_dataset
+from .data import IndexSet
+from .data import filter_snps_legacy as filter_snps
+from .data import make_tf_dataset, normalize_locs
 
 
 class AnalysisMixin:
     """Mixin class providing analysis functionality for Locator."""
-    
+
     def run_windows(
         self,
         genotypes,
@@ -38,42 +41,44 @@ class AnalysisMixin:
                 boundaries. Requires chromosome information from VCF/Zarr input.
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
-            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
-            
+
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each window, otherwise None
-                
+
         Notes:
             - With na_action='separate': Trains on samples with known locations,
               can predict on samples with NA locations
             - With na_action='exclude': Only uses samples with known locations
             - With na_action='fail': Raises error if any NA samples found
-            
+
         Warning:
-            When respect_chromosomes=False, window analysis treats all SNP positions as 
-            continuous along a single coordinate axis. If your data contains multiple 
-            chromosomes, windows may span across chromosome boundaries. Use 
+            When respect_chromosomes=False, window analysis treats all SNP positions as
+            continuous along a single coordinate axis. If your data contains multiple
+            chromosomes, windows may span across chromosome boundaries. Use
             respect_chromosomes=True (default) for biologically meaningful windows.
         """
         # Store samples
         self.samples = samples
-        
+
         # Use instance default if na_action not specified
         if na_action is None:
             na_action = self.na_action
-            
+
         # Get sample status
         status = self.get_sample_status(samples)
-        
+
         # Report status
-        print(f"Window analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
-        if status['n_na'] > 0:
+        print(
+            f"Window analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+        )
+        if status["n_na"] > 0:
             print(f"NA handling mode: {na_action}")
-        
+
         # Apply NA action
-        if na_action == 'fail' and status['n_na'] > 0:
+        if na_action == "fail" and status["n_na"] > 0:
             raise ValueError(
                 f"Found {status['n_na']} samples without coordinates. "
                 f"Set na_action='separate' or 'exclude' to proceed."
@@ -92,20 +97,23 @@ class AnalysisMixin:
                 # Re-read VCF to get positions and chromosomes
                 print("Loading SNP positions from VCF...")
                 import allel
-                vcf = allel.read_vcf(self.config["vcf"], fields=['POS', 'CHROM'])
+
+                vcf = allel.read_vcf(self.config["vcf"], fields=["POS", "CHROM"])
                 if vcf is not None and "variants/POS" in vcf:
                     self.positions = vcf["variants/POS"]
                     if "variants/CHROM" in vcf:
                         self.chromosomes = vcf["variants/CHROM"]
                     print(f"Loaded {len(self.positions)} SNP positions")
                 else:
-                    raise ValueError(f"Could not load positions from VCF: {self.config['vcf']}")
+                    raise ValueError(
+                        f"Could not load positions from VCF: {self.config['vcf']}"
+                    )
             else:
                 raise ValueError(
                     "SNP positions required for windowed analysis. Use VCF, zarr input or "
                     "genotype DataFrame with position-labeled columns."
                 )
-        
+
         # Ensure positions were found
         if not hasattr(self, "positions") or self.positions is None:
             raise ValueError(
@@ -118,8 +126,8 @@ class AnalysisMixin:
 
         # Generate windows using the new helper function
         from .data.windows import generate_genomic_windows
-        
-        chromosomes = getattr(self, 'chromosomes', None)
+
+        chromosomes = getattr(self, "chromosomes", None)
         windows = generate_genomic_windows(
             positions=self.positions,
             chromosomes=chromosomes,
@@ -127,13 +135,13 @@ class AnalysisMixin:
             window_size=int(window_size),
             window_stop=window_stop,
             respect_chromosomes=respect_chromosomes,
-            min_snps_per_window=self.config.get('min_snps_per_window', 1),
-            verbose=self.config.get('verbose', False)
+            min_snps_per_window=self.config.get("min_snps_per_window", 1),
+            verbose=self.config.get("verbose", False),
         )
 
         # Initial training to set up model and data
         if len(windows) > 0:
-            first_window_indices = windows[0]['indices']
+            first_window_indices = windows[0]["indices"]
             if np.sum(first_window_indices) > 0:
                 window_genos = genotypes[first_window_indices, :, :]
                 self.train(genotypes=window_genos, samples=samples, na_action=na_action)
@@ -143,9 +151,9 @@ class AnalysisMixin:
 
         print(f"Starting window analysis ({len(windows)} windows)")
         for window in tqdm(windows):
-            if window['n_snps'] > 0:
+            if window["n_snps"] > 0:
                 # Get genotypes for this window
-                window_genos = genotypes[window['indices'], :, :]
+                window_genos = genotypes[window["indices"], :, :]
 
                 # Clear existing model and weights
                 self.model = None
@@ -162,7 +170,11 @@ class AnalysisMixin:
                 if return_df:
                     # Rename columns to include window label
                     window_preds = preds[["sampleID", "x", "y"]].copy()
-                    window_preds.columns = ["sampleID", f"x_{window['label']}", f"y_{window['label']}"]
+                    window_preds.columns = [
+                        "sampleID",
+                        f"x_{window['label']}",
+                        f"y_{window['label']}",
+                    ]
                     pred_dfs.append(window_preds)
 
                 # Clear keras session
@@ -173,13 +185,15 @@ class AnalysisMixin:
             if not pred_dfs:
                 print("Warning: No windows contained SNPs. No predictions generated.")
                 return None
-                
+
             # Start with the first window's predictions
             all_predictions = pred_dfs[0]
-            
+
             # Merge subsequent windows
             for pred_df in pred_dfs[1:]:
-                all_predictions = all_predictions.merge(pred_df, on='sampleID', how='outer')
+                all_predictions = all_predictions.merge(
+                    pred_df, on="sampleID", how="outer"
+                )
 
             if save_full_pred_matrix:
                 all_predictions.to_csv(
@@ -209,14 +223,14 @@ class AnalysisMixin:
                 Defaults to False.
             save_full_pred_matrix (bool, optional): Whether to save the full prediction matrix.
                 Defaults to True.
-            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
 
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame containing
                 all predictions, with columns named 'x_0', 'y_0', 'x_1', 'y_1', etc.
                 for each jacknife replicate. Row index contains sample IDs.
-                
+
         Notes:
             - With na_action='separate': Trains on samples with known locations,
               can predict on samples with NA locations
@@ -225,21 +239,23 @@ class AnalysisMixin:
         """
         # Store samples
         self.samples = samples
-        
+
         # Use instance default if na_action not specified
         if na_action is None:
             na_action = self.na_action
-            
+
         # Get sample status
         status = self.get_sample_status(samples)
-        
+
         # Report status
-        print(f"Jacknife analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
-        if status['n_na'] > 0:
+        print(
+            f"Jacknife analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+        )
+        if status["n_na"] > 0:
             print(f"NA handling mode: {na_action}")
-        
+
         # Apply NA action
-        if na_action == 'fail' and status['n_na'] > 0:
+        if na_action == "fail" and status["n_na"] > 0:
             raise ValueError(
                 f"Found {status['n_na']} samples without coordinates. "
                 f"Set na_action='separate' or 'exclude' to proceed."
@@ -270,43 +286,47 @@ class AnalysisMixin:
         self.train(genotypes=genotypes, samples=samples, na_action=na_action)
 
         # Store original data for reuse
-        original_filtered_genotypes = self.filtered_genotypes if hasattr(self, 'filtered_genotypes') else None
-        original_index_set = self.index_set if hasattr(self, 'index_set') else None
-        
+        original_filtered_genotypes = (
+            self.filtered_genotypes if hasattr(self, "filtered_genotypes") else None
+        )
+        original_index_set = self.index_set if hasattr(self, "index_set") else None
+
         # Store original locations and model
-        original_trainlocs = self.trainlocs if hasattr(self, 'trainlocs') else None
-        original_testlocs = self.testlocs if hasattr(self, 'testlocs') else None
-        
+        original_trainlocs = self.trainlocs if hasattr(self, "trainlocs") else None
+        original_testlocs = self.testlocs if hasattr(self, "testlocs") else None
+
         # Calculate number of jacknife replicates
         n_jack = int(np.ceil(1.0 / prop))
         print(f"starting jacknife resampling ({n_jack} replicates)")
-        
+
         for boot in tqdm(range(n_jack)):
             # Generate indices of sites to keep (jackknife drops a subset)
             if original_filtered_genotypes is not None:
                 n_sites = original_filtered_genotypes.shape[0]
             else:
-                raise ValueError("Jacknife requires filtered_genotypes from initial training")
-            
+                raise ValueError(
+                    "Jacknife requires filtered_genotypes from initial training"
+                )
+
             # For jacknife, we systematically drop different subsets
             # This ensures each SNP is dropped in exactly one replicate
             sites_per_replicate = int(n_sites * prop)
             start_idx = boot * sites_per_replicate
             end_idx = min(start_idx + sites_per_replicate, n_sites)
-            
+
             # Create array of all site indices except those being dropped
             all_sites = np.arange(n_sites)
             sites_to_keep = np.concatenate([all_sites[:start_idx], all_sites[end_idx:]])
-            
+
             # Clear model to force retraining
             self.model = None
             self.sample_weights = None
-            
+
             # Restore filtered genotypes and index set
             if original_filtered_genotypes is not None:
                 self.filtered_genotypes = original_filtered_genotypes
                 self.index_set = original_index_set
-                
+
             # Train with subset of sites using site_order
             # site_order acts as a selection of which sites to use
             self.train(
@@ -325,7 +345,7 @@ class AnalysisMixin:
                 verbose=False,
                 genotypes=genotypes,  # Pass full genotypes for tf.data
                 samples=samples,
-                indices=self.pred_indices if hasattr(self, 'pred_indices') else None,
+                indices=self.pred_indices if hasattr(self, "pred_indices") else None,
                 site_order=sites_to_keep,  # Pass same site order for predictions
                 return_df=True,
                 save_preds_to_disk=not save_full_pred_matrix,
@@ -358,20 +378,20 @@ class AnalysisMixin:
         na_action=None,
     ):
         """Run bootstrap analysis by resampling SNPs with replacement.
-        
+
         Args:
             genotypes: Array of genotype data
             samples: Sample IDs corresponding to genotypes
             n_bootstraps: Number of bootstrap replicates to run
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
-            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
-            
+
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each bootstrap, otherwise None
-                
+
         Notes:
             - With na_action='separate': Trains on samples with known locations,
               can predict on samples with NA locations
@@ -380,21 +400,23 @@ class AnalysisMixin:
         """
         # Store samples
         self.samples = samples
-        
+
         # Use instance default if na_action not specified
         if na_action is None:
             na_action = self.na_action
-            
+
         # Get sample status
         status = self.get_sample_status(samples)
-        
+
         # Report status
-        print(f"Bootstrap analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
-        if status['n_na'] > 0:
+        print(
+            f"Bootstrap analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+        )
+        if status["n_na"] > 0:
             print(f"NA handling mode: {na_action}")
-        
+
         # Apply NA action
-        if na_action == 'fail' and status['n_na'] > 0:
+        if na_action == "fail" and status["n_na"] > 0:
             raise ValueError(
                 f"Found {status['n_na']} samples without coordinates. "
                 f"Set na_action='separate' or 'exclude' to proceed."
@@ -410,49 +432,58 @@ class AnalysisMixin:
         # Store original locations and filtered genotypes for reuse
         original_trainlocs = self.trainlocs
         original_testlocs = self.testlocs
-        original_filtered_genotypes = self.filtered_genotypes if hasattr(self, 'filtered_genotypes') else None
-        
+        original_filtered_genotypes = (
+            self.filtered_genotypes if hasattr(self, "filtered_genotypes") else None
+        )
+
         # Handle prediction indices based on whether we're using tf.data pipeline
-        if hasattr(self, 'pred_indices') and self.pred_indices is not None:
+        if hasattr(self, "pred_indices") and self.pred_indices is not None:
             n_pred = len(self.pred_indices)
         elif self.predgen is not None:
             n_pred = self.predgen.shape[0]
         else:
             n_pred = 0
-            
-        original_normalized_locs = np.vstack([
-            self.trainlocs,
-            self.testlocs,
-            np.full((n_pred, 2), np.nan) if n_pred > 0 else np.empty((0, 2))
-        ])
-        original_index_set = self.index_set if hasattr(self, 'index_set') else None
-        
+
+        original_normalized_locs = np.vstack(
+            [
+                self.trainlocs,
+                self.testlocs,
+                np.full((n_pred, 2), np.nan) if n_pred > 0 else np.empty((0, 2)),
+            ]
+        )
+        original_index_set = self.index_set if hasattr(self, "index_set") else None
+
         # Pre-calculate KDE bandwidth if needed
         original_bandwidth = None
         bandwidth_calculated = False
-        
-        if (self.config.get("weight_samples", {}).get("enabled", False) and
-            self.config.get("weight_samples", {}).get("method") == "KD"):
-            
+
+        if (
+            self.config.get("weight_samples", {}).get("enabled", False)
+            and self.config.get("weight_samples", {}).get("method") == "KD"
+        ):
+
             existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
-            
+
             if existing_bandwidth is None and len(original_trainlocs) > 1:
                 print("Pre-calculating optimal KDE bandwidth for bootstrap analysis...")
-                
+
                 from .sample_weights import get_global_bandwidth_optimizer
+
                 optimizer = get_global_bandwidth_optimizer()
-                
+
                 optimal_bandwidth = optimizer.get_bandwidth(
                     original_trainlocs,
                     cache_key=f"bootstrap_n{len(original_trainlocs)}",
-                    n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
-                    verbose=True
+                    n_bandwidths=self.config.get("weight_samples", {}).get(
+                        "n_bandwidths", 100
+                    ),
+                    verbose=True,
                 )
-                
+
                 # Temporarily set in config
                 self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
                 bandwidth_calculated = True
-                
+
                 print(f"Using bandwidth: {optimal_bandwidth:.3f}")
 
         # Create lists to store predictions
@@ -471,14 +502,16 @@ class AnalysisMixin:
             elif self.traingen is not None:
                 n_snps = self.traingen.shape[1]
             else:
-                raise ValueError("Unable to determine number of SNPs for bootstrap resampling")
-                
+                raise ValueError(
+                    "Unable to determine number of SNPs for bootstrap resampling"
+                )
+
             site_order = np.random.choice(n_snps, n_snps, replace=True)
 
             # Clear existing model and weights
             self.model = None
             self.sample_weights = None
-            
+
             # Restore filtered genotypes and index set for tf.data pipeline
             if original_filtered_genotypes is not None:
                 self.filtered_genotypes = original_filtered_genotypes
@@ -504,7 +537,7 @@ class AnalysisMixin:
                 verbose=False,
                 genotypes=genotypes,  # Pass full genotypes for tf.data
                 samples=samples,
-                indices=self.pred_indices if hasattr(self, 'pred_indices') else None,
+                indices=self.pred_indices if hasattr(self, "pred_indices") else None,
                 site_order=site_order,  # Pass same site order for consistent resampling
                 return_df=True,
                 save_preds_to_disk=not save_full_pred_matrix,
@@ -518,7 +551,7 @@ class AnalysisMixin:
 
             # Clear keras session
             keras.backend.clear_session()
-        
+
         # Restore original bandwidth setting if we changed it
         if bandwidth_calculated:
             if original_bandwidth is None:
@@ -565,7 +598,7 @@ class AnalysisMixin:
                 (different samples per replicate).
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
-            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
@@ -574,34 +607,38 @@ class AnalysisMixin:
                 - x_pred: Predicted longitude
                 - y_pred: Predicted latitude
                 - rep: Replicate number (0 to n_reps-1)
-                
+
                 Note: True locations are not included. Merge with sample metadata to calculate errors.
-                
+
         Notes:
-            - With na_action='separate': Currently behaves like 'exclude' (holdouts 
+            - With na_action='separate': Currently behaves like 'exclude' (holdouts
               must have known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
             - With na_action='fail': Raises error if any NA samples found
         """
         # Store samples
         self.samples = samples
-        
+
         # Use instance default if na_action not specified
         if na_action is None:
             na_action = self.na_action
-            
+
         # Get sample status
         status = self.get_sample_status(samples)
-        
+
         # Report status
-        print(f"Holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
-        if status['n_na'] > 0:
+        print(
+            f"Holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+        )
+        if status["n_na"] > 0:
             print(f"NA handling mode: {na_action}")
-            if na_action == 'separate':
-                print("Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'")
-        
+            if na_action == "separate":
+                print(
+                    "Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'"
+                )
+
         # Apply NA action
-        if na_action == 'fail' and status['n_na'] > 0:
+        if na_action == "fail" and status["n_na"] > 0:
             raise ValueError(
                 f"Found {status['n_na']} samples without coordinates. "
                 f"Set na_action='separate' or 'exclude' to proceed."
@@ -626,18 +663,22 @@ class AnalysisMixin:
         # Handle holdout_sample_ids if provided
         if holdout_sample_ids is not None:
             # Convert samples to list if it's a numpy array
-            if hasattr(samples, 'tolist'):
+            if hasattr(samples, "tolist"):
                 samples_list = samples.tolist()
             else:
                 samples_list = list(samples)
-                
+
             # Convert sample IDs to indices
             if isinstance(holdout_sample_ids[0], str):
                 # Single list of sample IDs for all replicates
                 try:
-                    holdout_indices = [[samples_list.index(sid) for sid in holdout_sample_ids]]
+                    holdout_indices = [
+                        [samples_list.index(sid) for sid in holdout_sample_ids]
+                    ]
                 except ValueError as e:
-                    missing = [sid for sid in holdout_sample_ids if sid not in samples_list]
+                    missing = [
+                        sid for sid in holdout_sample_ids if sid not in samples_list
+                    ]
                     raise ValueError(f"Sample IDs not found in samples list: {missing}")
                 # Replicate for all n_reps if needed
                 holdout_indices = holdout_indices * n_reps
@@ -650,7 +691,9 @@ class AnalysisMixin:
                         rep_indices = [samples_list.index(sid) for sid in rep_ids]
                     except ValueError:
                         missing = [sid for sid in rep_ids if sid not in samples_list]
-                        raise ValueError(f"Sample IDs not found in samples list: {missing}")
+                        raise ValueError(
+                            f"Sample IDs not found in samples list: {missing}"
+                        )
                     holdout_indices.append(rep_indices)
                 n_reps = len(holdout_indices)  # Update n_reps to match
                 k = len(holdout_indices[0]) if holdout_indices else 0
@@ -663,33 +706,40 @@ class AnalysisMixin:
         # Pre-calculate KDE bandwidth if needed
         original_bandwidth = None
         bandwidth_calculated = False
-        
-        if (self.config.get("weight_samples", {}).get("enabled", False) and
-            self.config.get("weight_samples", {}).get("method") == "KD"):
-            
+
+        if (
+            self.config.get("weight_samples", {}).get("enabled", False)
+            and self.config.get("weight_samples", {}).get("method") == "KD"
+        ):
+
             existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
-            
+
             if existing_bandwidth is None:
                 # Get all samples with coordinates for bandwidth calculation
                 all_train_locs = locs[known_idx]
-                
+
                 if len(all_train_locs) > 1:
-                    print("Pre-calculating optimal KDE bandwidth for holdout analysis...")
-                    
+                    print(
+                        "Pre-calculating optimal KDE bandwidth for holdout analysis..."
+                    )
+
                     from .sample_weights import get_global_bandwidth_optimizer
+
                     optimizer = get_global_bandwidth_optimizer()
-                    
+
                     optimal_bandwidth = optimizer.get_bandwidth(
                         all_train_locs,
                         cache_key=f"holdouts_k{k}_n{len(all_train_locs)}",
-                        n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
-                        verbose=True
+                        n_bandwidths=self.config.get("weight_samples", {}).get(
+                            "n_bandwidths", 100
+                        ),
+                        verbose=True,
                     )
-                    
+
                     # Temporarily set in config
                     self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
                     bandwidth_calculated = True
-                    
+
                     print(f"Using bandwidth: {optimal_bandwidth:.3f}")
 
         print(f"Running {n_reps} holdout replicates")
@@ -776,44 +826,48 @@ class AnalysisMixin:
             holdout_indices: Optional specific indices to hold out
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
-            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
-            
+
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each jacknife replicate containing columns:
                 - sampleID: Sample identifier
-                - x_pred: Predicted longitude  
+                - x_pred: Predicted longitude
                 - y_pred: Predicted latitude
                 - boot: Jacknife replicate number (0 to n_boots-1)
-                
+
                 Note: True locations are not included. Merge with sample metadata to calculate errors.
-                
+
         Notes:
-            - With na_action='separate': Currently behaves like 'exclude' (holdouts 
+            - With na_action='separate': Currently behaves like 'exclude' (holdouts
               must have known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
             - With na_action='fail': Raises error if any NA samples found
         """
         # Store samples
         self.samples = samples
-        
+
         # Use instance default if na_action not specified
         if na_action is None:
             na_action = self.na_action
-            
+
         # Get sample status
         status = self.get_sample_status(samples)
-        
+
         # Report status
-        print(f"Jacknife holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
-        if status['n_na'] > 0:
+        print(
+            f"Jacknife holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+        )
+        if status["n_na"] > 0:
             print(f"NA handling mode: {na_action}")
-            if na_action == 'separate':
-                print("Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'")
-        
+            if na_action == "separate":
+                print(
+                    "Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'"
+                )
+
         # Apply NA action
-        if na_action == 'fail' and status['n_na'] > 0:
+        if na_action == "fail" and status["n_na"] > 0:
             raise ValueError(
                 f"Found {status['n_na']} samples without coordinates. "
                 f"Set na_action='separate' or 'exclude' to proceed."
@@ -834,29 +888,40 @@ class AnalysisMixin:
         # Pre-calculate KDE bandwidth if needed
         original_bandwidth = None
         bandwidth_calculated = False
-        
-        if (self.config.get("weight_samples", {}).get("enabled", False) and
-            self.config.get("weight_samples", {}).get("method") == "KD"):
-            
+
+        if (
+            self.config.get("weight_samples", {}).get("enabled", False)
+            and self.config.get("weight_samples", {}).get("method") == "KD"
+        ):
+
             existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
-            
-            if existing_bandwidth is None and hasattr(self, 'trainlocs') and len(self.trainlocs) > 1:
-                print("Pre-calculating optimal KDE bandwidth for jacknife holdout analysis...")
-                
+
+            if (
+                existing_bandwidth is None
+                and hasattr(self, "trainlocs")
+                and len(self.trainlocs) > 1
+            ):
+                print(
+                    "Pre-calculating optimal KDE bandwidth for jacknife holdout analysis..."
+                )
+
                 from .sample_weights import get_global_bandwidth_optimizer
+
                 optimizer = get_global_bandwidth_optimizer()
-                
+
                 optimal_bandwidth = optimizer.get_bandwidth(
                     self.trainlocs,
                     cache_key=f"jacknife_holdouts_n{len(self.trainlocs)}",
-                    n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
-                    verbose=True
+                    n_bandwidths=self.config.get("weight_samples", {}).get(
+                        "n_bandwidths", 100
+                    ),
+                    verbose=True,
                 )
-                
+
                 # Temporarily set in config
                 self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
                 bandwidth_calculated = True
-                
+
                 print(f"Using bandwidth: {optimal_bandwidth:.3f}")
 
         # Calculate allele frequencies
@@ -958,40 +1023,40 @@ class AnalysisMixin:
                 these specific samples will be held out (overrides k and holdout_indices).
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
-            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
-            
+
         Returns:
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each window, otherwise None
-                
+
         Notes:
-            - With na_action='separate': Currently behaves like 'exclude' (holdouts 
+            - With na_action='separate': Currently behaves like 'exclude' (holdouts
               must have known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
             - With na_action='fail': Raises error if any NA samples found
-            
+
         Warning:
-            When respect_chromosomes=False, window analysis treats all SNP positions as 
-            continuous along a single coordinate axis. If your data contains multiple 
-            chromosomes, windows may span across chromosome boundaries. Use 
+            When respect_chromosomes=False, window analysis treats all SNP positions as
+            continuous along a single coordinate axis. If your data contains multiple
+            chromosomes, windows may span across chromosome boundaries. Use
             respect_chromosomes=True (default) for biologically meaningful windows.
         """
         # Store samples and genotypes for efficient access
         self.samples = samples
         self.genotypes = genotypes
-        
+
         # Use instance default if na_action not specified
         if na_action is None:
             na_action = self.na_action
-            
+
         # Get sample status and create NA mask
         status = self.get_sample_status(samples)
         na_mask = None
-        if status['n_na'] > 0:
+        if status["n_na"] > 0:
             # Create boolean mask for NA samples
             if isinstance(samples, pd.DataFrame):
-                na_mask = samples['x'].isna() | samples['y'].isna()
+                na_mask = samples["x"].isna() | samples["y"].isna()
             else:
                 # Use stored sample data or load from config
                 if hasattr(self, "_sample_data_df"):
@@ -1002,21 +1067,25 @@ class AnalysisMixin:
                         sample_data = pd.read_csv(sample_data_path, sep="\t")
                     else:
                         raise ValueError("No sample data available")
-                
+
                 merged = pd.DataFrame({"sampleID": samples})
                 merged = merged.merge(sample_data, on="sampleID", how="left")
-                na_mask = merged['x'].isna() | merged['y'].isna()
+                na_mask = merged["x"].isna() | merged["y"].isna()
             na_mask = na_mask.values
-        
+
         # Report status
-        print(f"Windows holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without")
-        if status['n_na'] > 0:
+        print(
+            f"Windows holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+        )
+        if status["n_na"] > 0:
             print(f"NA handling mode: {na_action}")
-            if na_action == 'separate':
-                print("Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'")
-        
+            if na_action == "separate":
+                print(
+                    "Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'"
+                )
+
         # Apply NA action
-        if na_action == 'fail' and status['n_na'] > 0:
+        if na_action == "fail" and status["n_na"] > 0:
             raise ValueError(
                 f"Found {status['n_na']} samples without coordinates. "
                 f"Set na_action='separate' or 'exclude' to proceed."
@@ -1033,28 +1102,31 @@ class AnalysisMixin:
                 # Re-read VCF to get positions and chromosomes
                 print("Loading SNP positions from VCF...")
                 import allel
-                vcf = allel.read_vcf(self.config["vcf"], fields=['POS', 'CHROM'])
+
+                vcf = allel.read_vcf(self.config["vcf"], fields=["POS", "CHROM"])
                 if vcf is not None and "variants/POS" in vcf:
                     self.positions = vcf["variants/POS"]
                     if "variants/CHROM" in vcf:
                         self.chromosomes = vcf["variants/CHROM"]
                     print(f"Loaded {len(self.positions)} SNP positions")
                 else:
-                    raise ValueError(f"Could not load positions from VCF: {self.config['vcf']}")
+                    raise ValueError(
+                        f"Could not load positions from VCF: {self.config['vcf']}"
+                    )
             else:
                 raise ValueError(
                     "SNP positions required for windowed analysis. Use VCF, zarr input or "
                     "genotype DataFrame with position-labeled columns."
                 )
-        
+
         # Handle holdout_sample_ids if provided
         if holdout_sample_ids is not None:
             # Convert samples to list if it's a numpy array
-            if hasattr(samples, 'tolist'):
+            if hasattr(samples, "tolist"):
                 samples_list = samples.tolist()
             else:
                 samples_list = list(samples)
-                
+
             # Convert sample IDs to indices
             try:
                 holdout_indices = [samples_list.index(sid) for sid in holdout_sample_ids]
@@ -1069,27 +1141,29 @@ class AnalysisMixin:
             # Use provided holdout indices
             holdout_idx = np.array(holdout_indices)
             train_idx = np.setdiff1d(np.arange(n_samples), holdout_idx)
-            
+
             # Apply NA mask if needed
-            if na_mask is not None and (na_action == 'exclude' or na_action == 'separate'):
+            if na_mask is not None and (
+                na_action == "exclude" or na_action == "separate"
+            ):
                 # Only keep samples with known coordinates
                 valid_mask = ~na_mask
                 holdout_idx = holdout_idx[valid_mask[holdout_idx]]
                 train_idx = train_idx[valid_mask[train_idx]]
-            
+
             index_set = IndexSet(
-                indices={'train': train_idx, 'test': holdout_idx},
+                indices={"train": train_idx, "test": holdout_idx},
                 total_samples=n_samples,
-                na_mask=na_mask
+                na_mask=na_mask,
             )
         else:
             # Random holdout selection using IndexSet
             index_set = IndexSet.random_split(
                 n=n_samples,
-                splits={'train': 1.0 - k/n_samples, 'test': k/n_samples},
-                seed=self.config.get('seed', 42),
+                splits={"train": 1.0 - k / n_samples, "test": k / n_samples},
+                seed=self.config.get("seed", 42),
                 na_mask=na_mask,
-                na_action=na_action if na_action != 'separate' else 'exclude'
+                na_action=na_action if na_action != "separate" else "exclude",
             )
 
         if window_stop is None:
@@ -1097,8 +1171,8 @@ class AnalysisMixin:
 
         # Generate windows using the new helper function
         from .data.windows import generate_genomic_windows
-        
-        chromosomes = getattr(self, 'chromosomes', None)
+
+        chromosomes = getattr(self, "chromosomes", None)
         windows = generate_genomic_windows(
             positions=self.positions,
             chromosomes=chromosomes,
@@ -1106,8 +1180,8 @@ class AnalysisMixin:
             window_size=int(window_size),
             window_stop=window_stop,
             respect_chromosomes=respect_chromosomes,
-            min_snps_per_window=self.config.get('min_snps_per_window', 1),
-            verbose=self.config.get('verbose', False)
+            min_snps_per_window=self.config.get("min_snps_per_window", 1),
+            verbose=self.config.get("verbose", False),
         )
 
         # Create lists to store predictions
@@ -1116,12 +1190,14 @@ class AnalysisMixin:
         # Pre-calculate KDE bandwidth if needed
         original_bandwidth = None
         bandwidth_calculated = False
-        
-        if (self.config.get("weight_samples", {}).get("enabled", False) and
-            self.config.get("weight_samples", {}).get("method") == "KD"):
-            
+
+        if (
+            self.config.get("weight_samples", {}).get("enabled", False)
+            and self.config.get("weight_samples", {}).get("method") == "KD"
+        ):
+
             existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
-            
+
             if existing_bandwidth is None:
                 # Get sample data and locations
                 if hasattr(self, "_sample_data_df"):
@@ -1129,39 +1205,46 @@ class AnalysisMixin:
                 else:
                     sample_data_path = self.config.get("sample_data")
                     if not sample_data_path:
-                        raise ValueError("sample_data file path must be provided in config")
+                        raise ValueError(
+                            "sample_data file path must be provided in config"
+                        )
                     sample_data, locs = self.sort_samples(samples, sample_data_path)
-                
+
                 # Get training locations (exclude holdout samples)
                 train_mask = np.ones(len(samples), dtype=bool)
                 train_mask[index_set.test] = False
                 train_mask = train_mask & ~np.isnan(locs[:, 0])
                 train_locs = locs[train_mask]
-                
+
                 if len(train_locs) > 1:
-                    print("Pre-calculating optimal KDE bandwidth for windows holdout analysis...")
-                    
+                    print(
+                        "Pre-calculating optimal KDE bandwidth for windows holdout analysis..."
+                    )
+
                     from .sample_weights import get_global_bandwidth_optimizer
+
                     optimizer = get_global_bandwidth_optimizer()
-                    
+
                     optimal_bandwidth = optimizer.get_bandwidth(
                         train_locs,
                         cache_key=f"windows_holdouts_n{len(train_locs)}",
-                        n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
-                        verbose=True
+                        n_bandwidths=self.config.get("weight_samples", {}).get(
+                            "n_bandwidths", 100
+                        ),
+                        verbose=True,
                     )
-                    
+
                     # Temporarily set in config
                     self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
                     bandwidth_calculated = True
-                    
+
                     print(f"Using bandwidth: {optimal_bandwidth:.3f}")
 
         print(f"Running windowed analysis for holdout samples ({len(windows)} windows)")
-        
+
         # Store the full IndexSet for use across windows
         self.index_set = index_set
-        
+
         # Pre-normalize locations for efficiency
         if hasattr(self, "_sample_data_df"):
             _, locs = self.sort_samples(samples)
@@ -1170,14 +1253,19 @@ class AnalysisMixin:
             if not sample_data_path:
                 raise ValueError("sample_data file path must be provided in config")
             _, locs = self.sort_samples(samples, sample_data_path)
-        
+
         # Normalize locations once
-        self.meanlong, self.sdlong, self.meanlat, self.sdlat, self.unnormedlocs, normalized_locs = (
-            normalize_locs(locs)
-        )
+        (
+            self.meanlong,
+            self.sdlong,
+            self.meanlat,
+            self.sdlat,
+            self.unnormedlocs,
+            normalized_locs,
+        ) = normalize_locs(locs)
 
         for window in tqdm(windows):
-            snp_indices = np.where(window['indices'])[0]
+            snp_indices = np.where(window["indices"])[0]
 
             if len(snp_indices) > 0:
                 # Clear existing model and weights
@@ -1204,7 +1292,10 @@ class AnalysisMixin:
                 if return_df:
                     # Rename columns to include window label
                     window_preds = preds[["x_pred", "y_pred"]].copy()
-                    window_preds.columns = [f"x_{window['label']}", f"y_{window['label']}"]
+                    window_preds.columns = [
+                        f"x_{window['label']}",
+                        f"y_{window['label']}",
+                    ]
                     window_preds["sampleID"] = preds["sampleID"]
                     pred_dfs.append(window_preds)
 
@@ -1224,7 +1315,7 @@ class AnalysisMixin:
             if not pred_dfs:
                 print("Warning: No windows contained SNPs. No predictions generated.")
                 return None
-                
+
             # Merge all predictions
             all_predictions = pred_dfs[0]
             for df in pred_dfs[1:]:
@@ -1258,7 +1349,7 @@ class AnalysisMixin:
             samples: Sample IDs corresponding to genotypes
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
-            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
 
         Returns:
@@ -1266,23 +1357,27 @@ class AnalysisMixin:
         """
         # Get sample status to determine k
         status = self.get_sample_status(samples)
-        n_known = status['n_known']
-        
+        n_known = status["n_known"]
+
         if n_known == 0:
             raise ValueError("No samples with known coordinates for leave-one-out CV")
-        
+
         print(f"Running leave-one-out cross-validation for {n_known} samples")
-        
+
         # For large leave-one-out, warn about memory usage
         if n_known > 50 and not self.config.get("disable_gpu", False):
             print("Warning: Leave-one-out with many samples may accumulate GPU memory.")
-            print("Consider setting config['disable_gpu'] = True if you encounter memory issues.")
-            
+            print(
+                "Consider setting config['disable_gpu'] = True if you encounter memory issues."
+            )
+
             # Also ensure HDF5 optimization is enabled for LOO
             if not self.config.get("holdout_no_intermediate_saves", True):
-                print("Tip: Enabling holdout_no_intermediate_saves will improve performance.")
+                print(
+                    "Tip: Enabling holdout_no_intermediate_saves will improve performance."
+                )
                 self.config["holdout_no_intermediate_saves"] = True
-        
+
         # Run k-fold with k equal to number of known samples
         # This will create folds with exactly 1 sample each
         result = self.run_k_fold_holdouts(
@@ -1292,15 +1387,15 @@ class AnalysisMixin:
             return_df=return_df,
             save_full_pred_matrix=False,  # We'll save with our own name
             verbose=False,  # We already printed our message
-            na_action=na_action
+            na_action=na_action,
         )
-        
+
         # Save with leave-one-out specific filename if requested
         if result is not None and save_full_pred_matrix:
             result.to_csv(
                 f"{self.config['out']}_leave_one_out_predlocs.csv", index=False
             )
-        
+
         return result
 
     def run_k_fold_holdouts(
@@ -1323,60 +1418,64 @@ class AnalysisMixin:
             return_df: Whether to return DataFrame with all predictions
             save_full_pred_matrix: Whether to save full prediction matrix to disk
             verbose: Whether to show training progress and intermediate output
-            na_action: How to handle NA samples ('separate', 'exclude', 'fail'). 
+            na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
         Returns:
-            pandas.DataFrame or None: If return_df=True, returns DataFrame with one prediction 
+            pandas.DataFrame or None: If return_df=True, returns DataFrame with one prediction
                 per held-out sample containing columns:
                 - sampleID: Sample identifier
                 - x_pred: Predicted longitude
                 - y_pred: Predicted latitude
-                
+
                 Note: True locations are not included. To calculate prediction errors, merge
                 the returned DataFrame with your sample metadata using the sampleID column.
-            
+
         Notes:
-            - With na_action='separate': Currently behaves like 'exclude' (k-fold requires 
+            - With na_action='separate': Currently behaves like 'exclude' (k-fold requires
               known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
             - With na_action='fail': Raises error if any NA samples found
-            
+
         Example:
             >>> # Run k-fold cross-validation
             >>> predictions = locator.run_k_fold_holdouts(genotypes, samples, k=10, return_df=True)
-            >>> 
+            >>>
             >>> # Merge with true locations to calculate errors
             >>> sample_data = pd.read_csv('samples.tsv', sep='\t')
             >>> merged = predictions.merge(sample_data[['sampleID', 'x', 'y']], on='sampleID')
             >>> merged['error_km'] = np.sqrt(
-            ...     (merged['x'] - merged['x_pred'])**2 + 
+            ...     (merged['x'] - merged['x_pred'])**2 +
             ...     (merged['y'] - merged['y_pred'])**2
             ... ) * 111.32  # Convert degrees to km
         """
         self.samples = samples
-        
+
         # Use instance default if na_action not specified
         if na_action is None:
             na_action = self.na_action
-            
+
         # Get sample status
         status = self.get_sample_status(samples)
-        
+
         # Report status
         if verbose:
-            print(f"K-fold CV: {status['n_known']} samples with coordinates, {status['n_na']} without")
-            if status['n_na'] > 0:
+            print(
+                f"K-fold CV: {status['n_known']} samples with coordinates, {status['n_na']} without"
+            )
+            if status["n_na"] > 0:
                 print(f"NA handling mode: {na_action}")
-                if na_action == 'separate':
-                    print("Note: K-fold CV requires known locations; 'separate' behaves like 'exclude'")
-        
+                if na_action == "separate":
+                    print(
+                        "Note: K-fold CV requires known locations; 'separate' behaves like 'exclude'"
+                    )
+
         # Apply NA action
-        if na_action == 'fail' and status['n_na'] > 0:
+        if na_action == "fail" and status["n_na"] > 0:
             raise ValueError(
                 f"Found {status['n_na']} samples without coordinates. "
                 f"Set na_action='separate' or 'exclude' to proceed."
             )
-        
+
         pred_rows = []
 
         # Get sample data and locations
@@ -1392,7 +1491,7 @@ class AnalysisMixin:
         na_mask = np.isnan(locs[:, 0])
         n_total_samples = len(locs)
         n_samples_with_coords = np.sum(~na_mask)
-        
+
         if k > n_samples_with_coords:
             raise ValueError(
                 f"k ({k}) must be less than or equal to number of samples with known locations ({n_samples_with_coords})"
@@ -1400,12 +1499,12 @@ class AnalysisMixin:
 
         # Create list to store IndexSets for each fold
         # Use a fixed seed based on config seed or numpy's current state
-        if 'seed' in self.config and self.config['seed'] is not None:
-            kfold_seed = self.config['seed']
+        if "seed" in self.config and self.config["seed"] is not None:
+            kfold_seed = self.config["seed"]
         else:
             # Generate a seed from current numpy state to ensure consistency
             kfold_seed = np.random.randint(0, 2**31)
-        
+
         fold_index_sets = []
         for fold_idx in range(k):
             index_set = IndexSet.from_k_fold(
@@ -1413,55 +1512,64 @@ class AnalysisMixin:
                 k=k,
                 fold=fold_idx,
                 seed=kfold_seed,  # Use consistent seed for all folds
-                na_mask=na_mask
+                na_mask=na_mask,
             )
             fold_index_sets.append(index_set)
 
         # Store original keras_verbose setting
-        original_keras_verbose = self.config.get('keras_verbose', 1)
-        
+        original_keras_verbose = self.config.get("keras_verbose", 1)
+
         # Set keras_verbose based on verbose parameter
         if not verbose:
-            self.config['keras_verbose'] = 0
-        
+            self.config["keras_verbose"] = 0
+
         # Pre-calculate KDE bandwidth if needed
         original_bandwidth = None
         bandwidth_calculated = False
-        
-        if (self.config.get("weight_samples", {}).get("enabled", False) and
-            self.config.get("weight_samples", {}).get("method") == "KD"):
-            
+
+        if (
+            self.config.get("weight_samples", {}).get("enabled", False)
+            and self.config.get("weight_samples", {}).get("method") == "KD"
+        ):
+
             existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
-            
+
             if existing_bandwidth is None:
                 # Get all samples with coordinates for bandwidth calculation
                 coords_mask = ~na_mask
                 all_train_locs = locs[coords_mask]
-                
+
                 if len(all_train_locs) > 1:
                     if verbose:
                         print("Pre-calculating optimal KDE bandwidth for k-fold CV...")
-                    
+
                     from .sample_weights import get_global_bandwidth_optimizer
+
                     optimizer = get_global_bandwidth_optimizer()
-                    
+
                     optimal_bandwidth = optimizer.get_bandwidth(
                         all_train_locs,
                         cache_key=f"kfold_k{k}_n{len(all_train_locs)}",
-                        n_bandwidths=self.config.get("weight_samples", {}).get("n_bandwidths", 100),
-                        verbose=verbose
+                        n_bandwidths=self.config.get("weight_samples", {}).get(
+                            "n_bandwidths", 100
+                        ),
+                        verbose=verbose,
                     )
-                    
+
                     # Temporarily set in config
                     self.config["weight_samples"]["bandwidth"] = optimal_bandwidth
                     bandwidth_calculated = True
-                    
+
                     if verbose:
                         print(f"Using bandwidth: {optimal_bandwidth:.3f}")
-        
+
         if verbose:
-            print(f"Running true {k}-fold cross-validation with nonoverlapping holdout sets")
-            fold_iterator = tqdm(enumerate(fold_index_sets), total=k, desc="K-fold progress")
+            print(
+                f"Running true {k}-fold cross-validation with nonoverlapping holdout sets"
+            )
+            fold_iterator = tqdm(
+                enumerate(fold_index_sets), total=k, desc="K-fold progress"
+            )
         else:
             fold_iterator = enumerate(fold_index_sets)
 
@@ -1472,18 +1580,19 @@ class AnalysisMixin:
                 self.model = None
             # Reset sample weights to ensure proper recalculation for each fold
             self.sample_weights = None
-            
+
             # Clear Keras session and GPU memory
             keras.backend.clear_session()
             if not self.config.get("disable_gpu", False):
                 # Force garbage collection to free GPU memory
                 import gc
+
                 gc.collect()
-            
+
             # Store original output path and modify for this fold
             original_out = self.config.get("out", "locator")
             self.config["out"] = f"{original_out}_fold{fold_num}"
-            
+
             # Use the test indices from this fold as holdout
             holdout_indices = index_set.test
             self.train_holdout(
@@ -1499,24 +1608,26 @@ class AnalysisMixin:
             )
             # preds: one row per held-out sample in this fold
             for _, row in preds.iterrows():
-                pred_rows.append({
-                    "sampleID": row["sampleID"],
-                    "x_pred": row["x_pred"],
-                    "y_pred": row["y_pred"],
-                    "fold": fold_num
-                })
-            
+                pred_rows.append(
+                    {
+                        "sampleID": row["sampleID"],
+                        "x_pred": row["x_pred"],
+                        "y_pred": row["y_pred"],
+                        "fold": fold_num,
+                    }
+                )
+
             # Clear model reference again after prediction
             if self.model is not None:
                 del self.model
                 self.model = None
-            
+
             # Restore original output path
             self.config["out"] = original_out
 
         # Restore original keras_verbose setting
-        self.config['keras_verbose'] = original_keras_verbose
-        
+        self.config["keras_verbose"] = original_keras_verbose
+
         # Restore original bandwidth setting if we changed it
         if bandwidth_calculated:
             if original_bandwidth is None:

@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
@@ -42,6 +42,8 @@ setup(
             "pytest",
             "black",  # Code formatting
             "flake8",  # Code linting
+            "isort",  # Import sorting
+            "pre-commit",  # Pre-commit hooks
         ],
         "docs": [
             "sphinx>=4.0",
@@ -51,7 +53,7 @@ setup(
         ],
         "ray": [
             "ray[train]>=2.9.0",  # Ray Train for distributed training
-            "ray[data]>=2.9.0",   # Ray Data for data processing
+            "ray[data]>=2.9.0",  # Ray Data for data processing
         ],
     },
     entry_points={

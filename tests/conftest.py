@@ -1,8 +1,8 @@
 """Shared test fixtures and utilities for locator tests"""
 
+import allel
 import numpy as np
 import pytest
-import allel
 
 
 @pytest.fixture
@@ -10,7 +10,7 @@ def genotype_data():
     """Create test genotype data"""
     n_samples = 50
     n_snps = 100
-    
+
     # Create genotype data (biallelic)
     geno_array = np.zeros((n_snps, n_samples, 2), dtype=np.int8)
     for i in range(n_snps):
@@ -23,14 +23,14 @@ def genotype_data():
                 geno_array[i, j, :] = [0, 1]
             else:
                 geno_array[i, j, :] = [1, 1]
-    
+
     genotypes = allel.GenotypeArray(geno_array)
     samples = np.array([f"sample_{i}" for i in range(n_samples)])
-    
+
     # Create coordinates (some with NA)
     coords = np.random.uniform(-180, 180, size=(n_samples, 2))
     coords[40:45, :] = np.nan  # Make some samples have NA coordinates
-    
+
     return genotypes, samples, coords, n_samples, n_snps
 
 
@@ -38,13 +38,13 @@ def genotype_data():
 def sample_data_file(genotype_data, tmp_path):
     """Create sample data file"""
     _, samples, coords, _, _ = genotype_data
-    
+
     sample_file = tmp_path / "samples.txt"
     content = "sampleID\tx\ty\n"
     for i, sid in enumerate(samples):
         x, y = coords[i]
         content += f"{sid}\t{x}\t{y}\n"
-    
+
     sample_file.write_text(content)
     return sample_file
 

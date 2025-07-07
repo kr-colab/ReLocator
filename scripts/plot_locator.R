@@ -106,12 +106,12 @@ if(error){
     names(out) <- c("gc_x","gc_y","kd_x","kd_y")
     return(out)
   })
-  
+
   pd <- merge(pd,bp,by="sampleID")
   outsum <- pd[,c("sampleID","kd_x","kd_y","gc_x","gc_y")]
   outsum <- ddply(outsum,.(sampleID),function(e) e[1,])
   write.table(outsum,paste0(out,"_centroids.txt"),sep="\t",row.names=FALSE)
-  
+
   plocs=as.matrix(pd[,c("kd_x","kd_y")])
   tlocs=as.matrix(pd[,c("x","y")])
   dists=sapply(1:nrow(plocs),function(e) spDistsN1(t(as.matrix(plocs[e,])),
@@ -120,7 +120,7 @@ if(error){
   print(paste("mean kernel peak error =",mean(dists)))
   print(paste("median kernel peak error =",median(dists)))
   print(paste("90% CI for kernal peak error = ",quantile(dists,0.05),quantile(dists,0.95)))
-  
+
   plocs=as.matrix(pd[,c("gc_x","gc_y")])
   tlocs=as.matrix(pd[,c("x","y")])
   dists=sapply(1:nrow(plocs),function(e) spDistsN1(t(as.matrix(plocs[e,])),
@@ -164,7 +164,7 @@ for(i in samples){
                 max(na.omit(c(pd$ypred,pd$y)))+1),
          col="white")
   }
-  
+
   #title(paste(sample$population[1],sample$sampleID[1],sep=":"),cex.main=0.9,font.main=1)
   title(sample$sampleID[1],cex.main=0.8,font.main=1)
   box(lwd=1)
@@ -276,9 +276,9 @@ if(error){
             geom_segment(data=pd,aes(x=x,y=y,xend=gc_x,yend=gc_y),lwd=0.2)+
             geom_point(data=pd,aes(x=gc_x,y=gc_y),size=0.5,shape=1))
   }
- 
+
   dev.off()
-  
+
   #pd$dist <- apply(pd[,2:5],1,function(e) spDistsN1(matrix(e[1:2],ncol=2),matrix(e[3:4],ncol=2),longlat = TRUE))
   pdf(paste0(out,"_error_histogram.pdf"),width=3,height=2.5)
   print(ggplot(data=pd,aes(x=dist_gc))+
@@ -288,5 +288,3 @@ if(error){
     geom_histogram())
   dev.off()
 }
-
-  

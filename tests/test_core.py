@@ -1,14 +1,16 @@
 # tests/test_core.py
 
-import pytest
-from unittest.mock import patch, MagicMock
-import tensorflow as tf  # Import tensorflow to check its attributes
-from locator.core import setup_gpu, Locator
-import pandas as pd
-import numpy as np
-import allel
-from pathlib import Path
 import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import allel
+import numpy as np
+import pandas as pd
+import pytest
+import tensorflow as tf  # Import tensorflow to check its attributes
+
+from locator.core import Locator, setup_gpu
 
 
 @patch("locator.core.tf.config.list_physical_devices")
@@ -183,9 +185,7 @@ def test_locator_init_with_non_numeric_genotype_columns(
         index=["s1", "s2"],
     )
     config = {"genotype_data": invalid_geno_df}
-    with pytest.raises(
-        ValueError, match="Column names must be convertible to integers"
-    ):
+    with pytest.raises(ValueError, match="Column names must be convertible to integers"):
         Locator(config=config)
 
 

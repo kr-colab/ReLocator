@@ -1,26 +1,33 @@
 """Plotting functionality for locator predictions"""
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib
-import seaborn as sns
-from scipy.stats import gaussian_kde
+import base64
+import io
+from pathlib import Path
+
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-from pathlib import Path
+import matplotlib
+import matplotlib.axes as maxes
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
 from geopy.distance import geodesic
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-import matplotlib.axes as maxes
-import io
-import base64
+from scipy.stats import gaussian_kde
 
-__all__ = ["kde_predict", "plot_predictions", "plot_error_summary", "plot_sample_weights", "PlottingMixin"]
+__all__ = [
+    "kde_predict",
+    "plot_predictions",
+    "plot_error_summary",
+    "plot_sample_weights",
+    "PlottingMixin",
+]
 
 
 def _handle_plot_display(show=None):
     """Handle whether to display a plot based on environment.
-    
+
     Args:
         show: None (auto-detect), True (always show), or False (never show)
     """
@@ -38,7 +45,7 @@ def _handle_plot_display(show=None):
 
 def kde_predict(x_coords, y_coords, xlim=(0, 50), ylim=(0, 50), n_points=100):
     """Calculate kernel density estimate of predictions.
-    
+
     This is a helper function used internally by plot_predictions() to compute
     kernel density estimates for visualizing prediction uncertainty.
 
@@ -51,13 +58,13 @@ def kde_predict(x_coords, y_coords, xlim=(0, 50), ylim=(0, 50), n_points=100):
 
     Returns:
         tuple: A 3-tuple containing:
-            
+
             - **x_grid** (*numpy.ndarray*): X coordinates of the mesh grid
             - **y_grid** (*numpy.ndarray*): Y coordinates of the mesh grid
             - **density** (*numpy.ndarray*): Density values at each grid point
-            
+
             Returns (None, None, None) if KDE calculation fails.
-            
+
     Note:
         The function uses scipy.stats.gaussian_kde for density estimation.
         Grid limits should match the geographic extent of your predictions.
@@ -104,24 +111,24 @@ def plot_predictions(
     one per sample, showing the distribution of predictions as KDE contours.
 
     The function expects prediction data with:
-    
+
     - A 'sampleID' column
     - Multiple prediction columns ('x_0', 'x_1'... and 'y_0', 'y_1'...)
-    
+
     For each sample, the plot shows:
-    
+
     - KDE contours of predictions (blue lines)
     - True location if known (red star)
     - All training sample locations (gray circles)
 
     Args:
-        predictions (pandas.DataFrame or str): DataFrame or path to predictions file. 
+        predictions (pandas.DataFrame or str): DataFrame or path to predictions file.
             Output from any of:
-            
+
             - ``locator.run_jacknife(return_df=True)``
-            - ``locator.run_bootstraps(return_df=True)``  
+            - ``locator.run_bootstraps(return_df=True)``
             - ``locator.run_windows(return_df=True)``
-            
+
         locator (Locator): Locator instance containing training data configuration
         out_prefix (str): Prefix for output files. Plot saved as {out_prefix}_predictions.pdf
         samples (list, optional): List of sample IDs to plot. If None, randomly selects n_samples
@@ -139,25 +146,25 @@ def plot_predictions(
 
     Examples:
         For jacknife analysis::
-        
+
             predictions = locator.run_jacknife(genotypes, samples, return_df=True)
             plot_predictions(predictions, locator, "jacknife_example")
 
         For bootstrap analysis::
-        
+
             predictions = locator.run_bootstraps(genotypes, samples, return_df=True)
             plot_predictions(predictions, locator, "bootstrap_example")
 
         For windows analysis::
-        
+
             predictions = locator.run_windows(genotypes, samples, return_df=True)
             plot_predictions(predictions, locator, "windows_example")
-            
+
         Plot specific samples::
-        
-            plot_predictions(predictions, locator, "selected", 
+
+            plot_predictions(predictions, locator, "selected",
                            samples=['HG001', 'HG002', 'HG003'])
-                           
+
     Note:
         - Requires matplotlib and scipy for KDE calculation
         - If plot_map=True, requires cartopy for geographic projections
@@ -233,9 +240,7 @@ def plot_predictions(
 
         # Plot all training sample locations as background
         # Only plot samples that have true locations (not NA)
-        training_locs = samples_df[
-            pd.notna(samples_df["x"]) & pd.notna(samples_df["y"])
-        ]
+        training_locs = samples_df[pd.notna(samples_df["x"]) & pd.notna(samples_df["y"])]
         if not training_locs.empty:
             ax.scatter(
                 training_locs["x"],
@@ -308,32 +313,32 @@ def plot_error_summary(
     show=None,
 ):
     """Plot summary of prediction errors from holdout analysis.
-    
+
     Creates a comprehensive error visualization with two panels:
-    
+
     1. **Map/Scatter panel**: Shows true locations colored by prediction error,
        with lines connecting true and predicted locations
     2. **Histogram panel**: Distribution of errors with summary statistics
-    
+
     This function is designed for analyzing results from holdout methods like:
-    
+
     - ``run_holdouts()``
     - ``run_k_fold_holdouts()``
     - ``run_leave_one_out()``
 
     Args:
         predictions (pandas.DataFrame): DataFrame with columns:
-            
+
             - ``sampleID``: Sample identifiers
             - ``x_pred``: Predicted longitude
             - ``y_pred``: Predicted latitude
-            
+
         sample_data (pandas.DataFrame or str): DataFrame or path to TSV file with columns:
-            
+
             - ``sampleID``: Sample identifiers (must match predictions)
             - ``x``: True longitude
             - ``y``: True latitude
-            
+
         out_prefix (str, optional): Prefix for output files. If provided, saves as
             {out_prefix}_error_summary.png. Default: None
         plot_map (bool): Whether to plot on a geographic map using cartopy projection.
@@ -350,25 +355,25 @@ def plot_error_summary(
 
     Returns:
         None: Saves plot to file and optionally displays it
-        
+
     Raises:
         ValueError: If predictions or sample_data are empty, have missing columns,
             or have no matching samples
 
     Examples:
         Basic usage with k-fold results::
-        
+
             predictions = locator.run_k_fold_holdouts(genotypes, samples, return_df=True)
             plot_error_summary(predictions, "samples.tsv", "kfold_errors")
-            
+
         With DataFrame input and Euclidean distances::
-        
-            plot_error_summary(predictions, sample_df, 
+
+            plot_error_summary(predictions, sample_df,
                              out_prefix="holdout_errors",
                              use_geodesic=False)
-                             
+
         Without map projection::
-        
+
             plot_error_summary(predictions, sample_df,
                              plot_map=False,
                              width=10, height=5)
@@ -407,9 +412,7 @@ def plot_error_summary(
         col for col in required_sample_cols if col not in samples.columns
     ]
     if missing_pred_cols:
-        raise ValueError(
-            f"Missing required columns in predictions: {missing_pred_cols}"
-        )
+        raise ValueError(f"Missing required columns in predictions: {missing_pred_cols}")
     if missing_sample_cols:
         raise ValueError(
             f"Missing required columns in sample data: {missing_sample_cols}"
@@ -431,9 +434,7 @@ def plot_error_summary(
     # Merge predictions with true locations
     merged = predictions.merge(samples[["sampleID", "x_true", "y_true"]], on="sampleID")
     if merged.empty:
-        raise ValueError(
-            "No matching samples found between predictions and sample data"
-        )
+        raise ValueError("No matching samples found between predictions and sample data")
 
     # Calculate errors
     if use_geodesic:
@@ -554,10 +555,11 @@ def plot_error_summary(
     plt.tight_layout()
     if out_prefix:
         plt.savefig(f"{out_prefix}_error_summary.png")
-    
+
     _handle_plot_display(show)
     plt.close()
     return None
+
 
 def plot_sample_weights(
     locator,
@@ -569,16 +571,16 @@ def plot_sample_weights(
     show=None,
 ):
     """Plot sample weights assigned to training locations.
-    
+
     Visualizes the geographic distribution of sample weights used during training.
     This is useful for understanding which regions are upweighted or downweighted
     based on sampling density.
-    
+
     Sample weights are typically computed using:
-    
+
     - Kernel density (KD) method: Upweights samples in sparse regions
     - Histogram binning method: Based on 2D histogram counts
-    
+
     The plot uses a log-scale color mapping to better show weight variations.
 
     Args:
@@ -596,14 +598,14 @@ def plot_sample_weights(
 
     Returns:
         None: Saves plot to file and optionally displays it
-        
+
     Raises:
         ValueError: If locator doesn't have computed sample weights, or if
             required data is missing
 
     Examples:
         After training with KDE weighting::
-        
+
             config = {
                 "weight_samples": {
                     "enabled": True,
@@ -613,9 +615,9 @@ def plot_sample_weights(
             locator = Locator(config)
             locator.train(genotypes, samples)
             plot_sample_weights(locator, "kde_weights")
-            
+
         With histogram binning weights::
-        
+
             config = {
                 "weight_samples": {
                     "enabled": True,
@@ -636,7 +638,7 @@ def plot_sample_weights(
         - Map projection requires cartopy to be installed
     """
     sample_data = locator._sample_data_df
-    sample_weights = locator.sample_weights['sample_weights_df']
+    sample_weights = locator.sample_weights["sample_weights_df"]
     # Validate inputs
     if sample_data.empty or sample_weights.empty:
         raise ValueError("Sample data and weights cannot be empty DataFrames")
@@ -735,11 +737,11 @@ def plot_sample_weights(
         # Add colorbar
         cbar = plt.colorbar(scatter, ax=ax1, label="Sample Weights")
         cbar.outline.set_visible(False)
-        #plt.gca().set_aspect('equal')
+        # plt.gca().set_aspect('equal')
 
         #
 
-        #plt.tight_layout()
+        # plt.tight_layout()
 
         if out_prefix:
             plt.savefig(f"{out_prefix}_sample_weights.png")
@@ -765,12 +767,8 @@ def plot_sample_weights(
 
         # Set map extent
         ax1.set(
-            xlim = (
-                x_min - x_range * padding,
-                x_max + x_range * padding),
-            ylim = (
-                y_min - y_range * padding,
-                y_max + y_range * padding)
+            xlim=(x_min - x_range * padding, x_max + x_range * padding),
+            ylim=(y_min - y_range * padding, y_max + y_range * padding),
         )
 
         # Plot predictions scatter with error colors
@@ -786,11 +784,11 @@ def plot_sample_weights(
 
         cbar = plt.colorbar(scatter, ax=ax1, label="Sample Weights")
         cbar.outline.set_visible(False)
-        plt.gca().set_aspect('equal')
+        plt.gca().set_aspect("equal")
 
         #
 
-        #plt.tight_layout()
+        # plt.tight_layout()
 
         if out_prefix:
             plt.savefig(f"{out_prefix}_sample_weights.png")
@@ -802,44 +800,44 @@ def plot_sample_weights(
 
 class PlottingMixin:
     """Mixin class providing plotting functionality for Locator.
-    
+
     This mixin is inherited by the main Locator class to provide visualization
     methods for training history and Jupyter notebook integration.
-    
+
     Methods:
         plot_history: Plot training and validation loss curves
         _repr_html_: Generate rich HTML representation for Jupyter notebooks
     """
-    
+
     def plot_history(self, history):
         """Plot training history and prediction error.
 
         Creates a figure with two subplots showing the validation loss and training loss
         over epochs. This helps visualize model convergence and potential overfitting.
-        
+
         The plot shows:
-        
+
         - Left panel: Validation loss over epochs (excluding first 3)
         - Right panel: Training loss over epochs (excluding first 3)
-        
+
         First 3 epochs are excluded as they often have very high initial losses
         that would compress the scale of the plot.
 
         Args:
             history (keras.callbacks.History): History object returned by model.fit()
                 containing training metrics for each epoch
-                
+
         Returns:
             None: Saves plot to {config['out']}_fitplot.pdf if config['plot_history'] is True
-            
+
         Note:
             - Only creates plot if config['plot_history'] is True
             - Uses 'agg' backend to avoid display issues on servers
             - Creates a compact figure suitable for publication
-            
+
         Example:
             Enable history plotting in config::
-            
+
                 config = {"out": "analysis", "plot_history": True}
                 locator = Locator(config)
                 history = locator.train(genotypes, samples)
@@ -859,30 +857,30 @@ class PlottingMixin:
 
     def _repr_html_(self):
         """Return HTML representation of Locator instance for Jupyter notebooks.
-        
+
         Generates a rich HTML display showing:
-        
+
         - Model configuration parameters
         - Current model status (trained/not trained)
         - Training history plot (if available)
         - Data loading status
         - Sample weighting information
         - Holdout sample information
-        
+
         This method is automatically called by Jupyter/IPython when displaying
         a Locator instance in a notebook cell.
-        
+
         Returns:
             str: HTML string with styled content including embedded plots
-            
+
         Note:
             - Training history plot is embedded as base64 PNG
             - Holdout samples shown in collapsible list if > 0
             - Automatically detects which data has been loaded
-            
+
         Example:
             In a Jupyter notebook::
-            
+
                 locator = Locator(config)
                 locator  # Rich HTML display appears automatically
         """
@@ -922,12 +920,12 @@ class PlottingMixin:
         # add weight samples to end, deal with weird dictionary thing
         if self.config.get("weight_samples", {}).get("enabled", False):
             html.append(
-                    f"<tr><td style='padding:5px'>{'weight_samples'}</td>"
-                    f"<td style='padding:5px'>{'True'}</td></tr>"
-                ) 
-            for k in ['method', 'xbins', 'ybins', 'lam', 'bandwidth']:
-                if k in self.config['weight_samples'].keys():
-                    if self.config['weight_samples'][k] is not None:
+                f"<tr><td style='padding:5px'>{'weight_samples'}</td>"
+                f"<td style='padding:5px'>{'True'}</td></tr>"
+            )
+            for k in ["method", "xbins", "ybins", "lam", "bandwidth"]:
+                if k in self.config["weight_samples"].keys():
+                    if self.config["weight_samples"][k] is not None:
                         html.append(
                             f"<tr><td style='padding:5px'>{'weight_samples '+k}</td>"
                             f"<td style='padding:5px'>{self.config['weight_samples'][k]}</td></tr>"
@@ -960,7 +958,7 @@ class PlottingMixin:
                 ax.set_ylabel("Training Loss")
                 axV.set_ylabel("Validation Loss")
                 ax.legend()
-                axV.legend(loc='upper center')
+                axV.legend(loc="upper center")
 
                 # Get final validation loss
                 final_val_loss = hist["val_loss"][-1]
@@ -985,8 +983,7 @@ class PlottingMixin:
 
         # Location normalization status
         if all(
-            x is not None
-            for x in [self.meanlong, self.sdlong, self.meanlat, self.sdlat]
+            x is not None for x in [self.meanlong, self.sdlong, self.meanlat, self.sdlat]
         ):
             html.append("<li>Location normalization: Computed ✓</li>")
         else:

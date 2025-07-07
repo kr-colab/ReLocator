@@ -1,15 +1,16 @@
 """Data loading functionality for locator"""
 
+import sys
+
+import allel
 import numpy as np
 import pandas as pd
-import allel
 import zarr
-import sys
 
 
 class DataLoaderMixin:
     """Mixin class providing data loading functionality for Locator."""
-    
+
     def _load_from_zarr(self, zarr_path):
         """Load genotypes from zarr file.
 
@@ -43,22 +44,26 @@ class DataLoaderMixin:
             ValueError: If VCF file cannot be read
         """
         print("reading VCF")
-        vcf = allel.read_vcf(vcf_path, fields=['GT', 'POS', 'CHROM'])
+        vcf = allel.read_vcf(vcf_path, fields=["GT", "POS", "CHROM"])
         if vcf is None:
             raise ValueError(f"Could not read VCF file: {vcf_path}")
         genotypes = allel.GenotypeArray(vcf["calldata/GT"])
         samples = vcf["samples"]
-        
+
         # Store positions and chromosomes for window analysis
         if "variants/POS" in vcf:
             self.positions = vcf["variants/POS"]
             print(f"Loaded {len(self.positions)} SNP positions for window analysis")
-            
+
         if "variants/CHROM" in vcf:
             self.chromosomes = vcf["variants/CHROM"]
             unique_chroms = np.unique(self.chromosomes)
-            print(f"Found {len(unique_chroms)} chromosomes: {unique_chroms[:5]}..." if len(unique_chroms) > 5 else f"Found chromosomes: {unique_chroms}")
-            
+            print(
+                f"Found {len(unique_chroms)} chromosomes: {unique_chroms[:5]}..."
+                if len(unique_chroms) > 5
+                else f"Found chromosomes: {unique_chroms}"
+            )
+
         return genotypes, samples
 
     def _load_from_matrix(self, matrix_path):

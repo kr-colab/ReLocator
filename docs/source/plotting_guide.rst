@@ -26,7 +26,7 @@ The ``plot_predictions()`` function visualizes results from analyses that genera
 .. code-block:: python
 
     from locator.plotting import plot_predictions
-    
+
     # After jacknife analysis
     predictions = locator.run_jacknife(genotypes, samples, return_df=True)
     plot_predictions(predictions, locator, "jacknife_viz")
@@ -43,8 +43,8 @@ Customizing the visualization:
 
     # Plot specific samples with custom layout
     plot_predictions(
-        predictions, 
-        locator, 
+        predictions,
+        locator,
         "custom_viz",
         samples=['HG001', 'HG002', 'HG003'],  # Specific samples
         n_cols=1,           # Single column layout
@@ -57,7 +57,7 @@ Customizing the visualization:
 Works with any multi-prediction analysis:
 
 * ``run_jacknife()`` - Shows effect of SNP subsampling
-* ``run_bootstraps()`` - Shows effect of SNP resampling  
+* ``run_bootstraps()`` - Shows effect of SNP resampling
 * ``run_windows()`` - Shows predictions from different genomic regions
 
 Error Analysis
@@ -71,10 +71,10 @@ For holdout-based analyses, ``plot_error_summary()`` provides comprehensive erro
 .. code-block:: python
 
     from locator.plotting import plot_error_summary
-    
+
     # After k-fold cross-validation
     predictions = locator.run_k_fold_holdouts(genotypes, samples, k=10, return_df=True)
-    
+
     # Create error summary
     plot_error_summary(
         predictions,
@@ -101,7 +101,7 @@ Options for different use cases:
         width=12,           # Smaller figure
         height=6
     )
-    
+
     # Euclidean distances instead of geodesic
     plot_error_summary(
         predictions,
@@ -121,7 +121,7 @@ When using sample weighting, visualize the geographic distribution of weights:
 .. code-block:: python
 
     from locator.plotting import plot_sample_weights
-    
+
     # Configure and train with sample weighting
     config = {
         "out": "weighted_analysis",
@@ -131,10 +131,10 @@ When using sample weighting, visualize the geographic distribution of weights:
             "bandwidth": None    # Auto-calculate
         }
     }
-    
+
     locator = Locator(config)
     locator.train(genotypes, samples)
-    
+
     # Plot the weights
     plot_sample_weights(locator, "kde_weights")
 
@@ -178,7 +178,7 @@ Plot training and validation loss curves:
     # Enable history plotting
     config = {"out": "analysis", "plot_history": True}
     locator = Locator(config)
-    
+
     history = locator.train(genotypes, samples)
     # Automatically saves analysis_fitplot.pdf
 
@@ -195,13 +195,13 @@ Compare predictions from different analyses:
     # Run multiple analyses
     jack_preds = locator.run_jacknife(genotypes, samples, return_df=True)
     boot_preds = locator.run_bootstraps(genotypes, samples, return_df=True)
-    
+
     # Plot same samples from each
     test_samples = ['HG001', 'HG002', 'HG003']
-    
-    plot_predictions(jack_preds, locator, "jacknife_comparison", 
+
+    plot_predictions(jack_preds, locator, "jacknife_comparison",
                     samples=test_samples)
-    plot_predictions(boot_preds, locator, "bootstrap_comparison", 
+    plot_predictions(boot_preds, locator, "bootstrap_comparison",
                     samples=test_samples)
 
 Publication Figures
@@ -221,7 +221,7 @@ Create publication-quality figures:
         height=4,           # Appropriate height
         include_training_locs=False  # Cleaner look
     )
-    
+
     # Convert to other formats
     import matplotlib.pyplot as plt
     plt.savefig("figure_2.eps", format='eps')  # For journals
@@ -234,16 +234,16 @@ Process multiple datasets:
 .. code-block:: python
 
     datasets = ['population1', 'population2', 'population3']
-    
+
     for dataset in datasets:
         # Load data for dataset
         genotypes, samples = load_data(dataset)
-        
+
         # Run analysis
         predictions = locator.run_k_fold_holdouts(
             genotypes, samples, k=5, return_df=True
         )
-        
+
         # Plot with dataset-specific prefix
         plot_error_summary(
             predictions,
@@ -263,10 +263,10 @@ Control plot display behavior:
 
     # Always show plots (interactive mode)
     plot_predictions(predictions, locator, "output", show=True)
-    
+
     # Never show plots (batch mode)
     plot_predictions(predictions, locator, "output", show=False)
-    
+
     # Auto-detect (default) - shows in Jupyter, not in scripts
     plot_predictions(predictions, locator, "output", show=None)
 
@@ -279,10 +279,10 @@ When ``plot_map=True``, plots use cartopy for geographic projections:
 
     # Ensure cartopy is installed
     # pip install cartopy
-    
+
     # Plot with coastlines and land features
     plot_predictions(predictions, locator, "map_viz", plot_map=True)
-    
+
     # Troubleshooting cartopy issues
     plot_predictions(predictions, locator, "no_map", plot_map=False)
 
@@ -295,10 +295,10 @@ For large datasets or many samples:
 
     # Reduce DPI for faster rendering
     plot_predictions(predictions, locator, "quick_viz", dpi=100)
-    
+
     # Plot fewer samples
     plot_predictions(predictions, locator, "subset", n_samples=6)
-    
+
     # Use matplotlib Agg backend for headless systems
     import matplotlib
     matplotlib.use('Agg')

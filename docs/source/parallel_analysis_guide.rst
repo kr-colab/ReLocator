@@ -40,7 +40,7 @@ The parallel analysis features require Ray as an additional dependency:
 
     # Install with parallel support
     pip install locator[parallel]
-    
+
     # Or install Ray separately
     pip install ray>=2.0.0
 
@@ -53,13 +53,13 @@ Basic parallel k-fold cross-validation:
 
     from locator import Locator
     from locator.parallel import parallel_k_fold_holdouts
-    
+
     # Initialize Locator
     locator = Locator({"out": "parallel_analysis"})
-    
+
     # Load data
     genotypes, samples = locator.load_genotypes(zarr="genotypes.zarr")
-    
+
     # Run parallel k-fold CV across 4 GPUs
     predictions = parallel_k_fold_holdouts(
         locator, genotypes, samples,
@@ -79,7 +79,7 @@ Run true k-fold cross-validation in parallel across multiple GPUs.
 .. code-block:: python
 
     from locator.parallel import parallel_k_fold_holdouts
-    
+
     predictions = parallel_k_fold_holdouts(
         locator,
         genotypes,
@@ -107,7 +107,7 @@ Parallel leave-one-out cross-validation (wrapper around k-fold with k=n_samples)
 .. code-block:: python
 
     from locator.parallel import parallel_leave_one_out
-    
+
     predictions = parallel_leave_one_out(
         locator,
         genotypes,
@@ -125,7 +125,7 @@ Run multiple holdout replicates in parallel:
 .. code-block:: python
 
     from locator.parallel import parallel_holdouts
-    
+
     # Random holdouts
     predictions = parallel_holdouts(
         locator,
@@ -136,7 +136,7 @@ Run multiple holdout replicates in parallel:
         gpu_ids=[0, 1, 2, 3],
         return_df=True
     )
-    
+
     # Specific samples by ID
     predictions = parallel_holdouts(
         locator,
@@ -156,7 +156,7 @@ Analyze genomic windows for holdout samples in parallel:
 .. code-block:: python
 
     from locator.parallel import parallel_windows_holdouts
-    
+
     window_predictions = parallel_windows_holdouts(
         locator,
         genotypes,
@@ -184,7 +184,7 @@ When using ``gpu_fraction < 1.0``, workers share GPU memory:
         gpu_ids=[0, 1],
         gpu_fraction=1.0  # Full GPU per worker
     )
-    
+
     # Aggressive: Ten workers per GPU
     # Reduce batch size to fit in shared memory
     locator.config['gpu_batch_size'] = 32  # Smaller batches
@@ -211,17 +211,17 @@ Ray is initialized automatically, but you can configure it:
 .. code-block:: python
 
     import ray
-    
+
     # Initialize Ray with specific resources
     ray.init(
         num_cpus=32,
         num_gpus=4,
         object_store_memory=10_000_000_000  # 10GB object store
     )
-    
+
     # Then run parallel analysis
     results = parallel_k_fold_holdouts(...)
-    
+
     # Shutdown Ray when done
     ray.shutdown()
 
@@ -236,7 +236,7 @@ Complete example with error analysis:
     import pandas as pd
     from locator import Locator
     from locator.parallel import parallel_k_fold_holdouts
-    
+
     # Configuration
     config = {
         "out": "multi_gpu_cv",
@@ -246,11 +246,11 @@ Complete example with error analysis:
         "dropout_prop": 0.25,
         "batch_size": 64
     }
-    
+
     # Initialize and load data
     locator = Locator(config)
     genotypes, samples = locator.load_genotypes(zarr="genotypes.zarr")
-    
+
     # Run 10-fold CV across 4 GPUs
     print("Running parallel 10-fold cross-validation...")
     predictions = parallel_k_fold_holdouts(
@@ -263,10 +263,10 @@ Complete example with error analysis:
         return_df=True,
         verbose=True
     )
-    
+
     # Use plot_error_summary for comprehensive error analysis
     from locator.plotting import plot_error_summary
-    
+
     # Create error visualization with statistics
     plot_error_summary(
         predictions,
@@ -275,13 +275,13 @@ Complete example with error analysis:
         plot_map=True,      # Show geographic distribution
         include_training_locs=True  # Show training context
     )
-    
+
     # The plot automatically calculates and displays:
     # - Mean, median, and max error
     # - R² values for x and y coordinates
     # - Error distribution histogram
     # - Geographic error patterns
-    
+
     # Save predictions for further analysis
     predictions.to_csv("kfold_cv_predictions.csv", index=False)
 
@@ -293,21 +293,21 @@ Analyze prediction accuracy across genomic windows:
 .. code-block:: python
 
     from locator.parallel import parallel_windows_holdouts
-    
+
     # Configuration for windowed analysis
     config = {
         "out": "window_analysis",
         "sample_data": "samples.tsv",
         "min_snps_per_window": 100  # Require at least 100 SNPs
     }
-    
+
     locator = Locator(config)
     genotypes, samples = locator.load_genotypes(zarr="genotypes.zarr")
-    
+
     # Run windowed analysis on worst-performing samples
     # First identify them from previous k-fold results
     worst_samples = ['HG001', 'HG002', 'HG003']  # Example IDs
-    
+
     window_results = parallel_windows_holdouts(
         locator,
         genotypes,
@@ -319,7 +319,7 @@ Analyze prediction accuracy across genomic windows:
         return_df=True,
         verbose=True
     )
-    
+
     # Analyze window performance
     # Results contain predictions for each window
     print(f"Analyzed {len(window_results.columns)-1} windows")
@@ -336,7 +336,7 @@ Common Issues
 
     # If Ray is already initialized
     ray.shutdown()
-    
+
     # Reinitialize with specific configuration
     ray.init(ignore_reinit_error=True)
 
@@ -349,7 +349,7 @@ Common Issues
         locator, genotypes, samples,
         gpu_fraction=1.0  # Use full GPU per worker
     )
-    
+
     # Or reduce batch size
     locator.config['gpu_batch_size'] = 32
 
@@ -367,25 +367,25 @@ Performance Tips
 ~~~~~~~~~~~~~~~~
 
 1. **Use full GPUs for memory-intensive models:**
-   
+
    .. code-block:: python
-   
+
        gpu_fraction=1.0  # Default and recommended
 
 2. **Pre-calculate bandwidth for KDE weights:**
-   
+
    The parallel functions automatically handle bandwidth pre-calculation
    when using KDE sample weighting.
 
 3. **Monitor GPU utilization:**
-   
+
    .. code-block:: bash
-   
+
        # In another terminal
        watch -n 1 nvidia-smi
 
 4. **Adjust based on model size:**
-   
+
    * Small models (width≤128): Can use gpu_fraction=0.5
    * Large models (width≥512): Use gpu_fraction=1.0
    * Very large models: May need to reduce batch size
@@ -421,33 +421,33 @@ Best Practices
 --------------
 
 1. **Start with conservative settings:**
-   
+
    Begin with ``gpu_fraction=1.0`` and adjust based on GPU memory usage.
 
 2. **Use appropriate parallelism level:**
-   
+
    * K-fold CV: Parallelize across folds
    * Many replicates: Parallelize across replicates
    * Few large tasks: Consider ``gpu_fraction < 1.0``
 
 3. **Monitor and profile:**
-   
+
    .. code-block:: python
-   
+
        import time
-       
+
        start = time.time()
        results = parallel_k_fold_holdouts(...)
        elapsed = time.time() - start
-       
+
        print(f"Parallel: {elapsed:.1f}s")
        print(f"Theoretical sequential: {elapsed * len(gpu_ids):.1f}s")
        print(f"Speedup: {len(gpu_ids) * elapsed / elapsed:.1f}x")
 
 4. **Clean up resources:**
-   
+
    .. code-block:: python
-   
+
        # After analysis
        ray.shutdown()
 

@@ -55,4 +55,4 @@ When reporting issues, please include:
 License
 -------
 
-By contributing to Locator, you agree that your contributions will be licensed under the project's license. 
+By contributing to Locator, you agree that your contributions will be licensed under the project's license.

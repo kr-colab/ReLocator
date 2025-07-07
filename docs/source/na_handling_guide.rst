@@ -37,13 +37,13 @@ The default mode that separates samples into training (known locations) and pred
 .. code-block:: python
 
    locator = Locator({"na_action": "separate"})
-   
+
    # Trains on samples with coordinates
    # Can predict on samples without coordinates
 
 **Use when**: You have new samples without known locations that you want to predict.
 
-**Behavior**: 
+**Behavior**:
 - Training uses only samples with known coordinates
 - Prediction includes all samples (both known and unknown)
 - Unknown samples get predicted coordinates
@@ -56,7 +56,7 @@ Filters out all samples without coordinates before any analysis.
 .. code-block:: python
 
    locator = Locator({"na_action": "exclude"})
-   
+
    # Only uses samples with known coordinates
    # NA samples are ignored completely
 
@@ -75,7 +75,7 @@ Raises an error if any samples lack coordinates.
 .. code-block:: python
 
    locator = Locator({"na_action": "fail"})
-   
+
    # Raises ValueError if any NA samples are found
 
 **Use when**: You want to ensure data completeness before analysis.
@@ -94,7 +94,7 @@ Always check your data before analysis:
 
    # Load your data
    genotypes, samples = locator.load_genotypes(vcf="data.vcf")
-   
+
    # Check sample status
    locator.check_data(genotypes, samples, verbose=True)
 
@@ -107,11 +107,11 @@ This will display:
    Samples with coordinates: 211
    Samples without coordinates: 20
    Total SNPs: 1000
-   
+
    Current NA handling mode: separate
    - Will train on samples with known locations
    - Can predict on samples without locations
-   
+
    Samples without coordinates (first 10):
    - sample_X123
    - sample_X124
@@ -125,7 +125,7 @@ For programmatic access to sample status:
 .. code-block:: python
 
    status = locator.get_sample_status(samples)
-   
+
    print(f"Known samples: {status['n_known']}")
    print(f"NA samples: {status['n_na']}")
    print(f"NA sample IDs: {status['na_samples']}")
@@ -193,8 +193,8 @@ Best Practices
 
       # Analysis 1: Predict unknown samples
       loc_predict = Locator({"na_action": "separate"})
-      
-      # Analysis 2: Evaluate only on known samples  
+
+      # Analysis 2: Evaluate only on known samples
       loc_eval = Locator({"na_action": "exclude"})
 
 Troubleshooting

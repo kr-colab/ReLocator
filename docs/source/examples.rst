@@ -9,23 +9,23 @@ Basic Usage
 .. code-block:: python
 
     from locator import Locator
-    
+
     # Initialize Locator with configuration
     loc = Locator({
         "out": "my_analysis",
         "sample_data": "samples.txt",
         "zarr": "genotypes.zarr"
     })
-    
+
     # Load genotype data
     genotypes, samples = loc.load_genotypes(zarr="genotypes.zarr")
-    
+
     # Train the model (uses memory-efficient pipeline automatically)
     loc.train(genotypes=genotypes, samples=samples)
-    
+
     # Make predictions
     predictions = loc.predict(return_df=True)
-    
+
     # Plot results
     loc.plot_history(loc.history)
 
@@ -40,14 +40,14 @@ Advanced Analysis
         samples=samples,
         window_size=1e6
     )
-    
+
     # Run jacknife analysis
     jacknife_results = loc.run_jacknife(
         genotypes=genotypes,
         samples=samples,
         prop=0.1
     )
-    
+
     # Run bootstrap analysis
     bootstrap_results = loc.run_bootstraps(
         genotypes=genotypes,
@@ -61,16 +61,16 @@ Ensemble Analysis
 .. code-block:: python
 
     from locator import EnsembleLocator
-    
+
     # Initialize ensemble
     ensemble = EnsembleLocator(
         base_config={"out": "ensemble_analysis"},
         k_folds=5
     )
-    
+
     # Train ensemble
     ensemble.train(genotypes=genotypes, samples=samples)
-    
+
     # Make predictions
     ensemble_predictions = ensemble.predict()
 
@@ -84,21 +84,21 @@ This example shows how to work with datasets where some samples lack geographic 
     from locator import Locator
     import pandas as pd
     import numpy as np
-    
+
     # Sample data with some missing coordinates
     sample_data = pd.DataFrame({
         'sampleID': ['A', 'B', 'C', 'D', 'E'],
         'x': [10.5, 20.3, np.nan, 15.2, np.nan],
         'y': [45.2, 50.1, np.nan, 48.3, np.nan]
     })
-    
+
     # Initialize with default 'separate' mode
     loc = Locator({
         "out": "na_example",
         "sample_data": sample_data,
         "na_action": "separate"  # Default: train on known, predict on unknown
     })
-    
+
     # Check data quality
     loc.check_data(genotypes, samples, verbose=True)
     # Output:
@@ -107,12 +107,12 @@ This example shows how to work with datasets where some samples lack geographic 
     # Samples with coordinates: 3
     # Samples without coordinates: 2
     # ...
-    
+
     # Train on samples with coordinates (A, B, D)
     # and predict locations for samples without (C, E)
     loc.train(genotypes=genotypes, samples=samples)
     predictions = loc.predict(return_df=True)
-    
+
     # The predictions DataFrame will include predicted
     # locations for samples C and E
 
@@ -127,10 +127,10 @@ Excluding Samples Without Coordinates
         "sample_data": sample_data,
         "na_action": "exclude"
     })
-    
+
     # Only samples A, B, and D will be used
     loc_exclude.train(genotypes=genotypes, samples=samples)
-    
+
     # Bootstrap analysis with only known-location samples
     bootstrap_results = loc_exclude.run_bootstraps(
         genotypes=genotypes,
@@ -149,7 +149,7 @@ Strict Mode - Fail on Missing Coordinates
         "sample_data": sample_data,
         "na_action": "fail"
     })
-    
+
     # This will raise an error because samples C and E lack coordinates
     try:
         loc_strict.train(genotypes=genotypes, samples=samples)
@@ -167,10 +167,10 @@ Mixed Analysis Modes
         "out": "mixed_example",
         "sample_data": sample_data
     })
-    
+
     # Train with all samples (separate mode)
     loc.train(genotypes=genotypes, samples=samples)
-    
+
     # But use exclude mode for k-fold cross-validation
     # (since holdout methods need coordinates for evaluation)
     kfold_results = loc.run_k_fold_holdouts(
@@ -192,21 +192,21 @@ Using IndexSet for Custom Splits
 
     from locator import Locator
     from locator.data import IndexSet
-    
+
     # Create custom data splits without copying arrays
     n_samples = len(samples)
-    
+
     # 70/15/15 train/val/test split
     index_set = IndexSet.random_split(
         n=n_samples,
         splits={"train": 0.7, "val": 0.15, "test": 0.15}
     )
-    
+
     # Access indices for each split
     print(f"Training samples: {len(index_set.train)}")
     print(f"Validation samples: {len(index_set.val)}")
     print(f"Test samples: {len(index_set.test)}")
-    
+
     # Use with your data - no copying!
     train_genotypes = genotypes[:, index_set.train]
     val_genotypes = genotypes[:, index_set.val]
@@ -218,24 +218,24 @@ Bootstrap Analysis with Site Resampling
 
     from locator import Locator
     import numpy as np
-    
+
     # Initialize Locator
     loc = Locator({
         "out": "bootstrap_analysis",
         "sample_data": "samples.txt"
     })
-    
+
     # Load data
     genotypes, samples = loc.load_genotypes(zarr="genotypes.zarr")
-    
+
     # Memory-efficient bootstrap (no data copies)
     n_bootstraps = 100
     n_snps = genotypes.shape[0]
-    
+
     for boot in range(n_bootstraps):
         # Resample SNP indices
         site_indices = np.random.choice(n_snps, n_snps, replace=True)
-        
+
         # Train with resampled sites (handled efficiently in pipeline)
         loc.train(
             genotypes=genotypes,
@@ -243,7 +243,7 @@ Bootstrap Analysis with Site Resampling
             boot=boot,
             site_order=site_indices  # Resampling without copying
         )
-        
+
         # Make predictions
         loc.predict(boot=boot)
 
@@ -261,7 +261,7 @@ Data Augmentation
             "flip_rate": 0.05  # Randomly flip 5% of genotypes
         }
     })
-    
+
     # Augmentation is applied during training automatically
     loc.train(genotypes=genotypes, samples=samples)
 
@@ -271,22 +271,22 @@ Custom TensorFlow Dataset Pipeline
 .. code-block:: python
 
     from locator.data import filter_snps, normalize_locs, IndexSet, make_tf_dataset
-    
+
     # Preprocess data with tracking
     filtered_geno, filter_stats = filter_snps(
-        genotypes, 
-        min_mac=2, 
+        genotypes,
+        min_mac=2,
         max_snps=10000,
         impute=True
     )
     print(f"Retained {filter_stats.n_snps_retained} of {filter_stats.n_snps_original} SNPs")
-    
+
     # Normalize coordinates
     norm_params, norm_coords = normalize_locs(coordinates)
-    
+
     # Create efficient data pipeline
     index_set = IndexSet.random_split(n=len(samples), splits={"train": 0.8, "test": 0.2})
-    
+
     train_dataset = make_tf_dataset(
         genotypes=filtered_geno,
         coordinates=norm_coords,
@@ -297,7 +297,7 @@ Custom TensorFlow Dataset Pipeline
         cache=True,  # Cache in memory
         augment_flip_rate=0.05
     )
-    
+
     # Use with custom training loop
     for batch_genotypes, batch_coords in train_dataset:
         # Your custom training step
@@ -310,7 +310,7 @@ Working with Sample Weights
 
     from locator import Locator
     from locator.plotting import plot_sample_weights
-    
+
     # Use kernel density (KD) weighting to upweight undersampled regions
     loc = Locator({
         "out": "weighted_analysis",
@@ -321,13 +321,13 @@ Working with Sample Weights
             "bandwidth": None  # Auto-calculate optimal bandwidth
         }
     })
-    
+
     # Weights are applied automatically during training
     loc.train(genotypes=genotypes, samples=samples)
-    
+
     # Visualize the sample weights
     plot_sample_weights(loc, "sample_weight_distribution")
-    
+
     # Alternative: Use histogram binning method
     loc_hist = Locator({
         "out": "hist_weighted",
@@ -358,7 +358,7 @@ Saving Model with Metadata
         "max_SNPs": 5000,
         "impute_missing": True
     })
-    
+
     loc.train(genotypes=genotypes, samples=samples)
     # Model weights and metadata saved to my_model.weights.h5
 
@@ -369,12 +369,12 @@ Loading Model in New Session
 
     # Load model and metadata
     loc2 = Locator({"out": "predictions"})
-    
+
     # Load the saved model
     metadata = loc2.load_model("my_model.weights.h5")
     print(f"Model trained on {metadata['n_samples']} samples")
     print(f"Normalization params: {metadata['normalization']}")
-    
+
     # Make predictions with proper preprocessing
     new_predictions = loc2.predict_from_weights(
         weights_path="my_model.weights.h5",
@@ -404,17 +404,17 @@ Automatic GPU Optimization
 .. code-block:: python
 
     from locator import Locator
-    
+
     # GPU optimizations are enabled by default
     loc = Locator({
         "out": "gpu_optimized",
         "sample_data": "samples.txt",
         # Automatic mixed precision and batch size optimization
     })
-    
+
     # Monitor GPU usage during training
     loc.train(genotypes=genotypes, samples=samples)
-    
+
     # For memory-constrained GPUs
     loc_constrained = Locator({
         "out": "memory_limited",
@@ -434,7 +434,7 @@ K-Fold Cross-Validation Across GPUs
     from locator import Locator
     from locator.parallel import parallel_k_fold_holdouts
     from locator.plotting import plot_error_summary
-    
+
     # Initialize locator
     loc = Locator({
         "out": "parallel_kfold",
@@ -442,7 +442,7 @@ K-Fold Cross-Validation Across GPUs
         "width": 256,
         "nlayers": 10
     })
-    
+
     # Run 10-fold CV across 4 GPUs
     predictions = parallel_k_fold_holdouts(
         loc, genotypes, samples,
@@ -451,10 +451,10 @@ K-Fold Cross-Validation Across GPUs
         return_df=True,
         verbose=True
     )
-    
+
     # Visualize results
     plot_error_summary(
-        predictions, 
+        predictions,
         "samples.txt",
         "parallel_kfold_errors",
         use_geodesic=True
@@ -466,7 +466,7 @@ Parallel Bootstrap Analysis
 .. code-block:: python
 
     from locator.parallel import parallel_holdouts
-    
+
     # Run 100 bootstrap replicates across 2 GPUs
     bootstrap_results = parallel_holdouts(
         loc, genotypes, samples,
@@ -482,10 +482,10 @@ Parallel Windows Analysis
 .. code-block:: python
 
     from locator.parallel import parallel_windows_holdouts
-    
+
     # Analyze specific samples across genomic windows
     worst_samples = ['HG001', 'HG002', 'HG003']
-    
+
     window_results = parallel_windows_holdouts(
         loc, genotypes, samples,
         holdout_sample_ids=worst_samples,
@@ -504,22 +504,22 @@ Visualizing Prediction Uncertainty
 
     from locator import Locator
     from locator.plotting import plot_predictions
-    
+
     # Run jacknife analysis
     loc = Locator({"out": "jacknife_viz", "sample_data": "samples.txt"})
     genotypes, samples = loc.load_genotypes(zarr="genotypes.zarr")
-    
+
     jack_preds = loc.run_jacknife(
         genotypes, samples,
         prop=0.1,
         n_replicates=100,
         return_df=True
     )
-    
+
     # Visualize prediction distributions for specific samples
     plot_predictions(
-        jack_preds, 
-        loc, 
+        jack_preds,
+        loc,
         "jacknife_uncertainty",
         samples=['sample_001', 'sample_002', 'sample_003'],
         n_cols=3,
@@ -537,13 +537,13 @@ Comparing Analysis Methods
         n_bootstraps=100,
         return_df=True
     )
-    
+
     # Plot same samples from both analyses
     test_samples = jack_preds['sampleID'].unique()[:6]
-    
-    plot_predictions(jack_preds, loc, "jacknife_comparison", 
+
+    plot_predictions(jack_preds, loc, "jacknife_comparison",
                     samples=test_samples, n_cols=2)
-    plot_predictions(boot_preds, loc, "bootstrap_comparison", 
+    plot_predictions(boot_preds, loc, "bootstrap_comparison",
                     samples=test_samples, n_cols=2)
 
 Error Analysis Workflow
@@ -552,14 +552,14 @@ Error Analysis Workflow
 .. code-block:: python
 
     from locator.plotting import plot_error_summary
-    
+
     # After k-fold cross-validation
     kfold_preds = loc.run_k_fold_holdouts(
-        genotypes, samples, 
-        k=10, 
+        genotypes, samples,
+        k=10,
         return_df=True
     )
-    
+
     # Create comprehensive error visualization
     plot_error_summary(
         kfold_preds,
@@ -583,7 +583,7 @@ From Data to Publication Figure
     from locator.parallel import parallel_k_fold_holdouts
     from locator.plotting import plot_error_summary, plot_predictions
     import matplotlib.pyplot as plt
-    
+
     # 1. Setup and data loading
     config = {
         "out": "actinemys_analysis",
@@ -598,13 +598,13 @@ From Data to Publication Figure
             "method": "KD"
         }
     }
-    
+
     loc = Locator(config)
     genotypes, samples = loc.load_genotypes(zarr="actinemys.zarr")
-    
+
     # 2. Check data quality
     loc.check_data(genotypes, samples, verbose=True)
-    
+
     # 3. Run parallel k-fold CV
     predictions = parallel_k_fold_holdouts(
         loc, genotypes, samples,
@@ -612,7 +612,7 @@ From Data to Publication Figure
         gpu_ids=[0, 1, 2, 3],
         return_df=True
     )
-    
+
     # 4. Create publication figure
     plot_error_summary(
         predictions,
@@ -622,20 +622,20 @@ From Data to Publication Figure
         width=7,  # Single column
         height=4
     )
-    
+
     # 5. Identify worst predictions for further analysis
     import pandas as pd
     sample_data = pd.read_csv("actinemys_samples.txt", sep="\t")
     merged = predictions.merge(sample_data[['sampleID', 'x', 'y']], on='sampleID')
     merged['error_km'] = merged.apply(
-        lambda r: ((r.x_pred - r.x)**2 + (r.y_pred - r.y)**2)**0.5 * 111.32, 
+        lambda r: ((r.x_pred - r.x)**2 + (r.y_pred - r.y)**2)**0.5 * 111.32,
         axis=1
     )
     worst_samples = merged.nlargest(6, 'error_km')['sampleID'].tolist()
-    
+
     # 6. Run windowed analysis on worst samples
     from locator.parallel import parallel_windows_holdouts
-    
+
     window_results = parallel_windows_holdouts(
         loc, genotypes, samples,
         holdout_sample_ids=worst_samples,
@@ -643,7 +643,7 @@ From Data to Publication Figure
         gpu_ids=[0, 1],
         return_df=True
     )
-    
+
     # 7. Visualize window predictions
     plot_predictions(
         window_results,
@@ -652,4 +652,4 @@ From Data to Publication Figure
         samples=worst_samples,
         n_cols=3,
         dpi=600
-    ) 
+    )

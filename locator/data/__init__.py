@@ -10,15 +10,11 @@ from .filters import (
     normalize_locs_params,
 )
 from .indexset import IndexSet
-from .tf_dataset import (
-    make_tf_dataset,
-    make_tf_dataset_from_arrays,
-    flip_genotypes_tf,
-)
+from .tf_dataset import flip_genotypes_tf, make_tf_dataset, make_tf_dataset_from_arrays
 
 __all__ = [
     "FilterStats",
-    "NormalizationParams", 
+    "NormalizationParams",
     "filter_snps",
     "filter_snps_legacy",
     "impute_missing",

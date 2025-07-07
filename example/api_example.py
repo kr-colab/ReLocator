@@ -2,7 +2,6 @@
 
 from locator import Locator, plot_predictions
 
-
 # Override some defaults
 locator = Locator({"out": "my_analysis", "train_split": 0.9, "batch_size": 64})
 
