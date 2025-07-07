@@ -113,7 +113,7 @@ class DataLoaderMixin:
         genotypes = allel.HaplotypeArray(np.transpose(hmat)).to_genotypes(ploidy=2)
         return genotypes, samples
 
-    def load_genotypes(self, vcf=None, zarr=None, matrix=None):
+    def load_genotypes(self, vcf=None, zarr=None, matrix=None):  # noqa: C901
         """Load genotype data from various input sources.
 
         This method can load genotype data from:

@@ -146,7 +146,7 @@ class TestAnalysisTFData:
 
         # Store shape of filtered genotypes
         filtered_geno_shape = locator.filtered_genotypes.shape
-        filtered_geno_id = id(locator.filtered_genotypes)
+        # filtered_geno_id = id(locator.filtered_genotypes)  # noqa: F841
 
         # Mock model to speed up test
         locator.model = Mock()

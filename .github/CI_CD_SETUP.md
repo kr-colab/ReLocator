@@ -14,7 +14,7 @@ This repository uses GitHub Actions for continuous integration and deployment.
   - Dependency caching for faster runs
   - Code linting with black, isort, and flake8
 
-### 2. Documentation (`.github/workflows/docs.yml`) 
+### 2. Documentation (`.github/workflows/docs.yml`)
 - Builds Sphinx documentation
 - Checks for documentation warnings
 - Uploads built docs as artifacts
@@ -51,7 +51,7 @@ pytest -n auto --cov=locator --cov-report=html
 ## Configuration
 
 - **pytest configuration**: See `pyproject.toml`
-- **Coverage settings**: See `pyproject.toml` 
+- **Coverage settings**: See `pyproject.toml`
 - **Dependabot**: See `.github/dependabot.yml`
 
 ## Required Secrets (for publishing)

@@ -89,7 +89,7 @@ class TestModelPersistence:
                 # Check preprocessing parameters
                 assert f.attrs["min_mac"] == 3
                 assert f.attrs["max_SNPs"] == 50
-                assert f.attrs["impute_missing"] == True
+                assert f.attrs["impute_missing"] is True
 
                 # Check other metadata
                 assert "n_samples" in f.attrs

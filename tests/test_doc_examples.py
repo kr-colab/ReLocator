@@ -620,7 +620,7 @@ class TestGPUExamples:
             }
         )
         # GPU optimizations are enabled by default
-        assert loc.config.get("use_mixed_precision", True) == True
+        assert loc.config.get("use_mixed_precision", True) is True
 
         # Example 2: Memory-constrained GPU
         loc_constrained = Locator(

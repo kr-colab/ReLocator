@@ -7,7 +7,6 @@ import numpy as np
 import tensorflow as tf
 from affine import Affine
 from rasterio.features import rasterize
-from shapely.geometry import Point
 from tensorflow import keras
 from tensorflow.keras import backend as K
 from tensorflow.keras import layers

@@ -35,13 +35,13 @@ class TestGPUOptimizer:
                     result = GPUOptimizer.setup_mixed_precision()
 
                     # Should return True for GPU with compute capability >= 7
-                    assert result == True
+                    assert result is True
 
             # Test with no GPU
             with patch("tensorflow.config.list_physical_devices") as mock_devices:
                 mock_devices.return_value = []
                 result = GPUOptimizer.setup_mixed_precision()
-                assert result == False
+                assert result is False
 
         finally:
             # Restore original policy
@@ -144,7 +144,7 @@ class TestLocatorGPUIntegration:
 
         # Check that GPU options are set
         assert (
-            locator.config["use_mixed_precision"] == False
+            locator.config["use_mixed_precision"] is False
         )  # Should be False when GPU disabled
         assert locator.config["gpu_batch_size"] == "auto"
         # use_efficient_pipeline option removed - always uses tf.data

@@ -77,7 +77,7 @@ def main():
             save_full_pred_matrix=False,  # we will save this on our own.
         )
 
-        print(f"\nPredictions completed!")
+        print("\nPredictions completed!")
         print(f"Predictions shape: {predictions.shape}")
 
         # Save raw predictions
@@ -112,7 +112,7 @@ def main():
             if ray.is_initialized():
                 ray.shutdown()
                 print("\nRay shutdown complete")
-        except:
+        except Exception:
             pass
 
     print("\nDemo complete!")

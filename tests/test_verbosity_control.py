@@ -26,8 +26,8 @@ class TestVerbosityControl:
     def test_default_verbosity_settings(self):
         """Test that verbosity options default to False."""
         locator = Locator()
-        assert locator.config.get("verbose_splits", False) == False
-        assert locator.config.get("verbose_batch_size", False) == False
+        assert locator.config.get("verbose_splits", False) is False
+        assert locator.config.get("verbose_batch_size", False) is False
 
     def test_verbose_splits_training(
         self, genotype_data, sample_data_file, capsys, tmp_path
@@ -161,7 +161,7 @@ class TestVerbosityControl:
         locator = Locator(config)
 
         # Mock the _determine_batch_size method to simulate optimization
-        original_determine = locator._determine_batch_size
+        # original_determine = locator._determine_batch_size  # noqa: F841
 
         def mock_determine_batch_size(*args, **kwargs):
             # Call original but ensure verbose output

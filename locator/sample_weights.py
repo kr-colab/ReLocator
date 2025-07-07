@@ -6,8 +6,7 @@ geographic distribution, including KDE-based weights with bandwidth optimization
 histogram-based weights, and loading pre-calculated weights.
 """
 
-import warnings
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd

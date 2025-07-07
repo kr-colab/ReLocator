@@ -503,7 +503,7 @@ class TestWindowAnalysis:
             )
 
             # Test with save_full_pred_matrix=True
-            result = locator.run_windows_holdouts(
+            _ = locator.run_windows_holdouts(
                 genotypes=genotypes,
                 samples=samples,
                 k=3,

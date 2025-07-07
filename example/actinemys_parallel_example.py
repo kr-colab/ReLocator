@@ -13,7 +13,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from locator import Locator
-from locator.parallel import simple_parallel_k_fold, simple_parallel_leave_one_out
+from locator.parallel import simple_parallel_leave_one_out
 
 
 def main():

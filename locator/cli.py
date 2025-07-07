@@ -186,7 +186,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+def main():  # noqa: C901
     """Main entry point for CLI"""
     args = parse_args()
 
