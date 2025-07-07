@@ -7,6 +7,7 @@ from tensorflow import keras
 from .data import IndexSet, NormalizationParams
 from .data import filter_snps_legacy as filter_snps
 from .data import make_tf_dataset, normalize_locs
+from .ensemble_model_manager import EnsembleModelManager
 
 # from tqdm import tqdm
 
@@ -120,6 +121,7 @@ class EnsembleMixin:
         flip_rate=0.05,
         save_fold_models=True,
         verbose=True,
+        use_model_manager=True,
     ):
         """Train an ensemble of k models using k-fold cross-validation.
 
@@ -169,111 +171,46 @@ class EnsembleMixin:
         if augment_data:
             self.config["augmentation"] = {"enabled": True, "flip_rate": flip_rate}
 
+        # Get locations once
+        _, locs = self.sort_samples(samples)
+
+        # Configure augmentation if requested
+        augment_config = None
+        if augment_data:
+            augment_config = {
+                "enabled": True,
+                "flip_rate": flip_rate,
+            }
+
         # Train each fold
         for fold_idx in range(k):
             if verbose:
                 print(f"\nTraining fold {fold_idx + 1}/{k}")
 
-            # Get indices for this fold
-            index_set = fold_info["index_sets"][fold_idx]
-            train_idx = index_set.train
-            val_idx = index_set.test  # k-fold uses 'test' as validation
-
-            # Get locations for normalization
-            _, locs = self.sort_samples(samples)
-            train_locs = locs[train_idx]
-
-            # Normalize locations using the standard function
-            meanlong, sdlong, meanlat, sdlat, _, normalized_train_locs = normalize_locs(
-                train_locs
+            # Train single fold using the new method
+            model_info = self._train_single_fold(
+                fold_idx=fold_idx,
+                index_set=fold_info["index_sets"][fold_idx],
+                filtered_genotypes=filtered_genotypes,
+                samples=samples,
+                locs=locs,
+                augment_config=augment_config,
+                save_fold_models=save_fold_models,
+                verbose=verbose,
             )
 
-            # Store normalization parameters
-            norm_params = {
-                "meanlong": meanlong,
-                "sdlong": sdlong,
-                "meanlat": meanlat,
-                "sdlat": sdlat,
-            }
-            self._ensemble_norm_params.append(norm_params)
+            # Add weights file path if saving
+            if save_fold_models:
+                model_info["weights_file"] = (
+                    f"{self.config['out']}_fold{fold_idx}.weights.h5"
+                )
+            else:
+                model_info["weights_file"] = None
 
-            # Create model for this fold
-            model = self._create_model(n_features=filtered_genotypes.shape[0])
-
-            # Normalize validation locations using the same parameters
-            val_locs = locs[val_idx]
-            normalized_val_locs = self._apply_normalization(val_locs, norm_params)
-
-            # Create normalized location array for all samples
-            normalized_locs = np.zeros((len(samples), 2))
-            normalized_locs[train_idx] = normalized_train_locs
-            normalized_locs[val_idx] = normalized_val_locs
-
-            # Create datasets using modern pipeline
-            augment_config = None
-            if self.config.get("augmentation", {}).get("enabled", False):
-                augment_config = {
-                    "enabled": True,
-                    "flip_rate": self.config.get("augmentation", {}).get(
-                        "flip_rate", 0.05
-                    ),
-                }
-
-            train_dataset = make_tf_dataset(
-                genotypes=filtered_genotypes,
-                coordinates=normalized_locs,
-                index_set=index_set,
-                split="train",
-                batch_size=self._determine_batch_size(len(train_idx)),
-                augment=augment_config,
-                training=True,
-                cache=True,
-            )
-
-            val_dataset = make_tf_dataset(
-                genotypes=filtered_genotypes,
-                coordinates=normalized_locs,
-                index_set=index_set,
-                split="test",  # k-fold uses 'test' for validation
-                batch_size=self._determine_batch_size(len(val_idx)),
-                training=False,
-                cache=True,
-            )
-
-            # Create callbacks
-            fold_config = self.config.copy()
-            fold_config["out"] = f"{self.config['out']}_fold{fold_idx}"
-            fold_config["save_fold_models"] = save_fold_models
-
-            # Temporarily update self.config for callback creation
-            original_config = self.config
-            self.config = fold_config
-            callbacks = self._create_callbacks()
-            self.config = original_config
-
-            # Train model
-            history = model.fit(
-                train_dataset,
-                epochs=self.config.get("max_epochs", 5000),
-                verbose=self.config.get("keras_verbose", 1) if verbose else 0,
-                validation_data=val_dataset,
-                callbacks=callbacks,
-            )
-
-            # Store model info
-            model_info = {
-                "fold": fold_idx,
-                "model": model,
-                "history": history,
-                "norm_params": norm_params,
-                "train_indices": train_idx,
-                "val_indices": val_idx,
-                "weights_file": (
-                    f"{fold_config['out']}.weights.h5" if save_fold_models else None
-                ),
-            }
+            # Store results
             self._ensemble_models.append(model_info)
-            self._ensemble_histories.append(history)
+            self._ensemble_histories.append(model_info["history"])
+            self._ensemble_norm_params.append(model_info["norm_params"])
 
             # Clear session to free memory
             keras.backend.clear_session()
@@ -287,12 +224,179 @@ class EnsembleMixin:
         self.meanlat = avg_norm_params["meanlat"]
         self.sdlat = avg_norm_params["sdlat"]
 
+        # Save ensemble using model manager if requested
+        if use_model_manager and save_fold_models:
+            model_manager = EnsembleModelManager(f"{self.config['out']}_ensemble")
+            # Create a serializable version of config (excluding DataFrames)
+            serializable_config = {
+                k: v for k, v in self.config.items() if not isinstance(v, pd.DataFrame)
+            }
+            ensemble_metadata = {
+                "k_folds": k,
+                "na_action": na_action or self.na_action,
+                "augment_data": augment_data,
+                "config": serializable_config,
+            }
+            model_manager.save_ensemble(self._ensemble_models, ensemble_metadata)
+
         return {
             "histories": self._ensemble_histories,
             "models": self._ensemble_models,
             "normalization_params": avg_norm_params,
             "fold_info": fold_info,
         }
+
+    def _train_single_fold(
+        self,
+        fold_idx,
+        index_set,
+        filtered_genotypes,
+        samples,
+        locs,
+        augment_config=None,
+        save_fold_models=True,
+        verbose=True,
+    ):
+        """Train a single fold model efficiently.
+
+        This method trains a model for a single fold without creating
+        a separate Locator instance, reusing the current instance's
+        configuration and methods.
+
+        Args:
+            fold_idx: Fold index
+            index_set: IndexSet for this fold
+            filtered_genotypes: Pre-filtered genotypes
+            samples: Sample IDs
+            locs: Location coordinates
+            augment_config: Augmentation configuration
+            verbose: Whether to show training progress
+
+        Returns:
+            dict: Model information including model, history, and parameters
+        """
+        train_idx = index_set.train
+        val_idx = index_set.test  # k-fold uses 'test' as validation
+
+        # Get train locations and normalize
+        train_locs = locs[train_idx]
+        meanlong, sdlong, meanlat, sdlat, _, normalized_train_locs = normalize_locs(
+            train_locs
+        )
+
+        # Store normalization parameters
+        norm_params = {
+            "meanlong": meanlong,
+            "sdlong": sdlong,
+            "meanlat": meanlat,
+            "sdlat": sdlat,
+        }
+
+        # Create model
+        model = self._create_model(input_shape=filtered_genotypes.shape[0])
+
+        # Normalize validation locations
+        val_locs = locs[val_idx]
+        normalized_val_locs = self._apply_normalization(val_locs, norm_params)
+
+        # Create normalized location array for all samples
+        normalized_locs = np.zeros((len(samples), 2))
+        normalized_locs[train_idx] = normalized_train_locs
+        normalized_locs[val_idx] = normalized_val_locs
+
+        # Create datasets
+        train_dataset = make_tf_dataset(
+            genotypes=filtered_genotypes,
+            coordinates=normalized_locs,
+            index_set=index_set,
+            split="train",
+            batch_size=self._determine_batch_size(len(train_idx)),
+            augment=augment_config,
+            training=True,
+            cache=True,
+        )
+
+        val_dataset = make_tf_dataset(
+            genotypes=filtered_genotypes,
+            coordinates=normalized_locs,
+            index_set=index_set,
+            split="test",  # k-fold uses 'test' for validation
+            batch_size=self._determine_batch_size(len(val_idx)),
+            training=False,
+            cache=True,
+        )
+
+        # Create callbacks for this fold
+        callbacks = self._create_fold_callbacks(fold_idx, save_fold_models)
+
+        # Train model
+        history = model.fit(
+            train_dataset,
+            epochs=self.config.get("max_epochs", 5000),
+            verbose=self.config.get("keras_verbose", 1) if verbose else 0,
+            validation_data=val_dataset,
+            callbacks=callbacks,
+        )
+
+        # Return model info
+        return {
+            "fold": fold_idx,
+            "model": model,
+            "history": history,
+            "norm_params": norm_params,
+            "train_indices": train_idx,
+            "val_indices": val_idx,
+        }
+
+    def _create_fold_callbacks(self, fold_idx, save_fold_models=True):
+        """Create callbacks for a specific fold.
+
+        Args:
+            fold_idx: Fold index
+            save_fold_models: Whether to save fold models
+
+        Returns:
+            list: List of Keras callbacks
+        """
+        callbacks = []
+
+        # Check if we should save this fold's model
+        should_save = save_fold_models
+
+        if should_save:
+            filepath = f"{self.config['out']}_fold{fold_idx}.weights.h5"
+
+            checkpointer = keras.callbacks.ModelCheckpoint(
+                filepath=filepath,
+                verbose=self.config.get("keras_verbose", 1),
+                save_best_only=True,
+                save_weights_only=True,
+                monitor="val_loss",
+                save_freq="epoch",
+                mode="min",
+            )
+            callbacks.append(checkpointer)
+
+        # Add standard callbacks
+        earlystop = keras.callbacks.EarlyStopping(
+            monitor="val_loss",
+            min_delta=0,
+            patience=self.config.get("patience", 100),
+        )
+
+        reducelr = keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.5,
+            patience=self.config.get("patience", 100) // 6,
+            verbose=self.config.get("keras_verbose", 1),
+            mode="auto",
+            min_delta=0,
+            cooldown=0,
+            min_lr=0,
+        )
+
+        callbacks.extend([earlystop, reducelr])
+        return callbacks
 
     def predict_ensemble(
         self,
@@ -484,3 +588,123 @@ class EnsembleMixin:
             "sdlat": np.mean([p["sdlat"] for p in norm_params_list]),
         }
         return avg_params
+
+    def load_ensemble(self, ensemble_path):
+        """Load a saved ensemble for prediction.
+
+        Args:
+            ensemble_path: Path to the saved ensemble directory
+
+        Returns:
+            dict: Ensemble information including models and parameters
+        """
+        # Create model manager
+        model_manager = EnsembleModelManager(ensemble_path)
+
+        # Define model builder function
+        def model_builder(n_features):
+            return self._create_model(input_shape=n_features)
+
+        # Load ensemble
+        models_info = model_manager.load_ensemble(model_builder_fn=model_builder)
+
+        # Store for prediction
+        self._ensemble_models = models_info
+        self._ensemble_model_manager = model_manager
+
+        # Get averaged normalization parameters
+        avg_params = model_manager.get_averaged_normalization_params()
+        self.meanlong = avg_params.meanlong
+        self.sdlong = avg_params.sdlong
+        self.meanlat = avg_params.meanlat
+        self.sdlat = avg_params.sdlat
+
+        return {
+            "n_models": len(models_info),
+            "normalization_params": {
+                "meanlong": self.meanlong,
+                "sdlong": self.sdlong,
+                "meanlat": self.meanlat,
+                "sdlat": self.sdlat,
+            },
+        }
+
+    def predict_ensemble_from_manager(
+        self,
+        genotypes,
+        samples,
+        indices=None,
+        return_df=True,
+        save_predictions=True,
+    ):
+        """Make predictions using loaded ensemble with model manager.
+
+        This method efficiently loads models on-demand for prediction,
+        reducing memory usage for large ensembles.
+
+        Args:
+            genotypes: GenotypeArray for prediction
+            samples: Sample IDs
+            indices: Specific indices to predict on (if None, predicts all)
+            return_df: Return results as DataFrame (default: True)
+            save_predictions: Save predictions to disk (default: True)
+
+        Returns:
+            pd.DataFrame or np.ndarray: Ensemble predictions
+        """
+        if not hasattr(self, "_ensemble_model_manager"):
+            raise ValueError("No ensemble loaded. Use load_ensemble() first.")
+
+        # Setup prediction indices
+        if indices is None:
+            indices = np.arange(len(samples))
+
+        # Filter genotypes
+        filtered_genotypes = self._filter_genotypes(genotypes)
+
+        # Collect predictions from each fold
+        fold_predictions = []
+
+        for fold_idx, model_info in enumerate(self._ensemble_models):
+            # Get model (loads if necessary)
+            model = self._ensemble_model_manager.get_model(
+                fold_idx, filtered_genotypes.shape[0]
+            )
+
+            # Create prediction dataset
+            pred_dataset = self._create_prediction_dataset(
+                filtered_genotypes, samples, indices
+            )
+
+            # Make predictions
+            predictions = model.predict(pred_dataset, verbose=0)
+
+            # Get normalization params for this fold
+            norm_params = self._ensemble_model_manager.get_normalization_params(fold_idx)
+
+            # Denormalize
+            denorm_preds = norm_params.reverse(predictions)
+            fold_predictions.append(denorm_preds)
+
+        # Convert to array
+        fold_predictions = np.array(fold_predictions)
+
+        # Calculate ensemble mean
+        ensemble_mean = np.mean(fold_predictions, axis=0)
+
+        # Format results
+        if return_df:
+            result_df = pd.DataFrame(
+                {
+                    "sampleID": samples[indices],
+                    "x": ensemble_mean[:, 0],
+                    "y": ensemble_mean[:, 1],
+                }
+            )
+
+            if save_predictions:
+                self._ensemble_model_manager.save_predictions(result_df, "ensemble")
+
+            return result_df
+        else:
+            return ensemble_mean
