@@ -93,12 +93,12 @@ jobs:
 
     - name: Check code formatting with black
       run: |
-        black --check --line-length=89 locator/ tests/ scripts/ example/ examples/
+        black --check --line-length=89 locator/ tests/ scripts/ example/
 
     - name: Check import sorting with isort
       run: |
-        isort --check-only --profile=black --line-length=89 locator/ tests/ scripts/ example/ examples/
+        isort --check-only --profile=black --line-length=89 locator/ tests/ scripts/ example/
 
     - name: Lint with flake8
       run: |
-        flake8 locator/ tests/ scripts/ example/ examples/ --config=.flake8
+        flake8 locator/ tests/ scripts/ example/ --config=.flake8
