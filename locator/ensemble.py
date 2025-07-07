@@ -2,12 +2,13 @@
 
 import numpy as np
 import pandas as pd
-from tensorflow import keras
 import tensorflow as tf
+from tensorflow import keras
 
 from .core import Locator
+from .data import filter_snps_legacy as filter_snps
+from .data import normalize_locs
 from .models import create_network
-from .data import filter_snps_legacy as filter_snps, normalize_locs
 
 
 def flip_genotypes(genotypes, locations, mask_rate=0.05):
@@ -76,11 +77,11 @@ class EnsembleLocator:
                 raise ValueError("training_set_indices contains invalid indices")
 
             # Subset the relevant arrays to only include training set samples
-            subset_samples = samples[training_set_indices]
+            # subset_samples = samples[training_set_indices]  # noqa: F841
             subset_locations = locations[training_set_indices]
         else:
             # Use all samples
-            subset_samples = samples
+            # subset_samples = samples  # noqa: F841
             subset_locations = locations
             training_set_indices = np.arange(len(samples))
 
@@ -319,7 +320,7 @@ class EnsembleLocator:
 
         return histories
 
-    def predict(
+    def predict(  # noqa: C901
         self, return_df=True, save_preds_to_disk=True, include_val_predictions=True
     ):
         """Make predictions using the ensemble of models."""

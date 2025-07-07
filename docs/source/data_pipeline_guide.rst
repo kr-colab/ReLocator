@@ -1,8 +1,8 @@
 Data Pipeline Guide
 ===================
 
-This guide covers the memory-efficient data pipeline architecture introduced in Locator, 
-including the ``IndexSet`` class for zero-copy data splitting and the unified ``tf.data`` 
+This guide covers the memory-efficient data pipeline architecture introduced in Locator,
+including the ``IndexSet`` class for zero-copy data splitting and the unified ``tf.data``
 pipeline for optimal training performance.
 
 Overview
@@ -27,17 +27,17 @@ The ``IndexSet`` class manages train/test/validation splits using indices rather
 .. code-block:: python
 
     from locator.data import IndexSet
-    
+
     # Create a random 80/20 train/test split
     index_set = IndexSet.random_split(
         n=1000,
         splits={"train": 0.8, "test": 0.2}
     )
-    
+
     # Access indices for each split
     train_indices = index_set.train
     test_indices = index_set.test
-    
+
     # Use with your data (no copying!)
     train_data = full_data[train_indices]
 
@@ -49,14 +49,14 @@ Advanced splitting options:
     index_sets = IndexSet.k_fold(n=1000, k=5)
     for fold, idx_set in enumerate(index_sets):
         print(f"Fold {fold}: {len(idx_set.train)} train, {len(idx_set.test)} test")
-    
+
     # Group-based splitting (e.g., by population)
     index_set = IndexSet.group_split(
         n=1000,
         groups=population_labels,
         test_groups=["pop1", "pop2"]
     )
-    
+
     # Handling samples with missing data
     na_mask = np.isnan(coordinates[:, 0])
     index_set = IndexSet.random_split(
@@ -74,7 +74,7 @@ The ``make_tf_dataset`` function creates optimized tf.data pipelines:
 .. code-block:: python
 
     from locator.data import make_tf_dataset
-    
+
     # Create training dataset with all optimizations
     train_dataset = make_tf_dataset(
         genotypes=genotype_array,      # Shape: (n_snps, n_samples)
@@ -87,7 +87,7 @@ The ``make_tf_dataset`` function creates optimized tf.data pipelines:
         augment_flip_rate=0.05,        # Data augmentation
         sample_weights=weights_array    # Optional sample weights
     )
-    
+
     # Use directly with model.fit()
     model.fit(train_dataset, epochs=100, ...)
 
@@ -100,7 +100,7 @@ Centralized preprocessing functions with tracking:
 
     from locator.data import filter_snps, normalize_locs, impute_missing
     from locator.data import FilterStats, NormalizationParams
-    
+
     # Filter SNPs and get statistics
     filtered_geno, stats = filter_snps(
         genotypes,
@@ -109,7 +109,7 @@ Centralized preprocessing functions with tracking:
         impute=True
     )
     print(f"Retained {stats.n_snps_retained}/{stats.n_snps_original} SNPs")
-    
+
     # Normalize coordinates with parameters
     norm_params, normalized_coords = normalize_locs(coordinates)
     # Apply same normalization to new data
@@ -128,18 +128,18 @@ Basic Training with Memory-Efficient Pipeline
     import numpy as np
     from locator import Locator
     from locator.data import IndexSet, make_tf_dataset
-    
+
     # Initialize Locator
     loc = Locator({
         "out": "results/analysis",
         "sample_data": "samples.txt",
         "max_epochs": 1000
     })
-    
+
     # Load data
     genotypes, samples = loc.load_genotypes(zarr="data.zarr")
     sample_data, coordinates = loc.sort_samples(samples)
-    
+
     # The memory-efficient pipeline is used automatically in train()
     loc.train(genotypes=genotypes, samples=samples)
 
@@ -151,17 +151,17 @@ For custom workflows, you can build the pipeline manually:
 .. code-block:: python
 
     from locator.data import filter_snps, normalize_locs, IndexSet, make_tf_dataset
-    
+
     # Preprocess data
     filtered_geno, filter_stats = filter_snps(genotypes, min_mac=2)
     norm_params, norm_coords = normalize_locs(coordinates)
-    
+
     # Create data splits
     index_set = IndexSet.random_split(
         n=len(samples),
         splits={"train": 0.8, "val": 0.1, "test": 0.1}
     )
-    
+
     # Build datasets
     train_dataset = make_tf_dataset(
         genotypes=filtered_geno,
@@ -172,7 +172,7 @@ For custom workflows, you can build the pipeline manually:
         training=True,
         augment_flip_rate=0.05
     )
-    
+
     val_dataset = make_tf_dataset(
         genotypes=filtered_geno,
         coordinates=norm_coords,
@@ -189,7 +189,7 @@ Working with Sample Weights
 .. code-block:: python
 
     from locator.utils import weight_samples
-    
+
     # Calculate sample weights based on geographic density
     weights_dict = weight_samples(
         method="gaussian",
@@ -197,7 +197,7 @@ Working with Sample Weights
         trainsamps=samples[train_indices],
         bandwidth=100  # km
     )
-    
+
     # Include weights in dataset
     train_dataset = make_tf_dataset(
         genotypes=genotypes,

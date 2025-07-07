@@ -1,0 +1,73 @@
+repos:
+  # Basic file fixes
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: debug-statements
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  # Python code formatting with Black
+  - repo: https://github.com/psf/black
+    rev: 24.3.0
+    hooks:
+      - id: black
+        language_version: python3
+        args: ['--line-length=89']  # Match flake8 config
+
+  # Import sorting with isort
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ['--profile=black', '--line-length=89']
+
+  # Linting with flake8
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        additional_dependencies: [
+          'flake8-docstrings',
+          'flake8-bugbear',
+          'flake8-comprehensions',
+          'flake8-simplify',
+        ]
+        args: ['--config=.flake8']
+
+  # Type checking with mypy (optional, commented out for now)
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v1.8.0
+  #   hooks:
+  #     - id: mypy
+  #       additional_dependencies: [types-all]
+  #       args: ['--ignore-missing-imports']
+
+# Configuration
+default_language_version:
+  python: python3
+
+# Skip these files
+exclude: |
+  (?x)^(
+    .*\.egg-info/.*|
+    .*\.git/.*|
+    .*\.tox/.*|
+    .*\.venv/.*|
+    .*__pycache__/.*|
+    .*\.pytest_cache/.*|
+    build/.*|
+    dist/.*|
+    docs/_build/.*|
+    docs/build/.*|
+    .*\.ipynb_checkpoints/.*|
+    work/.*|
+    out/.*
+  )$

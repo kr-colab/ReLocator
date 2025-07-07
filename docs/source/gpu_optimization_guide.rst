@@ -21,7 +21,7 @@ GPU optimizations are **enabled by default** in Locator. Simply run your code as
 .. code-block:: python
 
     from locator import Locator
-    
+
     # GPU optimizations are automatically applied
     loc = Locator({"out": "my_analysis"})
 
@@ -102,7 +102,7 @@ Features:
 * **Parallel processing**: Uses multiple CPU cores for data preparation
 * **Automatic tuning**: Optimizes buffer sizes dynamically
 
-For detailed information about the data pipeline architecture, including IndexSet and 
+For detailed information about the data pipeline architecture, including IndexSet and
 custom tf.data operations, see :doc:`data_pipeline_guide`.
 
 GPU Memory Management
@@ -114,10 +114,10 @@ Control how GPU memory is allocated:
 
     # Default: Allow memory growth (good for shared systems)
     config = {"gpu_memory_mode": "growth"}
-    
+
     # Pre-allocate all memory (best performance)
     config = {"gpu_memory_mode": "preallocate"}
-    
+
     # Limit memory usage (for multi-user systems)
     config = {"gpu_memory_mode": "limit:4096"}  # Limit to 4GB
 
@@ -172,10 +172,10 @@ Select which GPU to use for training:
 
     # Use GPU 0 (default)
     config = {"gpu_number": 0}
-    
+
     # Use GPU 1
     config = {"gpu_number": 1}
-    
+
     # Disable GPU, use CPU only
     config = {"disable_gpu": True}
 
@@ -185,7 +185,7 @@ Command line usage:
 
     # Use specific GPU
     locator --gpu_number 1 --vcf data.vcf --sample_data samples.txt
-    
+
     # Disable GPU
     locator --disable_gpu --vcf data.vcf --sample_data samples.txt
 
@@ -197,7 +197,7 @@ For using multiple GPUs simultaneously, Locator provides Ray-based parallel anal
 .. code-block:: python
 
     from locator.parallel import parallel_k_fold_holdouts
-    
+
     # Use 4 GPUs for k-fold cross-validation
     predictions = parallel_k_fold_holdouts(
         locator, genotypes, samples,
@@ -227,7 +227,7 @@ Monitor GPU utilization:
 
     # Real-time GPU monitoring
     watch -n 1 nvidia-smi
-    
+
     # Log GPU metrics
     nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv -l 1
 
@@ -236,13 +236,13 @@ Check optimization status in Python:
 .. code-block:: python
 
     from locator.gpu_optimizer import GPUOptimizer
-    
+
     # Get GPU information
     info = GPUOptimizer.get_gpu_info()
     print(f"GPU count: {info['gpu_count']}")
     for gpu in info['gpus']:
         print(f"  {gpu['name']}")
-    
+
     # Check mixed precision support
     GPUOptimizer.setup_mixed_precision()
 
@@ -255,30 +255,30 @@ Out of Memory Errors
 If you encounter OOM errors, try these solutions in order:
 
 1. **Enable mixed precision** (if not already enabled):
-   
+
    .. code-block:: python
-   
+
        config = {"use_mixed_precision": True}
 
 2. **Reduce batch size**:
-   
+
    .. code-block:: python
-   
+
        config = {"gpu_batch_size": 64}
 
 3. **Use gradient accumulation**:
-   
+
    .. code-block:: python
-   
+
        config = {
            "gpu_batch_size": 32,
            "gradient_accumulation_steps": 4
        }
 
 4. **Limit GPU memory**:
-   
+
    .. code-block:: python
-   
+
        config = {"gpu_memory_mode": "limit:8192"}  # 8GB limit
 
 No Speedup Observed
@@ -287,20 +287,20 @@ No Speedup Observed
 Check if:
 
 1. **GPU is being used**:
-   
+
    .. code-block:: bash
-   
+
        nvidia-smi  # Should show Python process
 
 2. **Dataset is large enough**:
-   
+
    * GPU optimizations are most effective with >10,000 samples
    * Small datasets may not benefit from GPU acceleration
 
 3. **Mixed precision is active**:
-   
+
    .. code-block:: python
-   
+
        import tensorflow as tf
        print(tf.keras.mixed_precision.global_policy())
        # Should show 'mixed_float16' if active
@@ -313,7 +313,7 @@ Verify GPU compatibility:
 .. code-block:: python
 
     import tensorflow as tf
-    
+
     # Check compute capability
     gpus = tf.config.list_physical_devices('GPU')
     if gpus:
@@ -326,25 +326,25 @@ Best Practices
 --------------
 
 1. **Large Datasets**: GPU optimizations work best with:
-   
+
    * >10,000 samples
    * >100,000 SNPs
    * Deep models (8+ layers)
 
 2. **Memory Management**:
-   
+
    * Use mixed precision for 2x memory savings
    * Start with "auto" batch size
    * Use gradient accumulation for very large batches
 
 3. **Performance Tuning**:
-   
+
    * Monitor GPU utilization (target >85%)
    * Profile training with TensorBoard
    * Experiment with batch sizes
 
 4. **Multi-User Systems**:
-   
+
    * Use memory growth mode
    * Set memory limits
    * Coordinate GPU usage
@@ -358,17 +358,17 @@ Basic GPU-Optimized Training
 .. code-block:: python
 
     from locator import Locator
-    
+
     # GPU optimizations are enabled by default
     loc = Locator({
         "out": "gpu_analysis",
         "zarr": "genotypes.zarr",
         "sample_data": "coordinates.txt"
     })
-    
+
     # Load data
     genotypes, samples = loc.load_genotypes()
-    
+
     # Train with automatic GPU optimization
     history = loc.train(genotypes=genotypes, samples=samples)
 
@@ -385,7 +385,7 @@ Custom GPU Configuration
         "gpu_memory_mode": "preallocate",  # Maximum performance
         "enable_xla": True,  # Experimental speedup
     }
-    
+
     loc = Locator(config)
 
 Memory-Constrained Configuration
@@ -401,7 +401,7 @@ Memory-Constrained Configuration
         "gradient_accumulation_steps": 8,  # Simulate batch of 512
         "gpu_memory_mode": "limit:4096",  # 4GB limit
     }
-    
+
     loc = Locator(config)
 
 Benchmarking

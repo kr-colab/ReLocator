@@ -105,11 +105,11 @@ Common Issues
 ~~~~~~~~~~~~~
 
 1. TensorFlow GPU Support
-   
+
    If you want to use GPU acceleration, make sure you have the appropriate CUDA and cuDNN versions installed for your TensorFlow version.
 
 2. Memory Issues
-   
+
    For large datasets, you may need to adjust your system's memory settings or use data generators.
 
 Getting Help
@@ -126,4 +126,4 @@ Next Steps
 
 * Read the :doc:`usage` guide to learn how to use Locator
 * Check the :doc:`api` reference for detailed documentation
-* See :doc:`examples` for example workflows 
+* See :doc:`examples` for example workflows

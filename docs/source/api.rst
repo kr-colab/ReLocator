@@ -31,9 +31,9 @@ Ensemble Module
 EnsembleLocator
 ^^^^^^^^^^^^^^^
 .. autoclass:: EnsembleLocator
-   :members: 
+   :members:
 
- 
+
 
 Models Module
 -------------
@@ -214,7 +214,7 @@ Analysis Module
 
 Parallel Analysis Module
 ------------------------
-.. module:: locator.parallel.parallel_analysis
+.. module:: locator.parallel
 
 This module provides Ray-based parallel implementations of analysis methods for multi-GPU execution.
 
@@ -325,6 +325,7 @@ PlottingMixin Class
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 
 
@@ -346,12 +347,12 @@ The default configuration for Locator includes:
        "min_mac": 2,
        "max_SNPs": None,
        "impute_missing": False,
-       
+
        # Network architecture
        "width": 256,
        "nlayers": 8,
        "dropout_prop": 0.25,
-       
+
        # Training parameters
        "max_epochs": 5000,
        "patience": 100,
@@ -359,30 +360,30 @@ The default configuration for Locator includes:
        "min_epochs": 10,
        "min_delta": 1e-4,
        "restore_best_weights": True,
-       
+
        # Optimizer parameters
        "optimizer_algo": "adam",
        "weight_decay": 0.004,
-       
+
        # Output control
        "keras_verbose": 1,
        "prediction_frequency": 1,
-       
+
        # Validation
        "validation_split": 0.1,
-       
+
        # Data augmentation
        "augmentation": {
            "enabled": False,
            "flip_rate": 0.05
        },
-       
+
        # Range penalty
        "use_range_penalty": False,
        "species_range_shapefile": None,
        "resolution": 0.05,
        "penalty_weight": 1.0,
-       
+
        # GPU optimization (enabled by default)
        "use_mixed_precision": True,
        "gpu_batch_size": "auto",
@@ -452,23 +453,23 @@ Basic Usage
 
     import locator
     from locator.core import Locator
-    
+
     # Initialize Locator with configuration
     loc = Locator({
         "out": "my_analysis",
         "sample_data": "samples.txt",
         "zarr": "genotypes.zarr"
     })
-    
+
     # Load genotype data
     genotypes, samples = loc.load_genotypes(zarr="genotypes.zarr")
-    
+
     # Train the model
     loc.train(genotypes=genotypes, samples=samples)
-    
+
     # Make predictions
     predictions = loc.predict(return_df=True)
-    
+
     # Plot results
     loc.plot_history(loc.history)
 
@@ -483,14 +484,14 @@ Advanced Analysis
         samples=samples,
         window_size=1e6
     )
-    
+
     # Run jacknife analysis
     jacknife_results = loc.run_jacknife(
         genotypes=genotypes,
         samples=samples,
         prop=0.1
     )
-    
+
     # Run bootstrap analysis
     bootstrap_results = loc.run_bootstraps(
         genotypes=genotypes,
@@ -504,15 +505,15 @@ Ensemble Analysis
 .. code-block:: python
 
     from locator import EnsembleLocator
-    
+
     # Initialize ensemble
     ensemble = EnsembleLocator(
         base_config={"out": "ensemble_analysis"},
         k_folds=5
     )
-    
+
     # Train ensemble
     ensemble.train(genotypes=genotypes, samples=samples)
-    
+
     # Make predictions
     ensemble_predictions = ensemble.predict()

@@ -13,18 +13,20 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from locator import Locator
-from locator.parallel import simple_parallel_k_fold, simple_parallel_leave_one_out
+from locator.parallel import simple_parallel_leave_one_out
 
 
 def main():
     # Paths
     vcf_path = "/sietch_colab/data_share/turtles_Actinemys/58-Actinemys/QC/58-Actinemys.pruned.vcf.gz"
-    coords_path = "/sietch_colab/data_share/turtles_Actinemys/actinemys_locator_metadata.tsv"
+    coords_path = (
+        "/sietch_colab/data_share/turtles_Actinemys/actinemys_locator_metadata.tsv"
+    )
     output_dir = "/sietch_colab/data_share/turtles_Actinemys/locator_output_parallel"
 
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Configuration for Locator
     config = {
         "out": os.path.join(output_dir, "actinemys_parallel"),
@@ -65,7 +67,7 @@ def main():
     # print("\n" + "="*60)
     # print("Running parallel 10-fold cross-validation on GPUs 0, 1, 2...")
     # print("="*60)
-    
+
     # kfold_results = simple_parallel_k_fold(
     #     locator=locator,
     #     genotypes=genotypes,
@@ -74,27 +76,27 @@ def main():
     #     gpu_ids=[0, 1, 2],  # Use GPUs 0, 1, and 2
     #     verbose=True
     # )
-    
+
     # print(f"\nK-fold results shape: {kfold_results.shape}")
     # kfold_results.to_csv(os.path.join(output_dir, "kfold_results.csv"), index=False)
-    
+
     # Example 2: Parallel leave-one-out (on smaller subset for speed)
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Running parallel leave-one-out on first 50 samples...")
-    print("="*60)
-    
+    print("=" * 60)
+
     subset_size = 50
     loo_results = simple_parallel_leave_one_out(
         locator=locator,
         genotypes=genotypes[:, :subset_size],
         samples=samples[:subset_size],
         gpu_ids=[1, 2],  # Use GPUs 0, 1, and 2
-        verbose=True
+        verbose=True,
     )
-    
+
     print(f"\nLOO results shape: {loo_results.shape}")
     loo_results.to_csv(os.path.join(output_dir, "loo_results_subset.csv"), index=False)
-    
+
     print("\nDone!")
 
 
