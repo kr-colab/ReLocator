@@ -11,6 +11,7 @@ from .filters import (
 )
 from .indexset import IndexSet
 from .tf_dataset import flip_genotypes_tf, make_tf_dataset, make_tf_dataset_from_arrays
+from .windows import WindowGenerator, generate_genomic_windows
 
 __all__ = [
     "FilterStats",
@@ -24,4 +25,6 @@ __all__ = [
     "make_tf_dataset",
     "make_tf_dataset_from_arrays",
     "flip_genotypes_tf",
+    "WindowGenerator",
+    "generate_genomic_windows",
 ]
