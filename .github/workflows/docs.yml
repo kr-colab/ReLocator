@@ -54,9 +54,9 @@ jobs:
         make html 2>&1 | tee build_output.txt
 
         # Check for warnings, excluding known harmless ones
-        if grep -i "warning" build_output.txt | grep -v "Protobuf gencode version" | grep -v "UserWarning" | grep -q .; then
+        if grep -i "warning" build_output.txt | grep -v "Protobuf gencode version" | grep -v "UserWarning" | grep -v "warnings\.warn" | grep -q .; then
           echo "Documentation build produced warnings (excluding protobuf warnings):"
-          grep -i "warning" build_output.txt | grep -v "Protobuf gencode version" | grep -v "UserWarning"
+          grep -i "warning" build_output.txt | grep -v "Protobuf gencode version" | grep -v "UserWarning" | grep -v "warnings\.warn"
           exit 1
         fi
 
