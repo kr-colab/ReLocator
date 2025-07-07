@@ -11,11 +11,11 @@ git clone https://github.com/kr-colab/locator.git
 cd locator
 ```
 
-### 2. Create a virtual environment (recommended)
+### 2. Create a Conda environment with Python 3.12 (recommended)
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+conda create -n locator-dev python=3.12
+conda activate locator-dev
 ```
 
 ### 3. Install the package in development mode
@@ -108,7 +108,7 @@ pytest -n auto
 
 ## Commit Messages
 
-We follow conventional commits format:
+We're trying to follow conventional commits format:
 
 - `feat:` for new features
 - `fix:` for bug fixes
