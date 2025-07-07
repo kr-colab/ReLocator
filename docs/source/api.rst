@@ -24,14 +24,61 @@ Locator
    :show-inheritance:
 
 
-Ensemble Module
----------------
-.. module:: locator.ensemble
+Ensemble Functionality
+----------------------
 
-EnsembleLocator
-^^^^^^^^^^^^^^^
-.. autoclass:: EnsembleLocator
+The ensemble functionality is integrated into the main ``Locator`` class through the ``EnsembleMixin``.
+
+.. module:: locator.ensemble_mixin
+
+EnsembleMixin
+^^^^^^^^^^^^^
+.. autoclass:: EnsembleMixin
    :members:
+   :show-inheritance:
+
+.. module:: locator.ensemble_model_manager
+
+EnsembleModelManager
+^^^^^^^^^^^^^^^^^^^^
+.. autoclass:: EnsembleModelManager
+   :members:
+   :show-inheritance:
+
+   Efficient storage and loading of ensemble models.
+
+Parallel Ensemble Training
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The parallel ensemble training function is available when Ray is installed:
+
+.. code-block:: python
+
+   from locator.parallel import parallel_train_ensemble
+
+.. function:: parallel_train_ensemble(locator, genotypes, samples, k=5, gpu_ids=[0, 1], gpu_fraction=1.0, training_set_indices=None, na_action=None, augment_data=False, flip_rate=0.05, save_fold_models=True, use_model_manager=True, use_mixed_precision=None, patience_multiplier=1.0, verbose=True)
+
+   Train ensemble models in parallel across multiple GPUs using Ray.
+
+   :param locator: Locator instance with configuration
+   :param genotypes: GenotypeArray containing genetic data
+   :param samples: Array of sample IDs
+   :param k: Number of folds/models in ensemble (default: 5)
+   :param gpu_ids: List of GPU IDs to use (default: [0, 1])
+   :param gpu_fraction: Fraction of GPU memory per worker (default: 1.0)
+   :param training_set_indices: Optional indices to restrict training
+   :param na_action: How to handle NA samples ('separate', 'exclude', 'fail')
+   :param augment_data: Whether to apply data augmentation
+   :param flip_rate: Rate for genotype flipping augmentation
+   :param save_fold_models: Whether to save individual fold models
+   :param use_model_manager: Whether to use model manager for storage
+   :param use_mixed_precision: Whether to use mixed precision training
+   :param patience_multiplier: Multiply patience for ensemble training
+   :param verbose: Whether to show training progress
+   :returns: dict containing histories, models, normalization_params, fold_info
+
+   .. note::
+      This function requires Ray to be installed. Install with ``pip install locator[parallel]``.
 
 
 

@@ -7,6 +7,7 @@ try:
         parallel_holdouts,
         parallel_k_fold_holdouts,
         parallel_leave_one_out,
+        parallel_train_ensemble,
         parallel_windows_holdouts,
     )
 
@@ -14,6 +15,7 @@ try:
         "parallel_k_fold_holdouts",
         "parallel_leave_one_out",
         "parallel_holdouts",
+        "parallel_train_ensemble",
         "parallel_windows_holdouts",
     ]
 except ImportError:
@@ -28,11 +30,13 @@ except ImportError:
     parallel_k_fold_holdouts = _not_available
     parallel_leave_one_out = _not_available
     parallel_holdouts = _not_available
+    parallel_train_ensemble = _not_available
     parallel_windows_holdouts = _not_available
 
     __all__ = [
         "parallel_k_fold_holdouts",
         "parallel_leave_one_out",
         "parallel_holdouts",
+        "parallel_train_ensemble",
         "parallel_windows_holdouts",
     ]

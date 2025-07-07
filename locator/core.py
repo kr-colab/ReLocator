@@ -7,6 +7,7 @@ import pandas as pd
 import tensorflow as tf
 
 from .analysis import AnalysisMixin
+from .ensemble_mixin import EnsembleMixin
 from .gpu_optimizer import GPUOptimizer
 
 # Import all the mixins
@@ -62,7 +63,12 @@ def setup_gpu(gpu_number=None):
 
 
 class Locator(
-    DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, PlottingMixin
+    DataLoaderMixin,
+    TrainingMixin,
+    PredictionMixin,
+    AnalysisMixin,
+    EnsembleMixin,
+    PlottingMixin,
 ):
     """A class for predicting geographic locations from genetic data.
 

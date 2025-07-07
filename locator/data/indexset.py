@@ -280,3 +280,60 @@ class IndexSet:
             total_samples = max(all_indices) + 1 if all_indices else 0
 
         return cls(indices=indices, total_samples=total_samples)
+
+    @classmethod
+    def k_fold_split(
+        cls,
+        n: int,
+        k: int,
+        seed: Optional[int] = None,
+        na_mask: Optional[np.ndarray] = None,
+    ) -> List[IndexSet]:
+        """Create all k-fold cross-validation splits at once.
+
+        This method generates k IndexSet objects, one for each fold,
+        suitable for ensemble training or cross-validation.
+
+        Args:
+            n: Total number of samples
+            k: Number of folds
+            seed: Random seed for reproducibility
+            na_mask: Boolean mask indicating samples to exclude from k-fold
+                    (e.g., samples without coordinates or not in training set)
+
+        Returns:
+            List of k IndexSet objects, one for each fold
+        """
+        # Handle excluded samples - k-fold only uses included samples
+        if na_mask is not None and np.any(na_mask):
+            valid_indices = np.where(~na_mask)[0]
+            n_valid = len(valid_indices)
+        else:
+            valid_indices = np.arange(n)
+            n_valid = n
+
+        # Shuffle indices once
+        rng = np.random.RandomState(seed)
+        shuffled = valid_indices.copy()
+        rng.shuffle(shuffled)
+
+        # Create all folds
+        fold_index_sets = []
+        fold_size = n_valid // k
+
+        for fold in range(k):
+            test_start = fold * fold_size
+            test_end = test_start + fold_size if fold < k - 1 else n_valid
+
+            test_indices = shuffled[test_start:test_end]
+            train_indices = np.concatenate([shuffled[:test_start], shuffled[test_end:]])
+
+            fold_index_sets.append(
+                cls(
+                    indices={"train": train_indices, "test": test_indices},
+                    total_samples=n,
+                    na_mask=na_mask,
+                )
+            )
+
+        return fold_index_sets

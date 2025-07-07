@@ -58,21 +58,88 @@ Advanced Analysis
 Ensemble Analysis
 -----------------
 
+Sequential Ensemble Training
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 .. code-block:: python
 
-    from locator import EnsembleLocator
+    from locator import Locator
 
-    # Initialize ensemble
-    ensemble = EnsembleLocator(
-        base_config={"out": "ensemble_analysis"},
-        k_folds=5
+    # Initialize Locator
+    loc = Locator({
+        "out": "ensemble_analysis",
+        "sample_data": "samples.txt",
+        "width": 256,
+        "nlayers": 10
+    })
+
+    # Load data
+    genotypes, samples = loc.load_genotypes(vcf="genotypes.vcf.gz")
+
+    # Train 5-fold ensemble
+    ensemble_result = loc.train_ensemble(
+        genotypes=genotypes,
+        samples=samples,
+        k=5,
+        save_fold_models=True,
+        use_model_manager=True,
+        verbose=True
     )
 
-    # Train ensemble
-    ensemble.train(genotypes=genotypes, samples=samples)
+    # Make ensemble predictions with uncertainty
+    predictions = loc.predict_ensemble(
+        genotypes=genotypes,
+        samples=samples,
+        return_std=True,  # Get prediction uncertainty
+        include_fold_predictions=True  # Get individual fold predictions
+    )
 
-    # Make predictions
-    ensemble_predictions = ensemble.predict()
+    # Analyze uncertainty
+    import numpy as np
+    mean_uncertainty = np.mean([predictions['x_std'].mean(),
+                                predictions['y_std'].mean()])
+    print(f"Mean location uncertainty: {mean_uncertainty:.2f} degrees")
+
+Parallel Ensemble Training
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    from locator.parallel import parallel_train_ensemble
+
+    # Train ensemble across multiple GPUs
+    ensemble_result = parallel_train_ensemble(
+        locator=loc,
+        genotypes=genotypes,
+        samples=samples,
+        k=5,
+        gpu_ids=[0, 1, 2, 3],  # Use 4 GPUs
+        gpu_fraction=0.5,  # Allow 2 models per GPU
+        save_fold_models=True,
+        verbose=True
+    )
+
+    # Results are identical to sequential training
+    # but training is ~4x faster with 4 GPUs
+
+Loading and Using Saved Ensembles
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    # In a new session, load the trained ensemble
+    loc_new = Locator({"out": "predictions"})
+
+    # Load ensemble from disk
+    ensemble_info = loc_new.load_ensemble("ensemble_analysis_ensemble")
+    print(f"Loaded {ensemble_info['n_models']} models")
+
+    # Make predictions with loaded ensemble
+    new_predictions = loc_new.predict_ensemble_from_manager(
+        genotypes=new_genotypes,
+        samples=new_samples,
+        save_predictions=True
+    )
 
 Handling Missing Coordinates
 ----------------------------

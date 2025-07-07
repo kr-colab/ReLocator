@@ -390,6 +390,80 @@ Performance Tips
    * Large models (width≥512): Use gpu_fraction=1.0
    * Very large models: May need to reduce batch size
 
+Example: Parallel Ensemble Training
+-----------------------------------
+
+Train ensemble models across multiple GPUs for improved predictions:
+
+.. code-block:: python
+
+    from locator import Locator
+    from locator.parallel import parallel_train_ensemble
+
+    # Initialize Locator
+    config = {
+        "out": "ensemble_analysis",
+        "sample_data": "samples.tsv",
+        "width": 256,
+        "nlayers": 10,
+        "max_epochs": 1000,
+        "patience": 100
+    }
+
+    locator = Locator(config)
+    genotypes, samples = locator.load_genotypes(vcf="genotypes.vcf.gz")
+
+    # Train 5-fold ensemble across 4 GPUs
+    print("Training ensemble across GPUs...")
+    ensemble_result = parallel_train_ensemble(
+        locator=locator,
+        genotypes=genotypes,
+        samples=samples,
+        k=5,  # 5-fold ensemble
+        gpu_ids=[0, 1, 2, 3],  # Use 4 GPUs
+        save_fold_models=True,
+        use_model_manager=True,
+        verbose=True
+    )
+
+    # Make ensemble predictions
+    predictions = locator.predict_ensemble(
+        genotypes=genotypes,
+        samples=samples,
+        return_std=True  # Include uncertainty estimates
+    )
+
+    # Analyze ensemble performance
+    import numpy as np
+    mean_uncertainty = np.mean([
+        predictions['x_std'].mean(),
+        predictions['y_std'].mean()
+    ])
+    print(f"Mean prediction uncertainty: {mean_uncertainty:.2f} degrees")
+
+    # Compare to sequential training time
+    print(f"Training time: {ensemble_result['training_time']:.1f}s")
+    print(f"Estimated sequential time: {ensemble_result['training_time'] * 5 / 4:.1f}s")
+
+GPU Allocation for Ensemble Training
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For ensemble training with limited GPUs:
+
+.. code-block:: python
+
+    # Example: 8-fold ensemble on 2 GPUs
+    ensemble_result = parallel_train_ensemble(
+        locator=locator,
+        genotypes=genotypes,
+        samples=samples,
+        k=8,
+        gpu_ids=[0, 1],  # Only 2 GPUs
+        gpu_fraction=0.5,  # Allow 2 models per GPU
+        verbose=True
+    )
+    # This trains 4 models simultaneously (2 per GPU)
+
 API Comparison
 --------------
 
@@ -409,6 +483,8 @@ The parallel API mirrors the standard analysis API:
      - ``parallel_holdouts()``
    * - ``locator.run_windows_holdouts()``
      - ``parallel_windows_holdouts()``
+   * - ``locator.train_ensemble()``
+     - ``parallel_train_ensemble()``
 
 Key differences:
 
