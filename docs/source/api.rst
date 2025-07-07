@@ -24,14 +24,63 @@ Locator
    :show-inheritance:
 
 
-Ensemble Module
----------------
-.. module:: locator.ensemble
+Ensemble Functionality
+----------------------
 
-EnsembleLocator
-^^^^^^^^^^^^^^^
-.. autoclass:: EnsembleLocator
+The ensemble functionality is integrated into the main ``Locator`` class through the ``EnsembleMixin``.
+
+.. module:: locator.ensemble_mixin
+
+EnsembleMixin
+^^^^^^^^^^^^^
+.. autoclass:: EnsembleMixin
    :members:
+   :show-inheritance:
+
+   Key methods for ensemble training and prediction:
+
+   .. automethod:: train_ensemble
+   .. automethod:: predict_ensemble
+   .. automethod:: load_ensemble
+   .. automethod:: predict_ensemble_from_manager
+
+.. module:: locator.ensemble_model_manager
+
+EnsembleModelManager
+^^^^^^^^^^^^^^^^^^^^
+.. autoclass:: EnsembleModelManager
+   :members:
+   :show-inheritance:
+
+   Efficient storage and loading of ensemble models.
+
+Parallel Ensemble Training
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. module:: locator.parallel.parallel_analysis
+
+.. autofunction:: parallel_train_ensemble
+
+   Train ensemble models in parallel across multiple GPUs.
+
+   Args:
+       locator: Locator instance with configuration
+       genotypes: GenotypeArray containing genetic data
+       samples: Array of sample IDs
+       k: Number of folds/models in ensemble (default: 5)
+       gpu_ids: List of GPU IDs to use (default: [0, 1])
+       gpu_fraction: Fraction of GPU memory per worker (default: 1.0)
+       training_set_indices: Optional indices to restrict training
+       na_action: How to handle NA samples ('separate', 'exclude', 'fail')
+       augment_data: Whether to apply data augmentation
+       flip_rate: Rate for genotype flipping augmentation
+       save_fold_models: Whether to save individual fold models
+       use_model_manager: Whether to use model manager for storage
+       use_mixed_precision: Whether to use mixed precision training
+       patience_multiplier: Multiply patience for ensemble training
+       verbose: Whether to show training progress
+
+   Returns:
+       dict: Contains histories, models, normalization_params, fold_info
 
 
 

@@ -9,6 +9,7 @@ Locator is a deep learning-based tool for predicting geographic coordinates from
 
    installation
    usage
+   ensemble_guide
    data_pipeline_guide
    gpu_optimization_guide
    parallel_analysis_guide
@@ -23,6 +24,7 @@ Quick Links
 
 * :doc:`installation` - Installation instructions
 * :doc:`usage` - Basic and advanced usage guide
+* :doc:`ensemble_guide` - Ensemble models and k-fold cross-validation
 * :doc:`data_pipeline_guide` - Memory-efficient data pipeline
 * :doc:`gpu_optimization_guide` - GPU optimization and performance guide
 * :doc:`parallel_analysis_guide` - Multi-GPU parallel analysis guide

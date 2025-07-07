@@ -84,26 +84,42 @@ Evaluate model performance by holding out samples:
 
 Ensemble Models
 ---------------
-Use multiple models for improved predictions:
+Use k-fold cross-validation to train ensemble models for improved predictions:
 
 .. code-block:: python
 
-   from locator import EnsembleLocator
-
-   # Create ensemble with 5 models
-   ensemble = EnsembleLocator(
-       base_config=config,
-       k_folds=5
-   )
-
-   # Train ensemble
-   histories = ensemble.train(
+   # Train 5-fold ensemble
+   ensemble_result = locator.train_ensemble(
        genotypes=genotypes,
-       samples=samples
+       samples=samples,
+       k=5,  # Number of folds
+       save_fold_models=True,
+       verbose=True
    )
 
-   # Get ensemble predictions
-   predictions = ensemble.predict(return_df=True)
+   # Get ensemble predictions with uncertainty
+   predictions = locator.predict_ensemble(
+       genotypes=genotypes,
+       samples=samples,
+       return_std=True  # Include prediction uncertainty
+   )
+
+For parallel ensemble training across multiple GPUs:
+
+.. code-block:: python
+
+   from locator.parallel import parallel_train_ensemble
+
+   # Train across 4 GPUs
+   result = parallel_train_ensemble(
+       locator=locator,
+       genotypes=genotypes,
+       samples=samples,
+       k=5,
+       gpu_ids=[0, 1, 2, 3]
+   )
+
+See :doc:`ensemble_guide` for comprehensive ensemble documentation.
 
 Windowed Analysis
 -----------------
