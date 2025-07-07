@@ -37,13 +37,6 @@ EnsembleMixin
    :members:
    :show-inheritance:
 
-   Key methods for ensemble training and prediction:
-
-   .. automethod:: train_ensemble
-   .. automethod:: predict_ensemble
-   .. automethod:: load_ensemble
-   .. automethod:: predict_ensemble_from_manager
-
 .. module:: locator.ensemble_model_manager
 
 EnsembleModelManager
@@ -56,31 +49,36 @@ EnsembleModelManager
 
 Parallel Ensemble Training
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
-.. module:: locator.parallel.parallel_analysis
 
-.. autofunction:: parallel_train_ensemble
+The parallel ensemble training function is available when Ray is installed:
 
-   Train ensemble models in parallel across multiple GPUs.
+.. code-block:: python
 
-   Args:
-       locator: Locator instance with configuration
-       genotypes: GenotypeArray containing genetic data
-       samples: Array of sample IDs
-       k: Number of folds/models in ensemble (default: 5)
-       gpu_ids: List of GPU IDs to use (default: [0, 1])
-       gpu_fraction: Fraction of GPU memory per worker (default: 1.0)
-       training_set_indices: Optional indices to restrict training
-       na_action: How to handle NA samples ('separate', 'exclude', 'fail')
-       augment_data: Whether to apply data augmentation
-       flip_rate: Rate for genotype flipping augmentation
-       save_fold_models: Whether to save individual fold models
-       use_model_manager: Whether to use model manager for storage
-       use_mixed_precision: Whether to use mixed precision training
-       patience_multiplier: Multiply patience for ensemble training
-       verbose: Whether to show training progress
+   from locator.parallel import parallel_train_ensemble
 
-   Returns:
-       dict: Contains histories, models, normalization_params, fold_info
+.. function:: parallel_train_ensemble(locator, genotypes, samples, k=5, gpu_ids=[0, 1], gpu_fraction=1.0, training_set_indices=None, na_action=None, augment_data=False, flip_rate=0.05, save_fold_models=True, use_model_manager=True, use_mixed_precision=None, patience_multiplier=1.0, verbose=True)
+
+   Train ensemble models in parallel across multiple GPUs using Ray.
+
+   :param locator: Locator instance with configuration
+   :param genotypes: GenotypeArray containing genetic data
+   :param samples: Array of sample IDs
+   :param k: Number of folds/models in ensemble (default: 5)
+   :param gpu_ids: List of GPU IDs to use (default: [0, 1])
+   :param gpu_fraction: Fraction of GPU memory per worker (default: 1.0)
+   :param training_set_indices: Optional indices to restrict training
+   :param na_action: How to handle NA samples ('separate', 'exclude', 'fail')
+   :param augment_data: Whether to apply data augmentation
+   :param flip_rate: Rate for genotype flipping augmentation
+   :param save_fold_models: Whether to save individual fold models
+   :param use_model_manager: Whether to use model manager for storage
+   :param use_mixed_precision: Whether to use mixed precision training
+   :param patience_multiplier: Multiply patience for ensemble training
+   :param verbose: Whether to show training progress
+   :returns: dict containing histories, models, normalization_params, fold_info
+
+   .. note::
+      This function requires Ray to be installed. Install with ``pip install locator[parallel]``.
 
 
 
