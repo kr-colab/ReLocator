@@ -40,6 +40,8 @@ setup(
     extras_require={
         "dev": [
             "pytest",
+            "pytest-cov",  # Coverage reporting
+            "pytest-xdist",  # Parallel test execution
             "black",  # Code formatting
             "flake8",  # Code linting
             "isort",  # Import sorting

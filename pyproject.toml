@@ -11,10 +11,6 @@ addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
-    "--cov=locator",
-    "--cov-branch",
-    "--cov-report=term-missing:skip-covered",
-    "--cov-fail-under=0",  # Set to desired minimum coverage
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
