@@ -214,7 +214,7 @@ Analysis Module
 
 Parallel Analysis Module
 ------------------------
-.. module:: locator.parallel.parallel_analysis
+.. module:: locator.parallel
 
 This module provides Ray-based parallel implementations of analysis methods for multi-GPU execution.
 
