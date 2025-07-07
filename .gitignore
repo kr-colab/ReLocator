@@ -64,3 +64,4 @@ CLAUDE.*
 # OS specific
 .DS_Store
 Thumbs.db
+example/demo_output/
