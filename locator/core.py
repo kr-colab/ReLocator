@@ -1,5 +1,6 @@
 """Core functionality for locator - Refactored version"""
 
+import os
 import warnings
 
 import numpy as np
@@ -326,6 +327,14 @@ class Locator(
         # Store na_action as instance attribute for convenience
         self.na_action = self.config["na_action"]
 
+        # Initialize sample exclusion attributes
+        self._excluded_sample_ids = set()  # Set of excluded sample IDs
+        self._exclusion_source = {}  # Track why each sample was excluded
+
+        # Handle exclude_samples parameter if provided
+        if "exclude_samples" in self.config:
+            self._load_excluded_samples(self.config["exclude_samples"])
+
         # Setup GPU if not explicitly disabled
         if not self.config.get("disable_gpu", False):
             gpu_number = self.config.get("gpu_number")
@@ -389,6 +398,52 @@ class Locator(
 
             if self.config.get("keras_verbose", 1) >= 1:
                 print("TensorFlow threading optimized to reduce process forking")
+
+    def _load_excluded_samples(self, exclude_source):
+        """Load excluded samples from file or list.
+
+        Args:
+            exclude_source: Can be:
+                - str: Path to text file with one sample ID per line
+                - list: List of sample IDs to exclude
+                - set: Set of sample IDs to exclude
+
+        File Format:
+            - One sample ID per line
+            - Lines starting with # are treated as comments
+            - Empty lines are ignored
+
+        Example file content:
+            # Outlier samples identified in QC
+            sample_001
+            sample_005
+
+            # Low quality samples
+            sample_023
+            sample_045
+        """
+        if isinstance(exclude_source, str):
+            # Load from file
+            if not os.path.exists(exclude_source):
+                raise FileNotFoundError(f"Exclusion file not found: {exclude_source}")
+
+            with open(exclude_source, "r") as f:
+                for line in f:
+                    sample_id = line.strip()
+                    if sample_id and not sample_id.startswith("#"):  # Allow comments
+                        self._excluded_sample_ids.add(sample_id)
+                        self._exclusion_source[sample_id] = f"file:{exclude_source}"
+
+        elif isinstance(exclude_source, (list, set)):
+            # Load from collection
+            for sample_id in exclude_source:
+                self._excluded_sample_ids.add(str(sample_id))
+                self._exclusion_source[str(sample_id)] = "config"
+        else:
+            raise ValueError(f"Invalid exclude_samples type: {type(exclude_source)}")
+
+        if self.config.get("verbose", 0) > 0:
+            print(f"Loaded {len(self._excluded_sample_ids)} samples for exclusion")
 
     @property
     def sample_data(self) -> pd.DataFrame:
@@ -463,19 +518,52 @@ class Locator(
         known_idx = np.where(known_mask)[0]
         na_idx = np.where(~known_mask)[0]
 
-        # Get sample IDs for each group
-        known_samples = samples[known_idx] if len(known_idx) > 0 else np.array([])
-        na_samples = samples[na_idx] if len(na_idx) > 0 else np.array([])
+        # Get sample IDs for each group - use sample_data since it's already filtered
+        sample_ids_in_data = sample_data["sampleID"].values
+        known_samples = (
+            sample_ids_in_data[known_idx] if len(known_idx) > 0 else np.array([])
+        )
+        na_samples = sample_ids_in_data[na_idx] if len(na_idx) > 0 else np.array([])
 
-        return {
+        # Add exclusion information
+        status = {
             "known_indices": known_idx,
             "na_indices": na_idx,
             "known_samples": known_samples,
             "na_samples": na_samples,
             "n_known": len(known_idx),
             "n_na": len(na_idx),
-            "total": len(samples),
+            "total": len(samples),  # Original sample count
+            "n_excluded": len(self._excluded_sample_ids),
         }
+
+        # Calculate excluded samples that had coordinates
+        if self._excluded_sample_ids:
+            # Check exclusions against original samples array
+            excluded_in_original = np.isin(samples, list(self._excluded_sample_ids))
+
+            # For excluded samples, check if they would have had coordinates
+            n_excluded_with_coords = 0
+            for i, sample_id in enumerate(samples):
+                if excluded_in_original[i] and sample_id in self._excluded_sample_ids:
+                    # Check if this sample exists in the original data with coordinates
+                    if hasattr(self, "_sample_data_df"):
+                        sample_row = self._sample_data_df[
+                            self._sample_data_df["sampleID"] == sample_id
+                        ]
+                        if (
+                            not sample_row.empty
+                            and not sample_row[["x", "y"]].isna().any(axis=1).iloc[0]
+                        ):
+                            n_excluded_with_coords += 1
+
+            status["n_excluded_with_coords"] = n_excluded_with_coords
+            status["n_available"] = status["n_known"]  # Known samples after exclusion
+        else:
+            status["n_excluded_with_coords"] = 0
+            status["n_available"] = status["n_known"]
+
+        return status
 
     def check_data(self, genotypes, samples, verbose=True):
         """
@@ -517,46 +605,218 @@ class Locator(
         # Get sample status
         status = self.get_sample_status(samples)
 
-        if verbose:
-            print("Data Summary")
-            print("=" * 50)
-            print(f"Total samples: {status['total']}")
-            print(f"Samples with coordinates: {status['n_known']}")
-            print(f"Samples without coordinates: {status['n_na']}")
+        if not verbose:
+            return status
 
-            # Report SNP count
-            if hasattr(genotypes, "shape"):
-                n_snps = genotypes.shape[0]
-                print(f"Total SNPs: {n_snps}")
+        # Print basic summary
+        self._print_data_summary(status)
 
-            # Report NA handling mode
-            print(f"\nCurrent NA handling mode: {self.na_action}")
-            if self.na_action == "separate":
-                print("- Will train on samples with known locations")
-                print("- Can predict on samples without locations")
-            elif self.na_action == "exclude":
-                print("- Will only use samples with known locations")
-                print("- Samples without locations will be excluded from all analyses")
-            elif self.na_action == "fail":
-                print("- Will raise an error if any samples lack coordinates")
+        # Report exclusions if any
+        if status["n_excluded"] > 0:
+            self._print_exclusion_summary(status)
 
-            # Show samples without coordinates
-            if status["n_na"] > 0:
-                print("\nSamples without coordinates (first 10):")
-                for i, sample_id in enumerate(status["na_samples"][:10]):
-                    print(f"  - {sample_id}")
-                if status["n_na"] > 10:
-                    print(f"  ... and {status['n_na'] - 10} more")
+        # Report SNP count
+        if hasattr(genotypes, "shape"):
+            print(f"Total SNPs: {genotypes.shape[0]}")
 
-                # Provide guidance based on na_action
-                if self.na_action == "fail":
-                    print(
-                        "\n⚠️  WARNING: Your current na_action='fail' setting will cause"
-                    )
-                    print("   methods to fail with these NA samples. Consider using")
-                    print("   na_action='separate' or 'exclude' instead.")
+        # Report NA handling mode
+        self._print_na_handling_mode()
+
+        # Show samples without coordinates
+        if status["n_na"] > 0:
+            self._print_na_samples(status)
 
         return status
+
+    def _print_data_summary(self, status):
+        """Print basic data summary."""
+        print("Data Summary")
+        print("=" * 50)
+        print(f"Total samples: {status['total']}")
+        print(f"Samples with coordinates: {status['n_known']}")
+        print(f"Samples without coordinates: {status['n_na']}")
+
+    def _print_exclusion_summary(self, status):
+        """Print exclusion summary."""
+        print(f"Excluded samples: {status['n_excluded']}")
+        print(
+            f"  - Excluded samples with coordinates: {status['n_excluded_with_coords']}"
+        )
+        print(f"Available samples for training: {status['n_available']}")
+
+    def _print_na_handling_mode(self):
+        """Print NA handling mode information."""
+        print(f"\nCurrent NA handling mode: {self.na_action}")
+
+        na_mode_messages = {
+            "separate": [
+                "- Will train on samples with known locations",
+                "- Can predict on samples without locations",
+            ],
+            "exclude": [
+                "- Will only use samples with known locations",
+                "- Samples without locations will be excluded from all analyses",
+            ],
+            "fail": ["- Will raise an error if any samples lack coordinates"],
+        }
+
+        for message in na_mode_messages.get(self.na_action, []):
+            print(message)
+
+    def _print_na_samples(self, status):
+        """Print samples without coordinates."""
+        print("\nSamples without coordinates (first 10):")
+        for i, sample_id in enumerate(status["na_samples"][:10]):
+            print(f"  - {sample_id}")
+        if status["n_na"] > 10:
+            print(f"  ... and {status['n_na'] - 10} more")
+
+        # Provide guidance based on na_action
+        if self.na_action == "fail":
+            print("\n⚠️  WARNING: Your current na_action='fail' setting will cause")
+            print("   methods to fail with these NA samples. Consider using")
+            print("   na_action='separate' or 'exclude' instead.")
+
+    def exclude_samples(self, sample_ids, reason="manual"):
+        """Exclude additional samples from analysis.
+
+        Args:
+            sample_ids: Sample ID or list of sample IDs to exclude
+            reason: String describing why samples were excluded
+
+        Note:
+            This modifies the exclusion list for future operations.
+            Already completed analyses are not affected.
+
+        Example:
+            >>> # Exclude a single sample
+            >>> locator.exclude_samples("sample_001", reason="outlier")
+
+            >>> # Exclude multiple samples
+            >>> locator.exclude_samples(["sample_002", "sample_003"], reason="low_quality")
+        """
+        if isinstance(sample_ids, str):
+            sample_ids = [sample_ids]
+
+        for sample_id in sample_ids:
+            self._excluded_sample_ids.add(str(sample_id))
+            self._exclusion_source[str(sample_id)] = reason
+
+        print(f"Excluded {len(sample_ids)} samples (reason: {reason})")
+        print(f"Total excluded samples: {len(self._excluded_sample_ids)}")
+
+    def include_samples(self, sample_ids):
+        """Remove samples from the exclusion list.
+
+        Args:
+            sample_ids: Sample ID or list of sample IDs to include back
+
+        Returns:
+            int: Number of samples actually removed from exclusion list
+
+        Example:
+            >>> # Include previously excluded samples back
+            >>> n_included = locator.include_samples(["sample_001", "sample_002"])
+            >>> print(f"Included {n_included} samples back into analysis")
+        """
+        if isinstance(sample_ids, str):
+            sample_ids = [sample_ids]
+
+        n_removed = 0
+        for sample_id in sample_ids:
+            if str(sample_id) in self._excluded_sample_ids:
+                self._excluded_sample_ids.remove(str(sample_id))
+                self._exclusion_source.pop(str(sample_id), None)
+                n_removed += 1
+
+        print(f"Removed {n_removed} samples from exclusion list")
+        print(f"Total excluded samples: {len(self._excluded_sample_ids)}")
+        return n_removed
+
+    def get_excluded_samples(self):
+        """Get information about excluded samples.
+
+        Returns:
+            pandas.DataFrame: DataFrame with columns:
+                - sampleID: Excluded sample ID
+                - reason: Reason for exclusion
+
+        Example:
+            >>> # View all excluded samples
+            >>> excluded_df = locator.get_excluded_samples()
+            >>> print(excluded_df)
+                 sampleID        reason
+            0  sample_001      outlier
+            1  sample_002   low_quality
+            2  sample_003   low_quality
+        """
+        if not self._excluded_sample_ids:
+            return pd.DataFrame(columns=["sampleID", "reason"])
+
+        data = []
+        for sample_id in sorted(self._excluded_sample_ids):
+            data.append(
+                {
+                    "sampleID": sample_id,
+                    "reason": self._exclusion_source.get(sample_id, "unknown"),
+                }
+            )
+
+        return pd.DataFrame(data)
+
+    def clear_exclusions(self):
+        """Remove all sample exclusions.
+
+        Example:
+            >>> # Clear all exclusions and start fresh
+            >>> locator.clear_exclusions()
+            Cleared 3 sample exclusions
+        """
+        n_cleared = len(self._excluded_sample_ids)
+        self._excluded_sample_ids.clear()
+        self._exclusion_source.clear()
+        print(f"Cleared {n_cleared} sample exclusions")
+
+    def exclude_samples_by_condition(
+        self, condition_func, sample_df=None, reason="condition"
+    ):
+        """Exclude samples based on a condition function.
+
+        Args:
+            condition_func: Function that takes a DataFrame and returns boolean Series
+                           True values indicate samples to exclude
+            sample_df: DataFrame to evaluate. If None, uses self.sample_data
+            reason: Reason string for exclusion tracking
+
+        Example:
+            >>> # Exclude samples with high prediction error
+            >>> locator.exclude_samples_by_condition(
+            ...     lambda df: df['error'] > 100,
+            ...     sample_df=error_results,
+            ...     reason="high_error"
+            ... )
+            Excluded 5 samples (reason: high_error)
+            Total excluded samples: 5
+
+            >>> # Exclude samples with low genotype rate
+            >>> locator.exclude_samples_by_condition(
+            ...     lambda df: df['genotype_rate'] < 0.8,
+            ...     reason="low_genotype_rate"
+            ... )
+        """
+        if sample_df is None:
+            if not hasattr(self, "sample_data"):
+                raise ValueError("No sample data available. Load data first.")
+            sample_df = self.sample_data
+
+        # Apply condition
+        mask = condition_func(sample_df)
+        samples_to_exclude = sample_df.loc[mask, "sampleID"].tolist()
+
+        if samples_to_exclude:
+            self.exclude_samples(samples_to_exclude, reason=reason)
+        else:
+            print("No samples matched the exclusion condition")
 
 
 # Import EnsembleLocator from ensemble.py

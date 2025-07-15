@@ -265,6 +265,23 @@ def parallel_k_fold_holdouts(  # noqa: C901
             raise ValueError("sample_data file path must be provided in config")
         sample_data, locs = locator.sort_samples(samples, sample_data_path)
 
+    # Update samples array to match filtered data (after exclusions)
+    # sort_samples may have excluded samples, so we need to use the filtered sample IDs
+    filtered_samples = sample_data["sampleID"].values
+
+    # If samples were excluded, we need to filter genotypes to match
+    if len(filtered_samples) < len(samples):
+        # Find indices of samples that remain after exclusion
+        samples_list = samples.tolist() if hasattr(samples, "tolist") else list(samples)
+        keep_indices = [
+            i
+            for i, s in enumerate(samples_list)
+            if str(s) in set(str(fs) for fs in filtered_samples)
+        ]
+        genotypes = genotypes[:, keep_indices]
+
+    samples = np.array(filtered_samples)
+
     # Create NA mask
     na_mask = np.isnan(locs[:, 0])
     n_total_samples = len(locs)
@@ -728,6 +745,23 @@ def parallel_holdouts(  # noqa: C901
         if not sample_data_path:
             raise ValueError("sample_data file path must be provided in config")
         sample_data, locs = locator.sort_samples(samples, sample_data_path)
+
+    # Update samples array to match filtered data (after exclusions)
+    # sort_samples may have excluded samples, so we need to use the filtered sample IDs
+    filtered_samples = sample_data["sampleID"].values
+
+    # If samples were excluded, we need to filter genotypes to match
+    if len(filtered_samples) < len(samples):
+        # Find indices of samples that remain after exclusion
+        samples_list = samples.tolist() if hasattr(samples, "tolist") else list(samples)
+        keep_indices = [
+            i
+            for i, s in enumerate(samples_list)
+            if str(s) in set(str(fs) for fs in filtered_samples)
+        ]
+        genotypes = genotypes[:, keep_indices]
+
+    samples = np.array(filtered_samples)
 
     # Get indices of samples with known locations (optimized)
     # Use boolean indexing instead of argwhere for efficiency
@@ -1335,6 +1369,25 @@ def parallel_windows_holdouts(  # noqa: C901
                     raise ValueError("sample_data file path must be provided in config")
                 sample_data, locs = locator.sort_samples(samples, sample_data_path)
 
+            # Update samples array to match filtered data (after exclusions)
+            # sort_samples may have excluded samples, so we need to use the filtered sample IDs
+            filtered_samples = sample_data["sampleID"].values
+
+            # If samples were excluded, we need to filter genotypes to match
+            if len(filtered_samples) < len(samples):
+                # Find indices of samples that remain after exclusion
+                samples_list = (
+                    samples.tolist() if hasattr(samples, "tolist") else list(samples)
+                )
+                keep_indices = [
+                    i
+                    for i, s in enumerate(samples_list)
+                    if str(s) in set(str(fs) for fs in filtered_samples)
+                ]
+                genotypes = genotypes[:, keep_indices]
+
+            samples = np.array(filtered_samples)
+
             # Get training locations (exclude holdout samples) - optimized
             # Avoid creating intermediate arrays
             train_mask = np.ones(len(samples), dtype=bool)
@@ -1379,6 +1432,23 @@ def parallel_windows_holdouts(  # noqa: C901
         if not sample_data_path:
             raise ValueError("sample_data file path must be provided in config")
         sample_data, locs = locator.sort_samples(samples, sample_data_path)
+
+    # Update samples array to match filtered data (after exclusions)
+    # sort_samples may have excluded samples, so we need to use the filtered sample IDs
+    filtered_samples = sample_data["sampleID"].values
+
+    # If samples were excluded, we need to filter genotypes to match
+    if len(filtered_samples) < len(samples):
+        # Find indices of samples that remain after exclusion
+        samples_list = samples.tolist() if hasattr(samples, "tolist") else list(samples)
+        keep_indices = [
+            i
+            for i, s in enumerate(samples_list)
+            if str(s) in set(str(fs) for fs in filtered_samples)
+        ]
+        genotypes = genotypes[:, keep_indices]
+
+    samples = np.array(filtered_samples)
 
     # Normalize locations once
     from locator.data.filters import normalize_locs
@@ -1740,7 +1810,26 @@ def parallel_train_ensemble(  # noqa: C901
     filtered_genotypes = locator._filter_genotypes(genotypes)
 
     # Get locations once
-    _, locs = locator.sort_samples(samples)
+    sample_data, locs = locator.sort_samples(samples)
+
+    # Update samples array to match filtered data (after exclusions)
+    # sort_samples may have excluded samples, so we need to use the filtered sample IDs
+    filtered_samples = sample_data["sampleID"].values
+
+    # If samples were excluded, we need to filter genotypes to match
+    if len(filtered_samples) < len(samples):
+        # Find indices of samples that remain after exclusion
+        samples_list = samples.tolist() if hasattr(samples, "tolist") else list(samples)
+        keep_indices = [
+            i
+            for i, s in enumerate(samples_list)
+            if str(s) in set(str(fs) for fs in filtered_samples)
+        ]
+        genotypes = genotypes[:, keep_indices]
+        # Also need to update filtered_genotypes
+        filtered_genotypes = filtered_genotypes[:, keep_indices]
+
+    samples = np.array(filtered_samples)
 
     # Configure augmentation if requested
     augment_config = None

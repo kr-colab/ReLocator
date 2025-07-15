@@ -55,6 +55,27 @@ Locator now provides consistent handling of samples without geographic coordinat
 
 See the [documentation](https://relocator.readthedocs.io/en/latest/na_handling_guide.html) for detailed information.
 
+## Excluding Samples
+
+Locator supports excluding specific samples from analysis. This is useful for removing outliers, low-quality samples, or samples with known issues:
+
+- **From file**: Create a text file with one sample ID per line (lines starting with # are treated as comments)
+- **From list**: Provide sample IDs directly in your code
+- **Interactively**: Exclude samples based on analysis results or custom conditions
+
+```python
+# Exclude samples from file
+locator = Locator({"exclude_samples": "outliers.txt"})
+
+# Exclude samples from list
+locator = Locator({"exclude_samples": ["sample1", "sample2"]})
+
+# Interactive exclusion
+locator.exclude_samples(["outlier1"], reason="high_error")
+locator.exclude_samples_by_condition(lambda df: df['error'] > 100)
+```
+
+Excluded samples are completely removed from all analyses while maintaining an audit trail of exclusions.
 
 # Examples
 

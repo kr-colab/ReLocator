@@ -15,6 +15,7 @@ Locator is a deep learning-based tool for predicting geographic coordinates from
    parallel_analysis_guide
    plotting_guide
    na_handling_guide
+   sample_exclusion_guide
    api
    examples
    contributing
@@ -30,6 +31,7 @@ Quick Links
 * :doc:`parallel_analysis_guide` - Multi-GPU parallel analysis guide
 * :doc:`plotting_guide` - Visualization and plotting guide
 * :doc:`na_handling_guide` - Guide for handling missing coordinates
+* :doc:`sample_exclusion_guide` - Guide for excluding samples from analysis
 * :doc:`api` - Complete API reference
 * :doc:`examples` - Example workflows
 * :doc:`contributing` - Contribution guidelines
@@ -45,6 +47,7 @@ Key Features
 * Custom loss functions for geographic constraints
 * Species range mask integration
 * Consistent handling of missing coordinates
+* Flexible sample exclusion for quality control
 * Efficient batch processing with tf.data pipeline
 * Built-in data augmentation
 * TensorFlow/Keras implementation

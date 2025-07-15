@@ -82,6 +82,41 @@ Evaluate model performance by holding out samples:
        plot_summary=True
    )
 
+Sample Exclusion
+----------------
+Exclude specific samples from analysis (e.g., outliers, low-quality samples):
+
+.. code-block:: python
+
+   # Initialize with exclusion list from file
+   locator = Locator({
+       "exclude_samples": "outliers.txt",  # One sample ID per line
+       "sample_data": "samples.txt"
+   })
+
+   # Or exclude from a list
+   locator = Locator({
+       "exclude_samples": ["sample001", "sample002"],
+       "sample_data": "samples.txt"
+   })
+
+   # Interactive exclusion after analysis
+   locator.exclude_samples(["outlier1", "outlier2"], reason="high_error")
+
+   # Exclude based on prediction error
+   locator.exclude_samples_by_condition(
+       lambda df: df['error'] > 100,
+       sample_df=error_results,
+       reason="prediction_error"
+   )
+
+   # View and manage exclusions
+   excluded_df = locator.get_excluded_samples()
+   locator.include_samples(["outlier1"])  # Include back
+   locator.clear_exclusions()  # Clear all
+
+See :doc:`sample_exclusion_guide` for detailed documentation.
+
 Ensemble Models
 ---------------
 Use k-fold cross-validation to train ensemble models for improved predictions:

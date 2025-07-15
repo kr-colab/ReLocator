@@ -557,6 +557,31 @@ class PredictionMixin:
                     "Set reorder=True to automatically reorder metadata to match genotype order."
                 )
 
+        # Apply sample exclusion
+        if hasattr(self, "_excluded_sample_ids") and self._excluded_sample_ids:
+
+            # Mark excluded samples
+            sample_data["_excluded"] = sample_data["sampleID"].isin(
+                self._excluded_sample_ids
+            )
+
+            # Report on exclusions
+            n_excluded = sample_data["_excluded"].sum()
+            if n_excluded > 0 and self.config.get("verbose", 0) > 0:
+                print(f"\nExcluding {n_excluded} samples from analysis")
+
+                # Warn about non-existent exclusions
+                excluded_in_data = set(sample_data[sample_data["_excluded"]]["sampleID"])
+                not_found = self._excluded_sample_ids - excluded_in_data
+                if not_found:
+                    print(
+                        f"Warning: {len(not_found)} excluded samples not found in data: {list(not_found)[:5]}..."
+                    )
+
+            # Remove excluded samples
+            sample_data = sample_data[~sample_data["_excluded"]].copy()
+            sample_data = sample_data.drop("_excluded", axis=1)
+
         # Extract location data
         locs = np.array(sample_data[["x", "y"]])
 
@@ -618,6 +643,7 @@ class PredictionMixin:
 
         # Create output dataframe
         pred_df = pd.DataFrame(predictions, columns=["x", "y"])
+        # self.samples should already be filtered after train_holdout
         pred_df["sampleID"] = self.samples[self.holdout_idx]
 
         # Denormalize predictions

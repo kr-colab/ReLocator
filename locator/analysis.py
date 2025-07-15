@@ -654,6 +654,11 @@ class AnalysisMixin:
                 raise ValueError("sample_data file path must be provided in config")
             sample_data, locs = self.sort_samples(samples, sample_data_path)
 
+        # Update samples array to match filtered data (after exclusions)
+        # sort_samples may have excluded samples, so we need to use the filtered sample IDs
+        filtered_samples = sample_data["sampleID"].values
+        samples = np.array(filtered_samples)
+
         # Get indices of samples with known locations
         known_idx = np.argwhere(~np.isnan(locs[:, 0]))
         known_idx = np.array([x[0] for x in known_idx])
@@ -1208,6 +1213,25 @@ class AnalysisMixin:
                         )
                     sample_data, locs = self.sort_samples(samples, sample_data_path)
 
+                # Update samples array to match filtered data (after exclusions)
+                # sort_samples may have excluded samples, so we need to use the filtered sample IDs
+                filtered_samples = sample_data["sampleID"].values
+
+                # If samples were excluded, we need to filter genotypes to match
+                if len(filtered_samples) < len(samples):
+                    # Find indices of samples that remain after exclusion
+                    samples_list = (
+                        samples.tolist() if hasattr(samples, "tolist") else list(samples)
+                    )
+                    keep_indices = [
+                        i
+                        for i, s in enumerate(samples_list)
+                        if str(s) in set(str(fs) for fs in filtered_samples)
+                    ]
+                    genotypes = genotypes[:, keep_indices]
+
+                samples = np.array(filtered_samples)
+
                 # Get training locations (exclude holdout samples)
                 train_mask = np.ones(len(samples), dtype=bool)
                 train_mask[index_set.test] = False
@@ -1245,12 +1269,17 @@ class AnalysisMixin:
 
         # Pre-normalize locations for efficiency
         if hasattr(self, "_sample_data_df"):
-            _, locs = self.sort_samples(samples)
+            sample_data, locs = self.sort_samples(samples)
         else:
             sample_data_path = self.config.get("sample_data")
             if not sample_data_path:
                 raise ValueError("sample_data file path must be provided in config")
-            _, locs = self.sort_samples(samples, sample_data_path)
+            sample_data, locs = self.sort_samples(samples, sample_data_path)
+
+        # Update samples array to match filtered data (after exclusions)
+        # sort_samples may have excluded samples, so we need to use the filtered sample IDs
+        filtered_samples = sample_data["sampleID"].values
+        samples = np.array(filtered_samples)
 
         # Normalize locations once
         (
@@ -1484,6 +1513,11 @@ class AnalysisMixin:
             if not sample_data_path:
                 raise ValueError("sample_data file path must be provided in config")
             sample_data, locs = self.sort_samples(samples, sample_data_path)
+
+        # Update samples array to match filtered data (after exclusions)
+        # sort_samples may have excluded samples, so we need to use the filtered sample IDs
+        filtered_samples = sample_data["sampleID"].values
+        samples = np.array(filtered_samples)
 
         # Create NA mask
         na_mask = np.isnan(locs[:, 0])

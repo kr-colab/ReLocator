@@ -48,10 +48,21 @@ class TrainingMixin:
         na_mask = np.isnan(locations[:, 0])
         n_samples = len(locations)
 
+        # Create exclusion mask if samples are excluded
+        exclusion_mask = np.zeros(n_samples, dtype=bool)
+        if hasattr(self, "_excluded_sample_ids") and self._excluded_sample_ids:
+            # Find indices of excluded samples
+            for i, sample_id in enumerate(self.samples):
+                if sample_id in self._excluded_sample_ids:
+                    exclusion_mask[i] = True
+
+        # Combine masks - excluded samples are treated like NA samples
+        effective_na_mask = na_mask | exclusion_mask
+
         # Create IndexSet with custom splits for train/test
         splits = {"train": train_split, "test": 1.0 - train_split}
         index_set = IndexSet.random_split(
-            n=n_samples, splits=splits, na_mask=na_mask, na_action=na_action
+            n=n_samples, splits=splits, na_mask=effective_na_mask, na_action=na_action
         )
 
         # Get indices
@@ -204,8 +215,7 @@ class TrainingMixin:
             ...     test_locs=boot_test_locs
             ... )
         """
-        # Store samples and site_order
-        self.samples = samples
+        # Store site_order
         self.site_order = site_order
 
         # Use instance default if na_action not specified
@@ -242,6 +252,24 @@ class TrainingMixin:
                     "when not using DataFrame input"
                 )
             sample_data, locs = self.sort_samples(samples, sample_data_file)
+
+        # Store filtered samples (after exclusions)
+        self.samples = np.array(sample_data["sampleID"].values)
+
+        # Check if genotypes need to be filtered to match sample_data
+        if genotypes is not None and genotypes.shape[1] > len(self.samples):
+            # Find which genotype columns correspond to the filtered samples
+            # This handles the case where sort_samples excluded some samples
+            original_samples = samples if isinstance(samples, list) else samples.tolist()
+            filtered_sample_set = set(str(s) for s in self.samples)
+            keep_indices = [
+                i
+                for i, s in enumerate(original_samples)
+                if str(s) in filtered_sample_set
+            ]
+            genotypes = genotypes[:, keep_indices]
+            # Also update the samples array to match
+            samples = self.samples
 
         # Apply 'exclude' mode if needed
         if na_action == "exclude" and status["n_na"] > 0:
@@ -463,17 +491,30 @@ class TrainingMixin:
         Returns:
             keras.callbacks.History object from model training
         """
-        # Store samples
-        self.samples = samples
-
         # Get sample data and locations
         if hasattr(self, "_sample_data_df"):
-            _, locs = self.sort_samples(samples)
+            sample_data, locs = self.sort_samples(samples)
         else:
             sample_data_path = self.config.get("sample_data")
             if not sample_data_path:
                 raise ValueError("sample_data file path must be provided in config")
-            _, locs = self.sort_samples(samples, sample_data_path)
+            sample_data, locs = self.sort_samples(samples, sample_data_path)
+
+        # Store filtered samples (after exclusions)
+        self.samples = np.array(sample_data["sampleID"].values)
+
+        # Check if genotypes need to be filtered to match sample_data
+        if genotypes.shape[1] > len(self.samples):
+            # Find which genotype columns correspond to the filtered samples
+            # This handles the case where sort_samples excluded some samples
+            original_samples = samples if isinstance(samples, list) else samples.tolist()
+            filtered_sample_set = set(str(s) for s in self.samples)
+            keep_indices = [
+                i
+                for i, s in enumerate(original_samples)
+                if str(s) in filtered_sample_set
+            ]
+            genotypes = genotypes[:, keep_indices]
 
         # Get indices of samples with known locations
         known_idx = np.where(~np.isnan(locs[:, 0]))[0]
