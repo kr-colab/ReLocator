@@ -18,3 +18,4 @@ per-file-ignores =
     tests/*:F401,F403,E501
     locator/prediction.py:C901
     scripts/locator_phased.py:C901
+    locator/plotting.py:C901
