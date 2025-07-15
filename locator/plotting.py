@@ -10,6 +10,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
+import plotly.subplots as sp
 import seaborn as sns
 from geopy.distance import geodesic
 from scipy.stats import gaussian_kde
@@ -18,6 +20,7 @@ __all__ = [
     "kde_predict",
     "plot_predictions",
     "plot_error_summary",
+    "plot_interactive_error_map",
     "plot_sample_weights",
     "PlottingMixin",
 ]
@@ -309,8 +312,10 @@ def plot_error_summary(  # noqa: C901
     use_geodesic=True,
     include_training_locs=True,
     show=None,
+    return_merged=False,
 ):
-    """Plot summary of prediction errors from holdout analysis.
+    """
+    Plot summary of prediction errors from holdout analysis.
 
     Creates a comprehensive error visualization with two panels:
 
@@ -326,19 +331,17 @@ def plot_error_summary(  # noqa: C901
 
     Args:
         predictions (pandas.DataFrame): DataFrame with columns:
-
             - ``sampleID``: Sample identifiers
             - ``x_pred``: Predicted longitude
             - ``y_pred``: Predicted latitude
 
         sample_data (pandas.DataFrame or str): DataFrame or path to TSV file with columns:
-
             - ``sampleID``: Sample identifiers (must match predictions)
             - ``x``: True longitude
             - ``y``: True latitude
 
         out_prefix (str, optional): Prefix for output files. If provided, saves as
-            {out_prefix}_error_summary.png. Default: None
+            {out_prefix}_error_summary.png (or .html for interactive). Default: None
         plot_map (bool): Whether to plot on a geographic map using cartopy projection.
             If False, uses regular scatter plot. Default: True
         width (float): Figure width in inches. Default: 20
@@ -350,9 +353,12 @@ def plot_error_summary(  # noqa: C901
             and use their extent for map bounds. Default: True
         show (bool or None): Whether to display plot. None=auto-detect environment,
             True=always show, False=never show. Default: None
+        return_merged (bool): If True, return the internal merged DataFrame used for plotting.
+            Default: False
 
     Returns:
-        None: Saves plot to file and optionally displays it
+        None: Saves plot to file and optionally displays it.
+        If return_merged is True, returns the internal merged DataFrame containing prediction errors and true locations.
 
     Raises:
         ValueError: If predictions or sample_data are empty, have missing columns,
@@ -375,6 +381,10 @@ def plot_error_summary(  # noqa: C901
             plot_error_summary(predictions, sample_df,
                              plot_map=False,
                              width=10, height=5)
+
+        Return merged DataFrame::
+
+            merged = plot_error_summary(predictions, sample_df, return_merged=True)
 
     Note:
         - Summary statistics shown: mean, median, max error, R² for x and y
@@ -537,7 +547,7 @@ def plot_error_summary(  # noqa: C901
         f"Median error: {merged['error'].median():.2f} {error_units}\n"
         f"Max error: {merged['error'].max():.2f} {error_units}\n"
         f"R² (x): {np.corrcoef(merged['x_pred'], merged['x_true'])[0,1]**2:.3f}\n"
-        f"R² (y): {np.corrcoef(merged['x_pred'], merged['x_true'])[0,1]**2:.3f}"
+        f"R² (y): {np.corrcoef(merged['y_pred'], merged['y_true'])[0,1]**2:.3f}"
     )
     hist_ax.text(
         0.95,
@@ -556,7 +566,369 @@ def plot_error_summary(  # noqa: C901
 
     _handle_plot_display(show)
     plt.close()
+    if return_merged:
+        return merged
     return None
+
+
+def plot_interactive_error_map(
+    predictions,
+    sample_data,
+    out_prefix=None,
+    width=1200,
+    height=600,
+    use_geodesic=True,
+    include_training_locs=True,
+    show_histogram=True,
+):
+    """Create an interactive map of prediction errors using Plotly.
+
+    This function creates an interactive visualization of prediction errors from
+    holdout analyses, with hover tooltips showing detailed information for each
+    sample. The plot uses Plotly's geographic features to display results on a
+    world map with coastlines and land features.
+
+    Args:
+        predictions (pandas.DataFrame): DataFrame with columns:
+            - ``sampleID``: Sample identifiers
+            - ``x_pred``: Predicted longitude
+            - ``y_pred``: Predicted latitude
+
+        sample_data (pandas.DataFrame or str): DataFrame or path to TSV file with columns:
+            - ``sampleID``: Sample identifiers (must match predictions)
+            - ``x``: True longitude
+            - ``y``: True latitude
+
+        out_prefix (str, optional): Prefix for output files. If provided, saves as
+            {out_prefix}_interactive_error_map.html. Default: None
+
+        width (int): Width of plot in pixels. Default: 1200
+        height (int): Height of plot in pixels. Default: 600
+
+        use_geodesic (bool): If True, calculate geodesic distances in kilometers.
+            If False, use Euclidean distances in coordinate units. Default: True
+
+        include_training_locs (bool): Whether to plot training locations (gray circles).
+            Default: True
+
+        show_histogram (bool): Whether to include error distribution histogram panel.
+            Default: True
+
+    Returns:
+        plotly.graph_objects.Figure: The interactive figure object. Can be displayed
+        directly in Jupyter notebooks with fig.show() or just 'fig' in a cell.
+
+    Examples:
+        Basic usage::
+
+            fig = plot_interactive_error_map(predictions, sample_data)
+            fig.show()  # Display in notebook
+
+        Save to file::
+
+            plot_interactive_error_map(predictions, sample_data,
+                                     out_prefix="analysis")
+
+        Without histogram panel::
+
+            fig = plot_interactive_error_map(predictions, sample_data,
+                                           show_histogram=False)
+    """
+    # Validate and load data
+    if predictions.empty:
+        raise ValueError("Predictions DataFrame cannot be empty")
+
+    # Load sample data
+    if isinstance(sample_data, pd.DataFrame):
+        samples = sample_data.copy()
+    elif isinstance(sample_data, (str, Path)):
+        sample_path = Path(sample_data)
+        if not sample_path.is_file():
+            raise ValueError(f"sample_data file {sample_data} does not exist")
+        samples = pd.read_csv(sample_path, sep="\t")
+    else:
+        raise ValueError("sample_data must be a DataFrame or a valid file path")
+
+    if samples.empty:
+        raise ValueError("Sample data cannot be empty")
+
+    # Validate columns
+    required_pred_cols = ["sampleID", "x_pred", "y_pred"]
+    required_sample_cols = ["sampleID", "x", "y"]
+
+    missing_pred_cols = [
+        col for col in required_pred_cols if col not in predictions.columns
+    ]
+    missing_sample_cols = [
+        col for col in required_sample_cols if col not in samples.columns
+    ]
+
+    if missing_pred_cols:
+        raise ValueError(f"Missing required columns in predictions: {missing_pred_cols}")
+    if missing_sample_cols:
+        raise ValueError(
+            f"Missing required columns in sample data: {missing_sample_cols}"
+        )
+
+    # Rename columns for clarity
+    samples = samples.rename(columns={"x": "x_true", "y": "y_true"})
+
+    # Merge predictions with true locations
+    merged = predictions.merge(samples[["sampleID", "x_true", "y_true"]], on="sampleID")
+    if merged.empty:
+        raise ValueError("No matching samples found between predictions and sample data")
+
+    # Calculate errors
+    if use_geodesic:
+        merged["error"] = merged.apply(
+            lambda row: geodesic(
+                (row["y_true"], row["x_true"]), (row["y_pred"], row["x_pred"])
+            ).kilometers,
+            axis=1,
+        )
+        error_units = "km"
+    else:
+        merged["error"] = np.sqrt(
+            (merged["x_pred"] - merged["x_true"]) ** 2
+            + (merged["y_pred"] - merged["y_true"]) ** 2
+        )
+        error_units = "coordinate units"
+
+    # Create subplots
+    if show_histogram:
+        # Two-panel layout with map and histogram
+        fig = sp.make_subplots(
+            rows=1,
+            cols=2,
+            column_widths=[0.7, 0.3],
+            subplot_titles=("", "Error Distribution"),
+            horizontal_spacing=0.05,
+            specs=[[{"type": "geo"}, {"type": "xy"}]],
+        )
+    else:
+        # Single geo panel
+        fig = go.Figure()
+
+    # Determine bounds for the plot
+    if include_training_locs:
+        x_min, x_max = samples["x_true"].min(), samples["x_true"].max()
+        y_min, y_max = samples["y_true"].min(), samples["y_true"].max()
+    else:
+        x_min, x_max = merged["x_true"].min(), merged["x_true"].max()
+        y_min, y_max = merged["y_true"].min(), merged["y_true"].max()
+
+    padding = 0.1
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    x_min_padded = x_min - x_range * padding
+    x_max_padded = x_max + x_range * padding
+    y_min_padded = y_min - y_range * padding
+    y_max_padded = y_max + y_range * padding
+
+    # We'll configure geographic features in the layout section
+
+    # First, add training locations if requested
+    if include_training_locs:
+        training_mask = ~samples["sampleID"].isin(predictions["sampleID"])
+        training_locs = samples[training_mask]
+        if not training_locs.empty:
+            trace = go.Scattergeo(
+                lon=training_locs["x_true"],
+                lat=training_locs["y_true"],
+                mode="markers",
+                marker=dict(
+                    size=4,
+                    color="rgba(128, 128, 128, 0.5)",  # Gray with alpha
+                    symbol="circle-open",
+                    line=dict(width=0.5, color="gray"),
+                ),
+                name="Training locations",
+                hoverinfo="skip",
+                showlegend=True,
+            )
+            if show_histogram:
+                fig.add_trace(trace, row=1, col=1)
+            else:
+                fig.add_trace(trace)
+
+    # Add lines connecting true and predicted locations
+    for idx, row in merged.iterrows():
+        trace = go.Scattergeo(
+            lon=[row["x_true"], row["x_pred"], None],
+            lat=[row["y_true"], row["y_pred"], None],
+            mode="lines",
+            line=dict(color="black", width=1),
+            opacity=0.3,
+            showlegend=False,
+            hoverinfo="skip",
+        )
+        if show_histogram:
+            fig.add_trace(trace, row=1, col=1)
+        else:
+            fig.add_trace(trace)
+
+    # Add scatter plot of true locations colored by error
+    hover_text = merged.apply(
+        lambda row: f"Sample: {row['sampleID']}<br>"
+        f"Error: {row['error']:.2f} {error_units}<br>"
+        f"True: ({row['x_true']:.2f}, {row['y_true']:.2f})<br>"
+        f"Predicted: ({row['x_pred']:.2f}, {row['y_pred']:.2f})",
+        axis=1,
+    )
+
+    trace = go.Scattergeo(
+        lon=merged["x_true"],
+        lat=merged["y_true"],
+        mode="markers",
+        marker=dict(
+            size=8,
+            color=merged["error"],
+            colorscale="RdYlBu_r",
+            showscale=True,
+            colorbar=dict(
+                title=f"Error ({error_units})",
+                x=1.02,
+                xanchor="left",
+                len=0.8,
+                thickness=15,
+                yanchor="middle",
+                y=0.5,
+            ),
+            line=dict(width=0.5, color="rgba(255,255,255,0.8)"),  # White outline
+        ),
+        text=hover_text,
+        hoverinfo="text",
+        name="Test locations",
+        showlegend=True,
+    )
+    if show_histogram:
+        fig.add_trace(trace, row=1, col=1)
+    else:
+        fig.add_trace(trace)
+
+    # Add histogram if requested
+    if show_histogram:
+        fig.add_trace(
+            go.Histogram(
+                x=merged["error"],
+                name="Error distribution",
+                showlegend=False,
+                marker=dict(color="steelblue", line=dict(color="white", width=1)),
+                opacity=0.8,
+            ),
+            row=1,
+            col=2,
+        )
+
+    # Calculate statistics
+    mean_error = merged["error"].mean()
+    median_error = merged["error"].median()
+    max_error = merged["error"].max()
+    r2_x = np.corrcoef(merged["x_pred"], merged["x_true"])[0, 1] ** 2
+    r2_y = np.corrcoef(merged["y_pred"], merged["y_true"])[0, 1] ** 2
+
+    # Add statistics annotation
+    stats_text = (
+        f"Mean: {mean_error:.2f} {error_units}<br>"
+        f"Median: {median_error:.2f} {error_units}<br>"
+        f"Max: {max_error:.2f} {error_units}<br>"
+        f"R² (x): {r2_x:.3f}<br>"
+        f"R² (y): {r2_y:.3f}"
+    )
+
+    # Add statistics annotation
+    if show_histogram:
+        fig.add_annotation(
+            x=0.98,
+            y=0.98,
+            xref="x2 domain",
+            yref="y2 domain",
+            text=stats_text,
+            showarrow=False,
+            bgcolor="rgba(255, 255, 255, 0.9)",
+            bordercolor="rgba(0, 0, 0, 0.2)",
+            borderwidth=1,
+            font=dict(size=11, family="monospace"),
+            align="left",
+            xanchor="right",
+            yanchor="top",
+        )
+    else:
+        # Place stats on the map
+        fig.add_annotation(
+            x=0.02,
+            y=0.98,
+            xref="paper",
+            yref="paper",
+            text=stats_text,
+            showarrow=False,
+            bgcolor="rgba(255, 255, 255, 0.9)",
+            bordercolor="rgba(0, 0, 0, 0.2)",
+            borderwidth=1,
+            font=dict(size=11, family="monospace"),
+            align="left",
+            xanchor="left",
+            yanchor="top",
+        )
+
+    # Configure geo subplot
+    fig.update_geos(
+        projection_type="natural earth",
+        showland=True,
+        landcolor="rgb(243, 243, 243)",
+        coastlinecolor="rgb(204, 204, 204)",
+        coastlinewidth=0.5,
+        showlakes=True,
+        lakecolor="white",
+        showocean=True,
+        oceancolor="rgb(230, 245, 255)",
+        lataxis=dict(range=[y_min_padded, y_max_padded]),
+        lonaxis=dict(range=[x_min_padded, x_max_padded]),
+        bgcolor="white",
+        showcountries=True,
+        countrycolor="rgb(204, 204, 204)",
+        countrywidth=0.5,
+        showsubunits=False,
+        showframe=False,
+        resolution=50,  # 50m resolution
+    )
+
+    # Histogram panel axes (if present)
+    if show_histogram:
+        fig.update_xaxes(title_text=f"Error ({error_units})", row=1, col=2)
+        fig.update_yaxes(title_text="Count", row=1, col=2)
+
+    fig.update_layout(
+        width=width,
+        height=height,
+        title_text="Prediction Error Map",
+        title_font_size=16,
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.98,
+            xanchor="left",
+            x=0.02,
+            bgcolor="rgba(255, 255, 255, 0.9)",
+            bordercolor="rgba(0, 0, 0, 0.2)",
+            borderwidth=1,
+            font=dict(size=11),
+        ),
+        template="plotly_white",
+        hovermode="closest",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        margin=dict(l=10, r=10, t=40, b=10),
+    )
+
+    # Save to HTML file
+    if out_prefix:
+        output_file = f"{out_prefix}_interactive_error_map.html"
+        fig.write_html(output_file)
+        print(f"Interactive map saved to: {output_file}")
+
+    # Return the figure so it can be displayed in Jupyter notebooks
+    return fig
 
 
 def plot_sample_weights(

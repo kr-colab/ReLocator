@@ -25,6 +25,7 @@ setup(
         "pandas",
         "zarr<3.0.0",
         "seaborn",
+        "plotly",
         # geospatial
         "cartopy",
         "geopy",

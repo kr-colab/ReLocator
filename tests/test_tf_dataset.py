@@ -44,10 +44,8 @@ class TestMakeTFDataset:
         )
 
         # Check that we can iterate through the dataset
-        batch_count = 0
-        for batch in dataset:
+        for batch_count, batch in enumerate(dataset):
             features, labels = batch
-            batch_count += 1
 
             # Check shapes
             assert features.shape == (10, self.n_snps)  # (batch_size, n_features)
@@ -58,7 +56,7 @@ class TestMakeTFDataset:
             assert labels.dtype == tf.float32
 
         # We should have 3 batches (30 samples / 10 batch_size)
-        assert batch_count == 3
+        assert batch_count == 2  # enumerate counts from 0, so 3 batches = 0, 1, 2
 
     def test_dataset_with_sample_weights(self):
         """Test dataset creation with sample weights."""
