@@ -1,15 +1,15 @@
 """Neural network model definitions"""
 
-from tensorflow import keras
-from tensorflow.keras import layers
-from tensorflow.keras import backend as K
+from typing import Optional
+
+import geopandas as gpd
 import numpy as np
 import tensorflow as tf
-from shapely.geometry import Point
-import geopandas as gpd
-from rasterio.features import rasterize
 from affine import Affine
-from typing import Optional
+from rasterio.features import rasterize
+from tensorflow import keras
+from tensorflow.keras import backend as K
+from tensorflow.keras import layers
 
 
 def rasterize_species_range(shapefile_path, resolution=0.1):

@@ -1,28 +1,20 @@
 """Core functionality for locator - Refactored version"""
 
+import warnings
+
 import numpy as np
 import pandas as pd
-import sys
-import warnings
-from tensorflow import keras
-import matplotlib.pyplot as plt
-import copy
-from tqdm import tqdm
-from pathlib import Path
 import tensorflow as tf
-from typing import List, Optional
 
-from .models import create_network
-from .utils import weight_samples
-from .data import normalize_locs, filter_snps_legacy as filter_snps
-from .gpu_optimizer import GPUOptimizer, create_optimized_training_config
+from .analysis import AnalysisMixin
+from .ensemble_mixin import EnsembleMixin
+from .gpu_optimizer import GPUOptimizer
 
 # Import all the mixins
 from .loaders import DataLoaderMixin
-from .training import TrainingMixin
-from .prediction import PredictionMixin
-from .analysis import AnalysisMixin
 from .plotting import PlottingMixin
+from .prediction import PredictionMixin
+from .training import TrainingMixin
 
 
 def setup_gpu(gpu_number=None):
@@ -70,7 +62,14 @@ def setup_gpu(gpu_number=None):
         return False
 
 
-class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, PlottingMixin):
+class Locator(
+    DataLoaderMixin,
+    TrainingMixin,
+    PredictionMixin,
+    AnalysisMixin,
+    EnsembleMixin,
+    PlottingMixin,
+):
     """A class for predicting geographic locations from genetic data.
 
     This class implements a neural network approach to predict sample locations from
@@ -135,7 +134,7 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
         ... })
     """
 
-    def __init__(self, config=None):
+    def __init__(self, config=None):  # noqa: C901
         """
         Initialize Locator with configuration parameters.
 
@@ -222,13 +221,13 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             },
             "weight_samples": {
                 "enabled": False,  # Whether to weight samples by distance
-                "method": None,     # Method for weighting samples ("KD", "histogram", "df")
-                "xbins": None,       # Number of bins for histogram
-                "ybins": None,       # Number of bins for histogram
-                "lam": None,       # Exponent for weights
-                "bandwidth": None, # Bandwidth for KDE
+                "method": "KD",  # Method for weighting samples ("KD", "histogram", "df")
+                "xbins": 10,  # Number of bins for histogram
+                "ybins": 10,  # Number of bins for histogram
+                "lam": 1.0,  # Exponent for weights
+                "bandwidth": None,  # Bandwidth for KDE
                 "weightdf": None,  # DataFrame containing sample weights
-                },
+            },
             # Range penalty parameters
             "use_range_penalty": False,
             "species_range_shapefile": None,
@@ -243,26 +242,33 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             "gradient_accumulation_steps": 1,  # For simulating larger batches
             "gpu_memory_mode": "growth",  # 'growth', 'preallocate', or 'limit:MB'
             "enable_xla": False,  # Experimental XLA compilation
+            # Performance optimization
+            "optimize_tf_parallelism": True,  # Reduce TF parallelism to prevent forking
+            "holdout_no_intermediate_saves": True,  # Skip intermediate model saves in k-fold CV
+            "save_fold_models": False,  # Skip saving individual fold models and histories
+            # Verbosity control
+            "verbose_splits": False,  # Show train/val/test split sizes
+            "verbose_batch_size": False,  # Show batch size optimization details
         }
 
         # Update with user config
         if config is not None:
             self.config.update(config)
-        
+
         # Handle deprecated use_efficient_pipeline option
-        if 'use_efficient_pipeline' in self.config:
+        if "use_efficient_pipeline" in self.config:
             warnings.warn(
                 "The 'use_efficient_pipeline' option is deprecated and will be ignored. "
                 "Locator now always uses the efficient tf.data pipeline.",
                 DeprecationWarning,
-                stacklevel=2
+                stacklevel=2,
             )
             # Remove from config to avoid confusion
-            del self.config['use_efficient_pipeline']
-        
+            del self.config["use_efficient_pipeline"]
+
         # Validate na_action parameter
-        valid_na_actions = ['separate', 'exclude', 'fail']
-        if self.config['na_action'] not in valid_na_actions:
+        valid_na_actions = ["separate", "exclude", "fail"]
+        if self.config["na_action"] not in valid_na_actions:
             raise ValueError(
                 f"Invalid na_action '{self.config['na_action']}'. "
                 f"Must be one of: {valid_na_actions}"
@@ -314,11 +320,11 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
         self.sdlat = None
         if not hasattr(self, "positions"):
             self.positions = None  # For windowed analysis
-        self.unnormedlocs = None # For calculating sample weights
+        self.unnormedlocs = None  # For calculating sample weights
         self.sample_weights = None
-        
+
         # Store na_action as instance attribute for convenience
-        self.na_action = self.config['na_action']
+        self.na_action = self.config["na_action"]
 
         # Setup GPU if not explicitly disabled
         if not self.config.get("disable_gpu", False):
@@ -331,7 +337,7 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
                     print(f"Invalid GPU number: {gpu_number}. Using default GPU.")
                     gpu_number = None
             setup_gpu(gpu_number)
-            
+
             # Apply GPU optimizations
             # 1. Mixed precision training
             if self.config.get("use_mixed_precision", False):
@@ -339,7 +345,7 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
                     self.config["use_mixed_precision"] = True
                 else:
                     self.config["use_mixed_precision"] = False
-                    
+
             # 2. GPU memory configuration
             memory_mode = self.config.get("gpu_memory_mode", "growth")
             if memory_mode.startswith("limit:"):
@@ -347,7 +353,7 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
                 GPUOptimizer.optimize_gpu_memory("limit", limit_mb)
             else:
                 GPUOptimizer.optimize_gpu_memory(memory_mode)
-                
+
             # 3. Enable XLA if requested
             if self.config.get("enable_xla", False):
                 try:
@@ -355,10 +361,34 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
                 except Exception as e:
                     print(f"XLA compilation failed: {e}")
                     self.config["enable_xla"] = False
-                    
+
         else:
             print("GPU usage disabled by configuration.")
             self.config["use_mixed_precision"] = False
+
+        # Configure TensorFlow for optimal performance
+        self._configure_tensorflow_optimization()
+
+    def _configure_tensorflow_optimization(self):
+        """Configure TensorFlow to minimize process forking and optimize performance."""
+        # Reduce inter-op parallelism to prevent excessive forking
+        if self.config.get("optimize_tf_parallelism", True):
+            # Set to 1 to prevent process forking, use threads within ops instead
+            tf.config.threading.set_inter_op_parallelism_threads(1)
+            # Keep intra-op threads reasonable for parallel operations
+            tf.config.threading.set_intra_op_parallelism_threads(4)
+
+            # Also set environment variables for consistency
+            import os
+
+            os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+            os.environ["TF_NUM_INTRAOP_THREADS"] = "4"
+
+            # Disable tf.data autotune to prevent excessive parallelism
+            os.environ["TF_DATA_EXPERIMENTAL_SLACK"] = "false"
+
+            if self.config.get("keras_verbose", 1) >= 1:
+                print("TensorFlow threading optimized to reduce process forking")
 
     @property
     def sample_data(self) -> pd.DataFrame:
@@ -391,16 +421,16 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
     def get_sample_status(self, samples, sample_data=None):
         """
         Analyze sample coordinate status.
-        
+
         This method identifies which samples have known geographic coordinates and which have
         missing (NA) coordinates. This is useful for understanding your data and for methods
         that need to handle samples with and without coordinates differently.
-        
+
         Args:
             samples (numpy.ndarray): Array of sample IDs from genotype data
             sample_data (pandas.DataFrame, optional): DataFrame with columns 'sampleID', 'x', 'y'.
                 If not provided, uses the stored sample data or loads from config.
-        
+
         Returns:
             dict: A dictionary containing:
                 - 'known_indices' (numpy.ndarray): Array indices of samples with coordinates
@@ -410,7 +440,7 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
                 - 'n_known' (int): Count of samples with known coordinates
                 - 'n_na' (int): Count of samples with NA coordinates
                 - 'total' (int): Total number of samples
-        
+
         Example:
             >>> locator = Locator(config)
             >>> status = locator.get_sample_status(samples)
@@ -422,49 +452,49 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             sample_data, locs = self.sort_samples(samples)
         else:
             # Validate provided DataFrame
-            required_cols = ['sampleID', 'x', 'y']
+            required_cols = ["sampleID", "x", "y"]
             if not all(col in sample_data.columns for col in required_cols):
                 raise ValueError(f"sample_data must contain columns: {required_cols}")
-            locs = sample_data[['x', 'y']].values
-        
+            locs = sample_data[["x", "y"]].values
+
         # Find indices with known and NA coordinates
         # A sample has known coordinates if both x and y are not NaN
         known_mask = ~(np.isnan(locs[:, 0]) | np.isnan(locs[:, 1]))
         known_idx = np.where(known_mask)[0]
         na_idx = np.where(~known_mask)[0]
-        
+
         # Get sample IDs for each group
         known_samples = samples[known_idx] if len(known_idx) > 0 else np.array([])
         na_samples = samples[na_idx] if len(na_idx) > 0 else np.array([])
-        
+
         return {
-            'known_indices': known_idx,
-            'na_indices': na_idx,
-            'known_samples': known_samples,
-            'na_samples': na_samples,
-            'n_known': len(known_idx),
-            'n_na': len(na_idx),
-            'total': len(samples)
+            "known_indices": known_idx,
+            "na_indices": na_idx,
+            "known_samples": known_samples,
+            "na_samples": na_samples,
+            "n_known": len(known_idx),
+            "n_na": len(na_idx),
+            "total": len(samples),
         }
 
     def check_data(self, genotypes, samples, verbose=True):
         """
         Check data quality and report statistics.
-        
+
         This is a convenience method to help users understand their data before running
         analyses. It reports the number of samples, SNPs, and identifies samples with
         missing coordinates.
-        
+
         Args:
             genotypes (numpy.ndarray or allel.GenotypeArray): Genotype data
             samples (numpy.ndarray): Array of sample IDs
             verbose (bool): If True, print detailed statistics. Default: True
-        
+
         Returns:
             dict: Sample status dictionary from get_sample_status()
-        
+
         Example::
-        
+
             >>> locator = Locator(config)
             >>> genotypes, samples = locator.load_genotypes()
             >>> status = locator.check_data(genotypes, samples)
@@ -474,11 +504,11 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
             Samples with coordinates: 211
             Samples without coordinates: 20
             Total SNPs: 1000
-            
+
             Current NA handling mode: separate
             - Will train on samples with known locations
             - Can predict on samples without locations
-            
+
             Samples without coordinates (first 10):
               - sample_001
               - sample_002
@@ -486,46 +516,48 @@ class Locator(DataLoaderMixin, TrainingMixin, PredictionMixin, AnalysisMixin, Pl
         """
         # Get sample status
         status = self.get_sample_status(samples)
-        
+
         if verbose:
             print("Data Summary")
             print("=" * 50)
             print(f"Total samples: {status['total']}")
             print(f"Samples with coordinates: {status['n_known']}")
             print(f"Samples without coordinates: {status['n_na']}")
-            
+
             # Report SNP count
-            if hasattr(genotypes, 'shape'):
+            if hasattr(genotypes, "shape"):
                 n_snps = genotypes.shape[0]
                 print(f"Total SNPs: {n_snps}")
-            
+
             # Report NA handling mode
             print(f"\nCurrent NA handling mode: {self.na_action}")
-            if self.na_action == 'separate':
+            if self.na_action == "separate":
                 print("- Will train on samples with known locations")
                 print("- Can predict on samples without locations")
-            elif self.na_action == 'exclude':
+            elif self.na_action == "exclude":
                 print("- Will only use samples with known locations")
                 print("- Samples without locations will be excluded from all analyses")
-            elif self.na_action == 'fail':
+            elif self.na_action == "fail":
                 print("- Will raise an error if any samples lack coordinates")
-            
+
             # Show samples without coordinates
-            if status['n_na'] > 0:
-                print(f"\nSamples without coordinates (first 10):")
-                for i, sample_id in enumerate(status['na_samples'][:10]):
+            if status["n_na"] > 0:
+                print("\nSamples without coordinates (first 10):")
+                for i, sample_id in enumerate(status["na_samples"][:10]):
                     print(f"  - {sample_id}")
-                if status['n_na'] > 10:
+                if status["n_na"] > 10:
                     print(f"  ... and {status['n_na'] - 10} more")
-                    
+
                 # Provide guidance based on na_action
-                if self.na_action == 'fail':
-                    print("\n⚠️  WARNING: Your current na_action='fail' setting will cause")
+                if self.na_action == "fail":
+                    print(
+                        "\n⚠️  WARNING: Your current na_action='fail' setting will cause"
+                    )
                     print("   methods to fail with these NA samples. Consider using")
                     print("   na_action='separate' or 'exclude' instead.")
-        
+
         return status
 
 
 # Import EnsembleLocator from ensemble.py
-from .ensemble import EnsembleLocator
+from .ensemble import EnsembleLocator  # noqa: E402, F401

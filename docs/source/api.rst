@@ -24,16 +24,63 @@ Locator
    :show-inheritance:
 
 
-Ensemble Module
----------------
-.. module:: locator.ensemble
+Ensemble Functionality
+----------------------
 
-EnsembleLocator
-^^^^^^^^^^^^^^^
-.. autoclass:: EnsembleLocator
-   :members: 
+The ensemble functionality is integrated into the main ``Locator`` class through the ``EnsembleMixin``.
 
- 
+.. module:: locator.ensemble_mixin
+
+EnsembleMixin
+^^^^^^^^^^^^^
+.. autoclass:: EnsembleMixin
+   :members:
+   :show-inheritance:
+
+.. module:: locator.ensemble_model_manager
+
+EnsembleModelManager
+^^^^^^^^^^^^^^^^^^^^
+.. autoclass:: EnsembleModelManager
+   :members:
+   :show-inheritance:
+
+   Efficient storage and loading of ensemble models.
+
+Parallel Ensemble Training
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The parallel ensemble training function is available when Ray is installed:
+
+.. code-block:: python
+
+   from locator.parallel import parallel_train_ensemble
+
+.. function:: parallel_train_ensemble(locator, genotypes, samples, k=5, gpu_ids=[0, 1], gpu_fraction=1.0, training_set_indices=None, na_action=None, augment_data=False, flip_rate=0.05, save_fold_models=True, use_model_manager=True, use_mixed_precision=None, patience_multiplier=1.0, verbose=True)
+
+   Train ensemble models in parallel across multiple GPUs using Ray.
+
+   :param locator: Locator instance with configuration
+   :param genotypes: GenotypeArray containing genetic data
+   :param samples: Array of sample IDs
+   :param k: Number of folds/models in ensemble (default: 5)
+   :param gpu_ids: List of GPU IDs to use (default: [0, 1])
+   :param gpu_fraction: Fraction of GPU memory per worker (default: 1.0)
+   :param training_set_indices: Optional indices to restrict training
+   :param na_action: How to handle NA samples ('separate', 'exclude', 'fail')
+   :param augment_data: Whether to apply data augmentation
+   :param flip_rate: Rate for genotype flipping augmentation
+   :param save_fold_models: Whether to save individual fold models
+   :param use_model_manager: Whether to use model manager for storage
+   :param use_mixed_precision: Whether to use mixed precision training
+   :param patience_multiplier: Multiply patience for ensemble training
+   :param verbose: Whether to show training progress
+   :returns: dict containing histories, models, normalization_params, fold_info
+
+   .. note::
+      This function requires Ray to be installed. Install with ``pip install locator[parallel]``.
+
+
 
 Models Module
 -------------
@@ -212,13 +259,120 @@ Analysis Module
    :members:
    :noindex:
 
+Parallel Analysis Module
+------------------------
+.. module:: locator.parallel
+
+This module provides Ray-based parallel implementations of analysis methods for multi-GPU execution.
+
+.. autofunction:: parallel_k_fold_holdouts
+
+   Run true k-fold cross-validation in parallel across multiple GPUs.
+
+   Args:
+       locator: Locator instance
+       genotypes: GenotypeArray
+       samples: List of sample IDs
+       k: Number of folds (default: 10)
+       gpu_ids: List of GPU IDs to use (default: [0, 1])
+       gpu_fraction: Fraction of GPU per worker (default: 1.0)
+       return_df: Whether to return DataFrame (default: True)
+       save_full_pred_matrix: Whether to save predictions (default: True)
+       verbose: Show progress (default: True)
+       na_action: NA handling mode (default: None)
+
+   Returns:
+       DataFrame with predictions or None
+
+.. autofunction:: parallel_leave_one_out
+
+   Parallel leave-one-out cross-validation across multiple GPUs.
+
+   Args:
+       locator: Locator instance
+       genotypes: GenotypeArray
+       samples: List of sample IDs
+       gpu_ids: List of GPU IDs to use
+       gpu_fraction: Fraction of GPU per worker
+       return_df: Whether to return DataFrame
+       save_full_pred_matrix: Whether to save predictions
+       na_action: NA handling mode
+
+   Returns:
+       DataFrame with predictions or None
+
+.. autofunction:: parallel_holdouts
+
+   Run multiple holdout replicates in parallel across multiple GPUs.
+
+   Args:
+       locator: Locator instance
+       genotypes: GenotypeArray
+       samples: List of sample IDs
+       k: Number of samples to hold out
+       n_reps: Number of replicates
+       holdout_indices: Optional specific indices
+       holdout_sample_ids: Optional sample IDs to hold out
+       gpu_ids: List of GPU IDs to use
+       gpu_fraction: Fraction of GPU per worker
+       return_df: Whether to return DataFrame
+       save_full_pred_matrix: Whether to save predictions
+       verbose: Show progress
+       na_action: NA handling mode
+
+   Returns:
+       DataFrame with predictions or None
+
+.. autofunction:: parallel_windows_holdouts
+
+   Run windowed analysis on holdout samples in parallel.
+
+   Args:
+       locator: Locator instance
+       genotypes: GenotypeArray
+       samples: List of sample IDs
+       k: Number of samples to hold out
+       window_start: Start position for windows
+       window_size: Size of windows in base pairs
+       window_stop: Stop position for windows
+       respect_chromosomes: Respect chromosome boundaries
+       holdout_indices: Optional specific indices
+       holdout_sample_ids: Optional sample IDs to hold out
+       gpu_ids: List of GPU IDs to use
+       gpu_fraction: Fraction of GPU per worker
+       return_df: Whether to return DataFrame
+       save_full_pred_matrix: Whether to save predictions
+       verbose: Show progress
+       na_action: NA handling mode
+
+   Returns:
+       DataFrame with window predictions or None
+
 Plotting Module
-^^^^^^^^^^^^^^^
+---------------
 .. module:: locator.plotting
+
+This module provides visualization functions for Locator predictions and analyses.
+
+Standalone Functions
+^^^^^^^^^^^^^^^^^^^^
+
+.. autofunction:: plot_predictions
+
+.. autofunction:: plot_error_summary
+
+.. autofunction:: plot_sample_weights
+
+.. autofunction:: kde_predict
+
+PlottingMixin Class
+^^^^^^^^^^^^^^^^^^^
 
 .. autoclass:: PlottingMixin
    :members:
-   :noindex:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
 
 
 
@@ -240,12 +394,12 @@ The default configuration for Locator includes:
        "min_mac": 2,
        "max_SNPs": None,
        "impute_missing": False,
-       
+
        # Network architecture
        "width": 256,
        "nlayers": 8,
        "dropout_prop": 0.25,
-       
+
        # Training parameters
        "max_epochs": 5000,
        "patience": 100,
@@ -253,30 +407,30 @@ The default configuration for Locator includes:
        "min_epochs": 10,
        "min_delta": 1e-4,
        "restore_best_weights": True,
-       
+
        # Optimizer parameters
        "optimizer_algo": "adam",
        "weight_decay": 0.004,
-       
+
        # Output control
        "keras_verbose": 1,
        "prediction_frequency": 1,
-       
+
        # Validation
        "validation_split": 0.1,
-       
+
        # Data augmentation
        "augmentation": {
            "enabled": False,
            "flip_rate": 0.05
        },
-       
+
        # Range penalty
        "use_range_penalty": False,
        "species_range_shapefile": None,
        "resolution": 0.05,
        "penalty_weight": 1.0,
-       
+
        # GPU optimization (enabled by default)
        "use_mixed_precision": True,
        "gpu_batch_size": "auto",
@@ -346,23 +500,23 @@ Basic Usage
 
     import locator
     from locator.core import Locator
-    
+
     # Initialize Locator with configuration
     loc = Locator({
         "out": "my_analysis",
         "sample_data": "samples.txt",
         "zarr": "genotypes.zarr"
     })
-    
+
     # Load genotype data
     genotypes, samples = loc.load_genotypes(zarr="genotypes.zarr")
-    
+
     # Train the model
     loc.train(genotypes=genotypes, samples=samples)
-    
+
     # Make predictions
     predictions = loc.predict(return_df=True)
-    
+
     # Plot results
     loc.plot_history(loc.history)
 
@@ -377,14 +531,14 @@ Advanced Analysis
         samples=samples,
         window_size=1e6
     )
-    
+
     # Run jacknife analysis
     jacknife_results = loc.run_jacknife(
         genotypes=genotypes,
         samples=samples,
         prop=0.1
     )
-    
+
     # Run bootstrap analysis
     bootstrap_results = loc.run_bootstraps(
         genotypes=genotypes,
@@ -398,15 +552,15 @@ Ensemble Analysis
 .. code-block:: python
 
     from locator import EnsembleLocator
-    
+
     # Initialize ensemble
     ensemble = EnsembleLocator(
         base_config={"out": "ensemble_analysis"},
         k_folds=5
     )
-    
+
     # Train ensemble
     ensemble.train(genotypes=genotypes, samples=samples)
-    
+
     # Make predictions
     ensemble_predictions = ensemble.predict()

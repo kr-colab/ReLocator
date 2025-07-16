@@ -52,7 +52,8 @@ htmlcov/
 *.zarr/
 *.h5
 out/
-data/
+/data/
+./data/
 *.weights.h5
 *_weights/
 *_predlocs.txt
@@ -62,4 +63,5 @@ data/
 CLAUDE.*
 # OS specific
 .DS_Store
-Thumbs.db 
+Thumbs.db
+example/demo_output/

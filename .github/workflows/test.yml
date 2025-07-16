@@ -1,0 +1,104 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/setup.py', '**/requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-${{ matrix.python-version }}-
+          ${{ runner.os }}-pip-
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libproj-dev proj-data proj-bin libgeos-dev
+
+    - name: Install package and dependencies
+      env:
+        CUDA_VISIBLE_DEVICES: "-1"
+      run: |
+        python -m pip install --upgrade pip
+        pip install wheel
+        pip install -e ".[dev]"
+
+    - name: Show installed packages
+      run: |
+        pip list
+        python -c "import tensorflow as tf; print(f'TensorFlow version: {tf.__version__}')"
+        python -c "import tensorflow as tf; print(f'GPU available: {tf.config.list_physical_devices(\"GPU\")}')"
+
+    - name: Run tests with pytest
+      env:
+        CUDA_VISIBLE_DEVICES: "-1"
+        TF_CPP_MIN_LOG_LEVEL: "2"
+      run: |
+        pytest -v -n auto --cov=locator --cov-report=xml --cov-report=term-missing
+
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v5
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Cache pip packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-lint-${{ hashFiles('**/setup.py', '**/requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-lint-
+          ${{ runner.os }}-pip-
+
+    - name: Install linting dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 black isort
+
+    - name: Check code formatting with black
+      run: |
+        black --check --line-length=89 locator/ tests/ scripts/ example/
+
+    - name: Check import sorting with isort
+      run: |
+        isort --check-only --profile=black --line-length=89 locator/ tests/ scripts/ example/
+
+    - name: Lint with flake8
+      run: |
+        flake8 locator/ tests/ scripts/ example/ --config=.flake8

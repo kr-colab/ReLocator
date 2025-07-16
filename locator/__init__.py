@@ -1,12 +1,12 @@
 """Locator: A tool for predicting geographic location from genetic variation"""
 
-from .core import Locator, EnsembleLocator
-from .plotting import plot_predictions, plot_error_summary, plot_sample_weights
-from .models import create_network, euclidean_distance_loss
+from .core import EnsembleLocator, Locator
 
 # Re-export data utilities for backward compatibility
 from .data.filters import filter_snps_legacy as filter_snps
-from .data.filters import normalize_locs, impute_missing
+from .data.filters import impute_missing, normalize_locs
+from .models import create_network, euclidean_distance_loss
+from .plotting import plot_error_summary, plot_predictions, plot_sample_weights
 
 __version__ = "0.1.0"
 

@@ -25,13 +25,13 @@ Locator supports multiple input formats for genotype data:
        "nlayers": 8,
        "dropout_prop": 0.25
    }
-   
+
    locator = Locator(config)
-   
+
    # Note: GPU optimizations are enabled by default!
    # To disable mixed precision:
    # config["use_mixed_precision"] = False
-   
+
    # Load data from various formats:
    #
    # 1. From VCF
@@ -55,7 +55,7 @@ Train the model and make predictions:
 
    # Train the model
    history = locator.train(genotypes=genotypes, samples=samples)
-   
+
    # Make predictions
    predictions = locator.predict(return_df=True)  # Returns DataFrame with sampleID, x, y
 
@@ -75,7 +75,7 @@ Evaluate model performance by holding out samples:
        samples=samples,
        k=10
    )
-   
+
    # Get predictions for held-out samples
    holdout_preds = locator.predict_holdout(
        return_df=True,
@@ -84,26 +84,42 @@ Evaluate model performance by holding out samples:
 
 Ensemble Models
 ---------------
-Use multiple models for improved predictions:
+Use k-fold cross-validation to train ensemble models for improved predictions:
 
 .. code-block:: python
 
-   from locator import EnsembleLocator
-   
-   # Create ensemble with 5 models
-   ensemble = EnsembleLocator(
-       base_config=config,
-       k_folds=5
-   )
-   
-   # Train ensemble
-   histories = ensemble.train(
+   # Train 5-fold ensemble
+   ensemble_result = locator.train_ensemble(
        genotypes=genotypes,
-       samples=samples
+       samples=samples,
+       k=5,  # Number of folds
+       save_fold_models=True,
+       verbose=True
    )
-   
-   # Get ensemble predictions
-   predictions = ensemble.predict(return_df=True)
+
+   # Get ensemble predictions with uncertainty
+   predictions = locator.predict_ensemble(
+       genotypes=genotypes,
+       samples=samples,
+       return_std=True  # Include prediction uncertainty
+   )
+
+For parallel ensemble training across multiple GPUs:
+
+.. code-block:: python
+
+   from locator.parallel import parallel_train_ensemble
+
+   # Train across 4 GPUs
+   result = parallel_train_ensemble(
+       locator=locator,
+       genotypes=genotypes,
+       samples=samples,
+       k=5,
+       gpu_ids=[0, 1, 2, 3]
+   )
+
+See :doc:`ensemble_guide` for comprehensive ensemble documentation.
 
 Windowed Analysis
 -----------------
@@ -148,7 +164,7 @@ Incorporate species range constraints:
        "resolution": 0.05,
        "penalty_weight": 1.0
    }
-   
+
    locator = Locator(config)
 
 Memory-Efficient Data Pipeline
@@ -165,13 +181,13 @@ The pipeline works automatically, but you can access its components directly:
 .. code-block:: python
 
    from locator.data import IndexSet, make_tf_dataset
-   
+
    # Create memory-efficient data splits
    index_set = IndexSet.random_split(
        n=len(samples),
        splits={"train": 0.8, "test": 0.2}
    )
-   
+
    # Access data without copying
    train_data = genotypes[:, index_set.train]
    test_data = genotypes[:, index_set.test]
@@ -191,13 +207,13 @@ Basic GPU configuration:
        "out": "gpu_analysis",
        "gpu_number": 0  # Use first GPU (optional)
    }
-   
+
    # To disable GPU entirely
    config = {
        "out": "cpu_analysis",
        "disable_gpu": True
    }
-   
+
    # To disable specific optimizations
    config = {
        "out": "custom_gpu",
@@ -232,7 +248,7 @@ Locator provides consistent handling of samples without geographic coordinates t
        "out": "na_handling_example",
        "na_action": "separate"  # Options: 'separate', 'exclude', 'fail'
    }
-   
+
    locator = Locator(config)
 
 Available NA Actions
@@ -258,14 +274,14 @@ Use the ``check_data()`` method to understand your dataset:
 
    # Check data before analysis
    locator.check_data(genotypes, samples, verbose=True)
-   
+
    # Output example:
    # ===== Data Summary =====
    # Total samples: 231
    # Samples with coordinates: 211
    # Samples without coordinates: 20
    # Total SNPs: 1000
-   # 
+   #
    # Current NA handling mode: separate
    # - Will train on samples with known locations
    # - Can predict on samples without locations
@@ -278,7 +294,7 @@ Override the instance-level NA handling for specific methods:
 
    # Instance configured with 'separate'
    locator = Locator({"na_action": "separate"})
-   
+
    # Override for a specific analysis
    locator.run_bootstraps(
        genotypes=genotypes,
@@ -295,13 +311,33 @@ Holdout-based methods require known coordinates for evaluation:
    # These methods need coordinates to evaluate predictions
    locator.run_holdouts(genotypes, samples)  # 'separate' behaves like 'exclude'
    locator.run_k_fold_holdouts(genotypes, samples)  # Only uses samples with coordinates
-   
+
    # Non-holdout methods can predict on NA samples with 'separate' mode
    locator.run_jacknife(genotypes, samples)  # Can predict NA samples
    locator.run_bootstraps(genotypes, samples)  # Can predict NA samples
+
+Multi-GPU Parallel Analysis
+---------------------------
+For large-scale analyses with multiple GPUs, Locator provides parallel implementations:
+
+.. code-block:: python
+
+   from locator.parallel import parallel_k_fold_holdouts
+
+   # Run k-fold CV across 4 GPUs
+   predictions = parallel_k_fold_holdouts(
+       locator, genotypes, samples,
+       k=10,
+       gpu_ids=[0, 1, 2, 3],
+       return_df=True
+   )
+
+See :doc:`parallel_analysis_guide` for comprehensive documentation on multi-GPU analysis.
 
 Next Steps
 ----------
 * Check the :doc:`api` reference for detailed information about all available functions and classes.
 * See the :doc:`examples` section for more advanced usage examples.
-* Learn how to :doc:`contributing` to the project. 
+* Explore :doc:`parallel_analysis_guide` for multi-GPU workflows.
+* Learn about visualization in :doc:`plotting_guide`.
+* Learn how to :doc:`contributing` to the project.

@@ -1,4 +1,6 @@
-import allel, argparse
+import argparse
+
+import allel
 
 
 def main():
