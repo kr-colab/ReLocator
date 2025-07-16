@@ -1,5 +1,6 @@
 """Utility functions for data processing"""
 
+
 import numpy as np
 
 __all__ = [
@@ -31,5 +32,6 @@ def split_train_test(ac, locs, train_split=0.8):
 
 # Legacy imports for backward compatibility
 # These are now defined in sample_weights.py but we keep them available here
+
 # Import weight_samples from the dedicated module
 from .sample_weights import weight_samples
