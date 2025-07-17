@@ -253,3 +253,104 @@ class DataLoaderMixin:
                 "No genotype data provided. Either initialize with genotype_data DataFrame "
                 "or provide vcf/zarr/matrix path."
             )
+
+    def subset_genotypes(
+        self,
+        genotypes,
+        method="random",
+        n_snps=None,
+        fraction=None,
+        positions=None,
+        chromosomes=None,
+        seed=None,
+        return_indices=False,
+        verbose=True,
+    ):
+        """
+        Subset genotypes using various strategies to reduce the number of SNPs.
+
+        This function provides different methods to downsample SNPs from genotype data,
+        which can be useful for reducing computational requirements or testing analyses
+        with smaller datasets.
+
+        Args:
+            genotypes: GenotypeArray of shape (n_sites, n_samples, ploidy)
+            method: Subsetting method. Options are 'random' (random selection of SNPs)
+                or 'uniform' (select every Nth SNP for uniform spacing)
+            n_snps: Target number of SNPs to retain
+            fraction: Alternative to n_snps - fraction of SNPs to retain (0.0-1.0)
+            positions: Array of SNP positions (optional, uses self.positions if available)
+            chromosomes: Array of chromosome IDs (optional, uses self.chromosomes if available)
+            seed: Random seed for reproducibility (only used for 'random' method)
+            return_indices: If True, also return the indices of selected SNPs
+            verbose: Whether to print information about the subsetting
+
+        Returns:
+            If return_indices=False:
+                GenotypeArray: Subsetted genotype array
+            If return_indices=True:
+                tuple: (subsetted_genotypes, selected_indices)
+
+        Example:
+            >>> # Load full genotype data
+            >>> genotypes, samples = locator.load_genotypes(vcf="data.vcf.gz")
+            >>> print(f"Loaded {genotypes.shape[0]} SNPs")
+            >>>
+            >>> # Subset to 100k SNPs randomly
+            >>> genotypes_subset = locator.subset_genotypes(
+            ...     genotypes,
+            ...     method='random',
+            ...     n_snps=100000,
+            ...     seed=42
+            ... )
+            >>>
+            >>> # Or use uniform spacing for 10% of SNPs
+            >>> genotypes_subset = locator.subset_genotypes(
+            ...     genotypes,
+            ...     method='uniform',
+            ...     fraction=0.1
+            ... )
+        """
+        from .qc import subset_genotypes as _subset_genotypes
+
+        # Use stored positions/chromosomes if not provided
+        if positions is None and hasattr(self, "positions"):
+            positions = self.positions
+        if chromosomes is None and hasattr(self, "chromosomes"):
+            chromosomes = self.chromosomes
+
+        result = _subset_genotypes(
+            genotypes=genotypes,
+            method=method,
+            n_snps=n_snps,
+            fraction=fraction,
+            positions=positions,
+            chromosomes=chromosomes,
+            seed=seed,
+            return_indices=return_indices,
+            verbose=verbose,
+        )
+
+        # If we subsetted and have positions, update them too
+        if (
+            not return_indices
+            and hasattr(self, "positions")
+            and self.positions is not None
+        ):
+            # Get indices to update positions
+            _, indices = _subset_genotypes(
+                genotypes=genotypes,
+                method=method,
+                n_snps=n_snps,
+                fraction=fraction,
+                positions=positions,
+                chromosomes=chromosomes,
+                seed=seed,
+                return_indices=True,
+                verbose=False,
+            )
+            self.positions = self.positions[indices]
+            if hasattr(self, "chromosomes") and self.chromosomes is not None:
+                self.chromosomes = self.chromosomes[indices]
+
+        return result

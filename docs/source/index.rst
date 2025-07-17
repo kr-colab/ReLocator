@@ -16,6 +16,7 @@ Locator is a deep learning-based tool for predicting geographic coordinates from
    plotting_guide
    na_handling_guide
    sample_exclusion_guide
+   quality_control_guide
    api
    examples
    contributing
@@ -32,6 +33,7 @@ Quick Links
 * :doc:`plotting_guide` - Visualization and plotting guide
 * :doc:`na_handling_guide` - Guide for handling missing coordinates
 * :doc:`sample_exclusion_guide` - Guide for excluding samples from analysis
+* :doc:`quality_control_guide` - Quality control and SNP subsetting guide
 * :doc:`api` - Complete API reference
 * :doc:`examples` - Example workflows
 * :doc:`contributing` - Contribution guidelines

@@ -191,6 +191,18 @@ Data Classes
 
    Parameters for coordinate normalization with apply/reverse methods.
 
+Quality Control Module
+----------------------
+.. module:: locator.qc
+
+.. autofunction:: check_genotypes
+
+   Analyze genotype quality metrics and identify samples with high missingness.
+
+.. autofunction:: subset_genotypes
+
+   Subset genotypes using various strategies to reduce the number of SNPs.
+
 Utils Module
 ------------
 .. module:: locator.utils

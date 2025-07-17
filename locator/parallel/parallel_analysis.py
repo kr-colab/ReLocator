@@ -533,7 +533,7 @@ def parallel_leave_one_out(
         gpu_fraction=gpu_fraction,
         return_df=return_df,
         save_full_pred_matrix=False,  # We'll save with our own name
-        verbose=False,  # We already printed our message
+        verbose=True,
         na_action=na_action,
     )
 

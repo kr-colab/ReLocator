@@ -1676,3 +1676,82 @@ class AnalysisMixin:
                 )
             return all_predictions
         return None
+
+    def check_genotypes(
+        self,
+        genotypes=None,
+        samples=None,
+        method="mad",
+        threshold=None,
+        n_std=3.0,
+        n_mad=3.0,
+        iqr_multiplier=1.5,
+        plot=True,
+        return_stats=True,
+        suggest_exclusions=True,
+        verbose=True,
+    ):
+        """
+        Analyze genotype quality metrics and identify samples with high missingness.
+
+        This function calculates per-sample statistics including missing data rate,
+        heterozygosity, and mean genotype values. It can identify outlier samples
+        based on various methods and optionally create visualizations.
+
+        Args:
+            genotypes: GenotypeArray of shape (n_sites, n_samples, ploidy).
+                      If None, must be loaded separately.
+            samples: Array of sample IDs. If None, uses self.samples if available.
+            method: Outlier detection method. Options:
+                - 'mad': Median Absolute Deviation (robust to outliers)
+                - 'iqr': Interquartile Range
+                - 'zscore': Standard deviations from mean
+                - 'threshold': Simple cutoff value
+            threshold: For method='threshold', samples with missing_rate above this
+                      are flagged. Default 0.1 (10%) if None.
+            n_std: For method='zscore', number of standard deviations
+            n_mad: For method='mad', number of MADs from median
+            iqr_multiplier: For method='iqr', multiplier for IQR range
+            plot: Whether to create visualization
+            return_stats: Whether to return the statistics DataFrame
+            suggest_exclusions: Whether to suggest samples for exclusion
+            verbose: Whether to print summary information
+
+        Returns:
+            Dictionary containing:
+            - 'stats': DataFrame with per-sample statistics (if return_stats=True)
+            - 'outliers': List of outlier sample IDs
+            - 'outlier_indices': Array of outlier indices
+            - 'plot': Matplotlib figure (if plot=True)
+            - 'summary': Text summary of findings
+
+        Example:
+            >>> # Check genotype quality
+            >>> qc_results = locator.check_genotypes(genotypes, samples)
+            >>>
+            >>> # Exclude outliers if desired
+            >>> if qc_results['outliers']:
+            >>>     locator.exclude_samples(qc_results['outliers'], reason='high_missingness')
+        """
+        from .qc import check_genotypes as _check_genotypes
+
+        # Use stored samples if not provided
+        if samples is None and hasattr(self, "samples"):
+            samples = self.samples
+
+        if genotypes is None:
+            raise ValueError("genotypes must be provided")
+
+        return _check_genotypes(
+            genotypes=genotypes,
+            samples=samples,
+            method=method,
+            threshold=threshold,
+            n_std=n_std,
+            n_mad=n_mad,
+            iqr_multiplier=iqr_multiplier,
+            plot=plot,
+            return_stats=return_stats,
+            suggest_exclusions=suggest_exclusions,
+            verbose=verbose,
+        )
