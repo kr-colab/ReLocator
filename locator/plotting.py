@@ -20,6 +20,7 @@ __all__ = [
     "kde_predict",
     "plot_predictions",
     "plot_error_summary",
+    "plot_training_locations",
     "plot_interactive_error_map",
     "plot_sample_weights",
     "PlottingMixin",
@@ -569,6 +570,192 @@ def plot_error_summary(  # noqa: C901
     if return_merged:
         return merged
     return None
+
+
+def plot_training_locations(
+    sample_data,
+    out_prefix=None,
+    plot_map=True,
+    width=10,
+    height=8,
+    dpi=300,
+    marker_size=30,
+    marker_color="blue",
+    marker_alpha=0.6,
+    show=None,
+):
+    """
+    Plot the geographic locations of training samples.
+
+    Creates a visualization of sample locations either on a geographic map
+    or as a scatter plot.
+
+    Args:
+        sample_data (pandas.DataFrame or str): DataFrame or path to TSV file with columns:
+            - ``sampleID``: Sample identifiers
+            - ``x``: Longitude
+            - ``y``: Latitude
+        out_prefix (str, optional): Prefix for output files. If provided, saves as
+            {out_prefix}_training_locations.png. Default: None
+        plot_map (bool): Whether to plot on a geographic map using cartopy projection.
+            If False, uses regular scatter plot. Default: True
+        width (float): Figure width in inches. Default: 10
+        height (float): Figure height in inches. Default: 8
+        dpi (int): Figure resolution in dots per inch. Default: 300
+        marker_size (float): Size of location markers. Default: 30
+        marker_color (str): Color of location markers. Default: "blue"
+        marker_alpha (float): Transparency of markers (0-1). Default: 0.6
+        show (bool or None): Whether to display plot. None=auto-detect environment,
+            True=always show, False=never show. Default: None
+
+    Returns:
+        None: Saves plot to file and optionally displays it.
+
+    Raises:
+        ValueError: If sample_data is empty or has missing columns
+
+    Examples:
+        Basic usage with TSV file::
+
+            plot_training_locations("samples.tsv", "training_locs")
+
+        With DataFrame and custom styling::
+
+            plot_training_locations(sample_df,
+                                  out_prefix="sample_locations",
+                                  marker_color="red",
+                                  marker_size=50)
+
+        Without map projection::
+
+            plot_training_locations(sample_df,
+                                  plot_map=False,
+                                  width=8, height=6)
+    """
+    # Load and validate sample data
+    if isinstance(sample_data, pd.DataFrame):
+        samples = sample_data.copy()
+    elif isinstance(sample_data, (str, Path)):
+        sample_path = Path(sample_data)
+        if not sample_path.is_file():
+            raise ValueError(f"Sample data file not found: {sample_path}")
+        samples = pd.read_csv(sample_path, sep="\t")
+    else:
+        raise ValueError("sample_data must be a DataFrame or path to TSV file")
+
+    # Validate required columns
+    required_cols = ["sampleID", "x", "y"]
+    missing_cols = [col for col in required_cols if col not in samples.columns]
+    if missing_cols:
+        raise ValueError(f"Sample data missing required columns: {missing_cols}")
+
+    if samples.empty:
+        raise ValueError("Sample data cannot be empty")
+
+    # Filter out samples with NA coordinates
+    valid_samples = samples[pd.notna(samples["x"]) & pd.notna(samples["y"])]
+
+    if valid_samples.empty:
+        raise ValueError("No samples with valid coordinates found")
+
+    # Create figure
+    if plot_map:
+        fig = plt.figure(figsize=(width, height), dpi=dpi)
+        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+
+        # Add map features
+        ax.add_feature(cfeature.LAND, facecolor="lightgray")
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.5)
+        ax.add_feature(cfeature.BORDERS, linewidth=0.3, alpha=0.5)
+
+        # Set map extent
+        x_min, x_max = valid_samples["x"].min(), valid_samples["x"].max()
+        y_min, y_max = valid_samples["y"].min(), valid_samples["y"].max()
+
+        # Add padding to bounds
+        padding = 0.1
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+
+        # Handle edge cases where all points are at the same location
+        if x_range == 0:
+            x_range = 1.0  # Default range if all x values are the same
+        if y_range == 0:
+            y_range = 1.0  # Default range if all y values are the same
+
+        ax.set_extent(
+            [
+                x_min - x_range * padding,
+                x_max + x_range * padding,
+                y_min - y_range * padding,
+                y_max + y_range * padding,
+            ]
+        )
+    else:
+        fig, ax = plt.subplots(figsize=(width, height), dpi=dpi)
+
+        # Set axis limits with padding
+        x_min, x_max = valid_samples["x"].min(), valid_samples["x"].max()
+        y_min, y_max = valid_samples["y"].min(), valid_samples["y"].max()
+
+        padding = 0.1
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+
+        # Handle edge cases where all points are at the same location
+        if x_range == 0:
+            x_range = 1.0  # Default range if all x values are the same
+        if y_range == 0:
+            y_range = 1.0  # Default range if all y values are the same
+
+        ax.set_xlim(x_min - x_range * padding, x_max + x_range * padding)
+        ax.set_ylim(y_min - y_range * padding, y_max + y_range * padding)
+
+        # Add labels for non-map plot
+        ax.set_xlabel("Longitude", fontsize=12)
+        ax.set_ylabel("Latitude", fontsize=12)
+
+    # Plot sample locations
+    ax.scatter(
+        valid_samples["x"],
+        valid_samples["y"],
+        c=marker_color,
+        s=marker_size,
+        alpha=marker_alpha,
+        edgecolors="black",
+        linewidth=0.5,
+        label=f"Training samples (n={len(valid_samples)})",
+    )
+
+    # Add title and legend
+    ax.set_title("Training Sample Locations", fontsize=14, fontweight="bold")
+    ax.legend(loc="best")
+
+    # Add grid for non-map plots
+    if not plot_map:
+        ax.grid(True, alpha=0.3)
+
+    # Add sample count annotation
+    na_count = len(samples) - len(valid_samples)
+    if na_count > 0:
+        ax.text(
+            0.02,
+            0.98,
+            f"Samples with NA coordinates: {na_count}",
+            transform=ax.transAxes,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+            fontsize=10,
+        )
+
+    plt.tight_layout()
+
+    # Save if output prefix provided
+    if out_prefix:
+        plt.savefig(f"{out_prefix}_training_locations.png", bbox_inches="tight")
+
+    _handle_plot_display(show)
+    plt.close()
 
 
 def plot_interactive_error_map(
