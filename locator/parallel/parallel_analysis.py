@@ -27,6 +27,7 @@ import os
 import pickle
 import tempfile
 import time
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
@@ -43,6 +44,46 @@ if "RAY_verbose_spill_logs" not in os.environ:
 
 # Ray imports
 import ray
+
+
+@contextmanager
+def safe_temp_file(data: Any, suffix: str = ".pkl", verbose: bool = False):
+    """
+    Context manager for safely creating and cleaning up temporary files.
+
+    Ensures temporary files are always cleaned up, even if exceptions occur
+    during processing. This prevents accumulation of temporary files when
+    Ray workers fail or analysis is interrupted.
+
+    Args:
+        data: Data to pickle and save to temporary file
+        suffix: File suffix for temporary file (default: ".pkl")
+        verbose: Whether to print cleanup messages
+
+    Yields:
+        str: Path to temporary file
+
+    Example:
+        with safe_temp_file(my_data, verbose=True) as temp_path:
+            # Use temp_path for Ray processing
+            results = ray.get(futures)
+        # File is automatically cleaned up here
+    """
+    # Create temporary file
+    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=suffix) as f:
+        pickle.dump(data, f)
+        temp_path = f.name
+
+    try:
+        yield temp_path
+    finally:
+        # Always clean up, even if processing fails
+        try:
+            os.unlink(temp_path)
+            if verbose:
+                print(f"Cleaned up temporary file: {temp_path}")
+        except OSError as e:
+            print(f"Warning: Could not remove temporary file {temp_path}: {e}")
 
 
 def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
@@ -357,8 +398,8 @@ def parallel_k_fold_holdouts(  # noqa: C901
                     print(f"Using bandwidth: {optimal_bandwidth:.3f}")
 
     # Save data to temporary file
-    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".pkl") as f:
-        data = {
+    with safe_temp_file(
+        {
             "genotypes_array": genotypes.values,  # FIXED: Save raw values, not to_n_alt()
             "genotypes_shape": genotypes.shape,
             "samples": samples,  # CRITICAL: Pass the original samples list
@@ -367,117 +408,116 @@ def parallel_k_fold_holdouts(  # noqa: C901
             "config": locator.config,
             "fold_index_sets": fold_index_sets,
             "na_mask": na_mask,
-        }
-        pickle.dump(data, f)
-        data_file = f.name
+        },
+        verbose=verbose,
+    ) as data_file:
 
-    if verbose:
-        print(
-            f"Running true {k}-fold cross-validation across GPUs {gpu_ids} using Ray..."
-        )
-
-    start_time = time.time()
-
-    # Create the Ray worker with specified GPU fraction
-    _ray_kfold_worker = _create_ray_kfold_worker(gpu_fraction)
-
-    # Submit all folds to Ray
-    futures = []
-    for fold_idx in range(k):
-        # Handle empty gpu_ids (CPU only mode)
-        if len(gpu_ids) == 0:
-            gpu_id = -1  # Use CPU
-        else:
-            gpu_id = gpu_ids[fold_idx % len(gpu_ids)]
-
-        future = _ray_kfold_worker.remote(
-            fold_idx=fold_idx, gpu_id=gpu_id, data_file=data_file
-        )
-        futures.append(future)
         if verbose:
-            device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
-            print(f"Submitted fold {fold_idx} to {device_str}")
-
-    # Wait for all folds to complete with progress bar
-    if verbose:
-        print("\nProcessing folds across GPUs...")
-        from tqdm import tqdm
-
-        # Process results with progress bar
-        results = []
-        with tqdm(total=k, desc="Folds completed") as pbar:
-            while futures:
-                # Wait for any task to complete
-                ready, futures = ray.wait(futures, num_returns=1)
-                result = ray.get(ready[0])
-                results.append(result)
-
-                # Update progress bar
-                pbar.set_postfix_str(
-                    f"Last: Fold {result['fold']}, GPU {result['gpu_id']}"
-                )
-                pbar.update(1)
-    else:
-        # No progress bar if not verbose
-        results = ray.get(futures)
-
-    total_time = time.time() - start_time
-
-    # Clean up
-    os.unlink(data_file)
-
-    if verbose:
-        print(
-            f"\nCompleted {k}-fold CV in {total_time:.1f}s ({total_time/k:.1f}s per fold)"
-        )
-
-    # Restore original bandwidth setting if we changed it
-    if bandwidth_calculated:
-        if original_bandwidth is None:
-            # Remove the key if it wasn't there originally
-            locator.config.get("weight_samples", {}).pop("bandwidth", None)
-        else:
-            locator.config["weight_samples"]["bandwidth"] = original_bandwidth
-
-    if return_df:
-        # Build predictions DataFrame
-        pred_rows = []
-        for result in results:
-            for pred in result["predictions"]:
-                pred_rows.append(
-                    {
-                        "sampleID": pred["sampleID"],
-                        "x_pred": pred["x_pred"],
-                        "y_pred": pred["y_pred"],
-                        "fold": result["fold"],
-                    }
-                )
-
-        all_predictions = pd.DataFrame(pred_rows)
-
-        # Verify we have predictions for all expected samples
-        expected_samples = set(samples[i] for i in range(len(samples)) if not na_mask[i])
-        actual_samples = set(all_predictions["sampleID"].unique())
-
-        if expected_samples != actual_samples:
-            print("WARNING: Sample mismatch in final results!")
-            print(f"Expected {len(expected_samples)} unique samples")
-            print(f"Got {len(actual_samples)} unique samples")
-            missing = expected_samples - actual_samples
-            extra = actual_samples - expected_samples
-            if missing:
-                print("Missing samples: {list(missing)[:10]}...")
-            if extra:
-                print(f"Extra samples: {list(extra)[:10]}...")
-
-        if save_full_pred_matrix:
-            all_predictions.to_csv(
-                f"{locator.config['out']}_kfold_holdouts_predlocs.csv", index=False
+            print(
+                f"Running true {k}-fold cross-validation across GPUs {gpu_ids} using Ray..."
             )
 
-        return all_predictions
+        start_time = time.time()
 
-    return None
+        # Create the Ray worker with specified GPU fraction
+        _ray_kfold_worker = _create_ray_kfold_worker(gpu_fraction)
+
+        # Submit all folds to Ray
+        futures = []
+        for fold_idx in range(k):
+            # Handle empty gpu_ids (CPU only mode)
+            if len(gpu_ids) == 0:
+                gpu_id = -1  # Use CPU
+            else:
+                gpu_id = gpu_ids[fold_idx % len(gpu_ids)]
+
+            future = _ray_kfold_worker.remote(
+                fold_idx=fold_idx, gpu_id=gpu_id, data_file=data_file
+            )
+            futures.append(future)
+            if verbose:
+                device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
+                print(f"Submitted fold {fold_idx} to {device_str}")
+
+        # Wait for all folds to complete with progress bar
+        if verbose:
+            print("\nProcessing folds across GPUs...")
+            from tqdm import tqdm
+
+            # Process results with progress bar
+            results = []
+            with tqdm(total=k, desc="Folds completed") as pbar:
+                while futures:
+                    # Wait for any task to complete
+                    ready, futures = ray.wait(futures, num_returns=1)
+                    result = ray.get(ready[0])
+                    results.append(result)
+
+                    # Update progress bar
+                    pbar.set_postfix_str(
+                        f"Last: Fold {result['fold']}, GPU {result['gpu_id']}"
+                    )
+                    pbar.update(1)
+        else:
+            # No progress bar if not verbose
+            results = ray.get(futures)
+
+        total_time = time.time() - start_time
+
+        if verbose:
+            print(
+                f"\nCompleted {k}-fold CV in {total_time:.1f}s ({total_time/k:.1f}s per fold)"
+            )
+
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                locator.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                locator.config["weight_samples"]["bandwidth"] = original_bandwidth
+
+        if return_df:
+            # Build predictions DataFrame
+            pred_rows = []
+            for result in results:
+                for pred in result["predictions"]:
+                    pred_rows.append(
+                        {
+                            "sampleID": pred["sampleID"],
+                            "x_pred": pred["x_pred"],
+                            "y_pred": pred["y_pred"],
+                            "fold": result["fold"],
+                        }
+                    )
+
+            all_predictions = pd.DataFrame(pred_rows)
+
+            # Verify we have predictions for all expected samples
+            expected_samples = set(
+                samples[i] for i in range(len(samples)) if not na_mask[i]
+            )
+            actual_samples = set(all_predictions["sampleID"].unique())
+
+            if expected_samples != actual_samples:
+                print("WARNING: Sample mismatch in final results!")
+                print(f"Expected {len(expected_samples)} unique samples")
+                print(f"Got {len(actual_samples)} unique samples")
+                missing = expected_samples - actual_samples
+                extra = actual_samples - expected_samples
+                if missing:
+                    print("Missing samples: {list(missing)[:10]}...")
+                if extra:
+                    print(f"Extra samples: {list(extra)[:10]}...")
+
+            if save_full_pred_matrix:
+                all_predictions.to_csv(
+                    f"{locator.config['out']}_kfold_holdouts_predlocs.csv", index=False
+                )
+
+            return all_predictions
+
+        return None
 
 
 def parallel_leave_one_out(
@@ -860,8 +900,8 @@ def parallel_holdouts(  # noqa: C901
         all_holdout_indices.append(rep_holdout_idx)
 
     # Save data to temporary file
-    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".pkl") as f:
-        data = {
+    with safe_temp_file(
+        {
             "genotypes_array": genotypes.values,
             "genotypes_shape": genotypes.shape,
             "samples": samples,
@@ -869,106 +909,107 @@ def parallel_holdouts(  # noqa: C901
             "locs": locs,
             "config": locator.config,
             "known_idx": known_idx,
-        }
-        pickle.dump(data, f)
-        data_file = f.name
+        },
+        verbose=verbose,
+    ) as data_file:
 
-    if verbose:
-        print(f"Running {n_reps} holdout replicates across GPUs {gpu_ids} using Ray...")
-
-    start_time = time.time()
-
-    # Create the Ray worker with specified GPU fraction
-    _ray_holdout_worker = _create_ray_holdout_worker(gpu_fraction)
-
-    # Submit all replicates to Ray
-    futures = []
-    for rep_idx in range(n_reps):
-        # Handle empty gpu_ids (CPU only mode)
-        if len(gpu_ids) == 0:
-            gpu_id = -1  # Use CPU
-        else:
-            gpu_id = gpu_ids[rep_idx % len(gpu_ids)]
-
-        future = _ray_holdout_worker.remote(
-            rep_idx=rep_idx,
-            gpu_id=gpu_id,
-            data_file=data_file,
-            holdout_indices=all_holdout_indices[rep_idx],
-        )
-        futures.append(future)
         if verbose:
-            device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
-            print(f"Submitted replicate {rep_idx} to {device_str}")
-
-    # Wait for all replicates to complete with progress bar
-    if verbose:
-        print("\nProcessing replicates across GPUs...")
-        from tqdm import tqdm
-
-        # Process results with progress bar
-        results = []
-        with tqdm(total=n_reps, desc="Replicates completed") as pbar:
-            while futures:
-                # Wait for any task to complete
-                ready, futures = ray.wait(futures, num_returns=1)
-                result = ray.get(ready[0])
-                results.append(result)
-
-                # Update progress bar
-                pbar.set_postfix_str(
-                    f"Last: Rep {result['rep']}, GPU {result['gpu_id']}"
-                )
-                pbar.update(1)
-    else:
-        # No progress bar if not verbose
-        results = ray.get(futures)
-
-    total_time = time.time() - start_time
-
-    # Clean up
-    os.unlink(data_file)
-
-    if verbose:
-        print(
-            f"\nCompleted {n_reps} replicates in {total_time:.1f}s ({total_time/n_reps:.1f}s per replicate)"
-        )
-
-    # Restore original bandwidth setting if we changed it
-    if bandwidth_calculated:
-        if original_bandwidth is None:
-            # Remove the key if it wasn't there originally
-            locator.config.get("weight_samples", {}).pop("bandwidth", None)
-        else:
-            locator.config["weight_samples"]["bandwidth"] = original_bandwidth
-
-    if return_df:
-        # Build predictions DataFrame in the same format as sequential version
-        pred_dfs = []
-
-        for result in results:
-            rep_idx = result["rep"]
-            predictions = pd.DataFrame(result["predictions"])
-
-            # Rename columns to include replicate number
-            holdout_preds = predictions[["x_pred", "y_pred"]].copy()
-            holdout_preds.columns = [f"x_rep{rep_idx}", f"y_rep{rep_idx}"]
-            holdout_preds["sampleID"] = predictions["sampleID"]
-            pred_dfs.append(holdout_preds)
-
-        # Merge all predictions
-        all_predictions = pred_dfs[0]
-        for df in pred_dfs[1:]:
-            all_predictions = pd.merge(all_predictions, df, on="sampleID", how="outer")
-
-        if save_full_pred_matrix:
-            all_predictions.to_csv(
-                f"{locator.config['out']}_holdouts_predlocs.csv", index=False
+            print(
+                f"Running {n_reps} holdout replicates across GPUs {gpu_ids} using Ray..."
             )
 
-        return all_predictions
+        start_time = time.time()
 
-    return None
+        # Create the Ray worker with specified GPU fraction
+        _ray_holdout_worker = _create_ray_holdout_worker(gpu_fraction)
+
+        # Submit all replicates to Ray
+        futures = []
+        for rep_idx in range(n_reps):
+            # Handle empty gpu_ids (CPU only mode)
+            if len(gpu_ids) == 0:
+                gpu_id = -1  # Use CPU
+            else:
+                gpu_id = gpu_ids[rep_idx % len(gpu_ids)]
+
+            future = _ray_holdout_worker.remote(
+                rep_idx=rep_idx,
+                gpu_id=gpu_id,
+                data_file=data_file,
+                holdout_indices=all_holdout_indices[rep_idx],
+            )
+            futures.append(future)
+            if verbose:
+                device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
+                print(f"Submitted replicate {rep_idx} to {device_str}")
+
+        # Wait for all replicates to complete with progress bar
+        if verbose:
+            print("\nProcessing replicates across GPUs...")
+            from tqdm import tqdm
+
+            # Process results with progress bar
+            results = []
+            with tqdm(total=n_reps, desc="Replicates completed") as pbar:
+                while futures:
+                    # Wait for any task to complete
+                    ready, futures = ray.wait(futures, num_returns=1)
+                    result = ray.get(ready[0])
+                    results.append(result)
+
+                    # Update progress bar
+                    pbar.set_postfix_str(
+                        f"Last: Rep {result['rep']}, GPU {result['gpu_id']}"
+                    )
+                    pbar.update(1)
+        else:
+            # No progress bar if not verbose
+            results = ray.get(futures)
+
+        total_time = time.time() - start_time
+
+        if verbose:
+            print(
+                f"\nCompleted {n_reps} replicates in {total_time:.1f}s ({total_time/n_reps:.1f}s per replicate)"
+            )
+
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                locator.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                locator.config["weight_samples"]["bandwidth"] = original_bandwidth
+
+        if return_df:
+            # Build predictions DataFrame in the same format as sequential version
+            pred_dfs = []
+
+            for result in results:
+                rep_idx = result["rep"]
+                predictions = pd.DataFrame(result["predictions"])
+
+                # Rename columns to include replicate number
+                holdout_preds = predictions[["x_pred", "y_pred"]].copy()
+                holdout_preds.columns = [f"x_rep{rep_idx}", f"y_rep{rep_idx}"]
+                holdout_preds["sampleID"] = predictions["sampleID"]
+                pred_dfs.append(holdout_preds)
+
+            # Merge all predictions
+            all_predictions = pred_dfs[0]
+            for df in pred_dfs[1:]:
+                all_predictions = pd.merge(
+                    all_predictions, df, on="sampleID", how="outer"
+                )
+
+            if save_full_pred_matrix:
+                all_predictions.to_csv(
+                    f"{locator.config['out']}_holdouts_predlocs.csv", index=False
+                )
+
+            return all_predictions
+
+        return None
 
 
 def _create_ray_windows_worker(gpu_fraction: float = 1.0):
@@ -1458,8 +1499,8 @@ def parallel_windows_holdouts(  # noqa: C901
     )
 
     # Save data to temporary file
-    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".pkl") as f:
-        data = {
+    with safe_temp_file(
+        {
             "genotypes_array": genotypes.values,
             "genotypes_shape": genotypes.shape,
             "samples": samples,
@@ -1474,136 +1515,137 @@ def parallel_windows_holdouts(  # noqa: C901
             "sdlat": sdlat,
             "unnormedlocs": unnormedlocs,
             "normalized_locs": normalized_locs,
-        }
-        pickle.dump(data, f)
-        data_file = f.name
+        },
+        verbose=verbose,
+    ) as data_file:
 
-    if verbose:
-        print(
-            f"Running windowed analysis for {len(windows)} windows across GPUs {gpu_ids} using Ray..."
-        )
-
-    start_time = time.time()
-
-    # Create the Ray worker with specified GPU fraction
-    _ray_windows_worker = _create_ray_windows_worker(gpu_fraction)
-
-    # Submit all windows to Ray
-    futures = []
-    for window_idx, window in enumerate(windows):
-        # Handle empty gpu_ids (CPU only mode)
-        if len(gpu_ids) == 0:
-            gpu_id = -1  # Use CPU
-        else:
-            gpu_id = gpu_ids[window_idx % len(gpu_ids)]
-
-        future = _ray_windows_worker.remote(
-            window_idx=window_idx,
-            window_start=window["start"],
-            window_stop=window["stop"],
-            gpu_id=gpu_id,
-            data_file=data_file,
-        )
-        futures.append(future)
-        if verbose and window_idx < 10:  # Only print first few for brevity
-            chrom_str = f" (chr{window['chromosome']})" if window["chromosome"] else ""
-            device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
+        if verbose:
             print(
-                f"Submitted window {window_idx}{chrom_str} ({window['start']}-{window['stop']}) to {device_str}"
+                f"Running windowed analysis for {len(windows)} windows across GPUs {gpu_ids} using Ray..."
             )
 
-    if verbose and len(windows) > 10:
-        print(f"... and {len(windows)-10} more windows")
+        start_time = time.time()
 
-    # Wait for all windows to complete with progress bar
-    if verbose:
-        print("\nProcessing windows across GPUs...")
-        from tqdm import tqdm
+        # Create the Ray worker with specified GPU fraction
+        _ray_windows_worker = _create_ray_windows_worker(gpu_fraction)
 
-        # Process results with progress bar
-        results = []
-        completed = 0
-        with tqdm(total=len(futures), desc="Windows completed") as pbar:
-            while futures:
-                # Wait for any task to complete
-                ready, futures = ray.wait(futures, num_returns=1)
-                result = ray.get(ready[0])
-                results.append(result)
+        # Submit all windows to Ray
+        futures = []
+        for window_idx, window in enumerate(windows):
+            # Handle empty gpu_ids (CPU only mode)
+            if len(gpu_ids) == 0:
+                gpu_id = -1  # Use CPU
+            else:
+                gpu_id = gpu_ids[window_idx % len(gpu_ids)]
 
-                # Update progress bar with window info
-                window_info = f"Window {result['window_idx']}"
-                if result["window_chromosome"]:
-                    window_info += f" (chr{result['window_chromosome']})"
-                pbar.set_postfix_str(f"Last: {window_info}, GPU {result['gpu_id']}")
-                pbar.update(1)
-                completed += 1
-    else:
-        # No progress bar if not verbose
-        results = ray.get(futures)
-
-    total_time = time.time() - start_time
-
-    # Clean up
-    os.unlink(data_file)
-
-    if verbose:
-        print(
-            f"\nCompleted {len(windows)} windows in {total_time:.1f}s ({total_time/len(windows):.1f}s per window)"
-        )
-
-        # Show GPU utilization summary
-        gpu_counts = {}
-        for result in results:
-            gpu_id = result["gpu_id"]
-            gpu_counts[gpu_id] = gpu_counts.get(gpu_id, 0) + 1
-
-        print("\nGPU utilization:")
-        for gpu_id in sorted(gpu_counts.keys()):
-            print(
-                f"  GPU {gpu_id}: {gpu_counts[gpu_id]} windows ({gpu_counts[gpu_id]/len(windows)*100:.1f}%)"
+            future = _ray_windows_worker.remote(
+                window_idx=window_idx,
+                window_start=window["start"],
+                window_stop=window["stop"],
+                gpu_id=gpu_id,
+                data_file=data_file,
             )
+            futures.append(future)
+            if verbose and window_idx < 10:  # Only print first few for brevity
+                chrom_str = (
+                    f" (chr{window['chromosome']})" if window["chromosome"] else ""
+                )
+                device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
+                print(
+                    f"Submitted window {window_idx}{chrom_str} ({window['start']}-{window['stop']}) to {device_str}"
+                )
 
-    # Restore original bandwidth setting if we changed it
-    if bandwidth_calculated:
-        if original_bandwidth is None:
-            # Remove the key if it wasn't there originally
-            locator.config.get("weight_samples", {}).pop("bandwidth", None)
+        if verbose and len(windows) > 10:
+            print(f"... and {len(windows)-10} more windows")
+
+        # Wait for all windows to complete with progress bar
+        if verbose:
+            print("\nProcessing windows across GPUs...")
+            from tqdm import tqdm
+
+            # Process results with progress bar
+            results = []
+            completed = 0
+            with tqdm(total=len(futures), desc="Windows completed") as pbar:
+                while futures:
+                    # Wait for any task to complete
+                    ready, futures = ray.wait(futures, num_returns=1)
+                    result = ray.get(ready[0])
+                    results.append(result)
+
+                    # Update progress bar with window info
+                    window_info = f"Window {result['window_idx']}"
+                    if result["window_chromosome"]:
+                        window_info += f" (chr{result['window_chromosome']})"
+                    pbar.set_postfix_str(f"Last: {window_info}, GPU {result['gpu_id']}")
+                    pbar.update(1)
+                    completed += 1
         else:
-            locator.config["weight_samples"]["bandwidth"] = original_bandwidth
+            # No progress bar if not verbose
+            results = ray.get(futures)
 
-    if return_df:
-        # Build predictions DataFrame in the same format as sequential version
-        pred_dfs = []
+        total_time = time.time() - start_time
 
-        for result in results:
-            if result["predictions"] is not None:
-                window_label = result.get("window_label", f"pos{result['window_start']}")
-                predictions = pd.DataFrame(result["predictions"])
-
-                # Rename columns to include window label
-                window_preds = predictions[["x_pred", "y_pred"]].copy()
-                window_preds.columns = [f"x_{window_label}", f"y_{window_label}"]
-                window_preds["sampleID"] = predictions["sampleID"]
-                pred_dfs.append(window_preds)
-
-        # Check if any windows had predictions
-        if not pred_dfs:
-            print("Warning: No windows contained SNPs. No predictions generated.")
-            return None
-
-        # Merge all predictions
-        all_predictions = pred_dfs[0]
-        for df in pred_dfs[1:]:
-            all_predictions = pd.merge(all_predictions, df, on="sampleID")
-
-        if save_full_pred_matrix:
-            all_predictions.to_csv(
-                f"{locator.config['out']}_windows_holdouts_predlocs.csv", index=False
+        if verbose:
+            print(
+                f"\nCompleted {len(windows)} windows in {total_time:.1f}s ({total_time/len(windows):.1f}s per window)"
             )
 
-        return all_predictions
+            # Show GPU utilization summary
+            gpu_counts = {}
+            for result in results:
+                gpu_id = result["gpu_id"]
+                gpu_counts[gpu_id] = gpu_counts.get(gpu_id, 0) + 1
 
-    return None
+            print("\nGPU utilization:")
+            for gpu_id in sorted(gpu_counts.keys()):
+                print(
+                    f"  GPU {gpu_id}: {gpu_counts[gpu_id]} windows ({gpu_counts[gpu_id]/len(windows)*100:.1f}%)"
+                )
+
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                locator.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                locator.config["weight_samples"]["bandwidth"] = original_bandwidth
+
+        if return_df:
+            # Build predictions DataFrame in the same format as sequential version
+            pred_dfs = []
+
+            for result in results:
+                if result["predictions"] is not None:
+                    window_label = result.get(
+                        "window_label", f"pos{result['window_start']}"
+                    )
+                    predictions = pd.DataFrame(result["predictions"])
+
+                    # Rename columns to include window label
+                    window_preds = predictions[["x_pred", "y_pred"]].copy()
+                    window_preds.columns = [f"x_{window_label}", f"y_{window_label}"]
+                    window_preds["sampleID"] = predictions["sampleID"]
+                    pred_dfs.append(window_preds)
+
+            # Check if any windows had predictions
+            if not pred_dfs:
+                print("Warning: No windows contained SNPs. No predictions generated.")
+                return None
+
+            # Merge all predictions
+            all_predictions = pred_dfs[0]
+            for df in pred_dfs[1:]:
+                all_predictions = pd.merge(all_predictions, df, on="sampleID")
+
+            if save_full_pred_matrix:
+                all_predictions.to_csv(
+                    f"{locator.config['out']}_windows_holdouts_predlocs.csv", index=False
+                )
+
+            return all_predictions
+
+        return None
 
 
 def _create_ray_ensemble_worker(gpu_fraction: float = 1.0):
@@ -1892,8 +1934,8 @@ def parallel_train_ensemble(  # noqa: C901
                     print(f"Using bandwidth: {optimal_bandwidth:.3f}")
 
     # Save data to temporary file
-    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".pkl") as f:
-        data = {
+    with safe_temp_file(
+        {
             "genotypes_array": genotypes.values,
             "filtered_genotypes_array": filtered_genotypes,  # Already a numpy array
             "samples": samples,
@@ -1904,185 +1946,188 @@ def parallel_train_ensemble(  # noqa: C901
             "augment_config": augment_config,
             "save_fold_models": save_fold_models,
             "patience_multiplier": patience_multiplier,
-        }
-        pickle.dump(data, f)
-        data_file = f.name
+        },
+        verbose=verbose,
+    ) as data_file:
 
-    if verbose:
-        print(f"Training {k}-fold ensemble across GPUs {gpu_ids} using Ray...")
-
-    start_time = time.time()
-
-    # Create the Ray worker with specified GPU fraction
-    _ray_ensemble_worker = _create_ray_ensemble_worker(gpu_fraction)
-
-    # Submit all folds to Ray
-    futures = []
-    for fold_idx in range(k):
-        # Handle empty gpu_ids (CPU only mode)
-        if len(gpu_ids) == 0:
-            gpu_id = -1  # Use CPU
-        else:
-            gpu_id = gpu_ids[fold_idx % len(gpu_ids)]
-
-        future = _ray_ensemble_worker.remote(
-            fold_idx=fold_idx, gpu_id=gpu_id, data_file=data_file
-        )
-        futures.append(future)
         if verbose:
-            device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
-            print(f"Submitted fold {fold_idx} to {device_str}")
+            print(f"Training {k}-fold ensemble across GPUs {gpu_ids} using Ray...")
 
-    # Wait for all folds to complete with progress bar
-    if verbose:
-        print("\nTraining ensemble folds across GPUs...")
-        from tqdm import tqdm
+        start_time = time.time()
 
-        # Process results with progress bar
-        results = []
-        with tqdm(total=k, desc="Folds completed") as pbar:
-            while futures:
-                # Wait for any task to complete
-                ready, futures = ray.wait(futures, num_returns=1)
-                result = ray.get(ready[0])
-                results.append(result)
+        # Create the Ray worker with specified GPU fraction
+        _ray_ensemble_worker = _create_ray_ensemble_worker(gpu_fraction)
 
-                # Update progress bar
-                pbar.set_postfix_str(
-                    f"Last: Fold {result['fold']}, GPU {result['gpu_id']}, "
-                    f"Final loss: {result['final_loss']:.4f}"
-                )
-                pbar.update(1)
-    else:
-        # No progress bar if not verbose
-        results = ray.get(futures)
-
-    total_time = time.time() - start_time
-
-    # Clean up
-    os.unlink(data_file)
-
-    if verbose:
-        print(
-            f"\nCompleted ensemble training in {total_time:.1f}s ({total_time/k:.1f}s per fold)"
-        )
-
-        # Show speedup vs sequential
-        if len(gpu_ids) > 0:
-            num_gpus = len(set(gpu_ids))
-            estimated_speedup = k / num_gpus
-            print(
-                f"Estimated speedup: {estimated_speedup:.1f}x (using {num_gpus} GPU{'s' if num_gpus > 1 else ''})"
-            )
-        else:
-            print("CPU mode - no GPU speedup available")
-
-    # Restore original bandwidth setting if we changed it
-    if bandwidth_calculated:
-        if original_bandwidth is None:
-            # Remove the key if it wasn't there originally
-            locator.config.get("weight_samples", {}).pop("bandwidth", None)
-        else:
-            locator.config["weight_samples"]["bandwidth"] = original_bandwidth
-
-    # Aggregate results (sort by fold index to ensure correct order)
-    results_sorted = sorted(results, key=lambda x: x["fold"])
-
-    # Store results on locator instance (mimicking sequential version)
-    locator._ensemble_genotypes = genotypes
-    locator._ensemble_fold_info = fold_info
-    locator._ensemble_models = []
-    locator._ensemble_histories = []
-    locator._ensemble_norm_params = []
-
-    for result in results_sorted:
-        # Reconstruct model info
-        model_info = result["model_info"]
-        model_info["model"] = None  # Model will be loaded from disk when needed
-        model_info["train_indices"] = np.array(model_info["train_indices"])
-        model_info["val_indices"] = np.array(model_info["val_indices"])
-
-        # Create history object for compatibility
-        class HistoryStub:
-            def __init__(self, history_dict):
-                self.history = history_dict
-
-        model_info["history"] = HistoryStub(result["history"])
-
-        # Store results
-        locator._ensemble_models.append(model_info)
-        locator._ensemble_histories.append(model_info["history"])
-        locator._ensemble_norm_params.append(model_info["norm_params"])
-
-    # Calculate averaged normalization parameters
-    avg_norm_params = locator._average_normalization_params(
-        locator._ensemble_norm_params
-    )
-
-    # Store averaged parameters on instance
-    locator.meanlong = avg_norm_params["meanlong"]
-    locator.sdlong = avg_norm_params["sdlong"]
-    locator.meanlat = avg_norm_params["meanlat"]
-    locator.sdlat = avg_norm_params["sdlat"]
-
-    # Save ensemble using model manager if requested
-    if use_model_manager and save_fold_models:
-        from locator.ensemble_model_manager import EnsembleModelManager
-
-        model_manager = EnsembleModelManager(f"{locator.config['out']}_ensemble")
-
-        # Create a serializable version of config (excluding DataFrames)
-        serializable_config = {
-            k: v for k, v in locator.config.items() if not isinstance(v, pd.DataFrame)
-        }
-
-        ensemble_metadata = {
-            "k_folds": k,
-            "na_action": na_action or locator.na_action,
-            "augment_data": augment_data,
-            "config": serializable_config,
-            "parallel_training": True,
-            "gpu_ids": gpu_ids,
-        }
-
-        # Check if we can load models for the model manager
-        models_loaded = False
-        if verbose:
-            print("Checking for saved model weights...")
-
-        for i, model_info in enumerate(locator._ensemble_models):
-            if model_info["weights_file"] and os.path.exists(model_info["weights_file"]):
-                if not models_loaded and verbose:
-                    print("Loading models for ensemble manager...")
-                models_loaded = True
-                # Create model and load weights
-                model = locator._create_model(input_shape=filtered_genotypes.shape[0])
-                model.load_weights(model_info["weights_file"])
-                model_info["model"] = model
+        # Submit all folds to Ray
+        futures = []
+        for fold_idx in range(k):
+            # Handle empty gpu_ids (CPU only mode)
+            if len(gpu_ids) == 0:
+                gpu_id = -1  # Use CPU
             else:
-                if verbose and model_info["weights_file"]:
+                gpu_id = gpu_ids[fold_idx % len(gpu_ids)]
+
+            future = _ray_ensemble_worker.remote(
+                fold_idx=fold_idx, gpu_id=gpu_id, data_file=data_file
+            )
+            futures.append(future)
+            if verbose:
+                device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
+                print(f"Submitted fold {fold_idx} to {device_str}")
+
+        # Wait for all folds to complete with progress bar
+        if verbose:
+            print("\nTraining ensemble folds across GPUs...")
+            from tqdm import tqdm
+
+            # Process results with progress bar
+            results = []
+            with tqdm(total=k, desc="Folds completed") as pbar:
+                while futures:
+                    # Wait for any task to complete
+                    ready, futures = ray.wait(futures, num_returns=1)
+                    result = ray.get(ready[0])
+                    results.append(result)
+
+                    # Update progress bar
+                    pbar.set_postfix_str(
+                        f"Last: Fold {result['fold']}, GPU {result['gpu_id']}, "
+                        f"Final loss: {result['final_loss']:.4f}"
+                    )
+                    pbar.update(1)
+        else:
+            # No progress bar if not verbose
+            results = ray.get(futures)
+
+        total_time = time.time() - start_time
+
+        if verbose:
+            print(
+                f"\nCompleted ensemble training in {total_time:.1f}s ({total_time/k:.1f}s per fold)"
+            )
+
+            # Show speedup vs sequential
+            if len(gpu_ids) > 0:
+                num_gpus = len(set(gpu_ids))
+                estimated_speedup = k / num_gpus
+                print(
+                    f"Estimated speedup: {estimated_speedup:.1f}x (using {num_gpus} GPU{'s' if num_gpus > 1 else ''})"
+                )
+            else:
+                print("CPU mode - no GPU speedup available")
+
+        # Restore original bandwidth setting if we changed it
+        if bandwidth_calculated:
+            if original_bandwidth is None:
+                # Remove the key if it wasn't there originally
+                locator.config.get("weight_samples", {}).pop("bandwidth", None)
+            else:
+                locator.config["weight_samples"]["bandwidth"] = original_bandwidth
+
+        # Aggregate results (sort by fold index to ensure correct order)
+        results_sorted = sorted(results, key=lambda x: x["fold"])
+
+        # Store results on locator instance (mimicking sequential version)
+        locator._ensemble_genotypes = genotypes
+        locator._ensemble_fold_info = fold_info
+        locator._ensemble_models = []
+        locator._ensemble_histories = []
+        locator._ensemble_norm_params = []
+
+        for result in results_sorted:
+            # Reconstruct model info
+            model_info = result["model_info"]
+            model_info["model"] = None  # Model will be loaded from disk when needed
+            model_info["train_indices"] = np.array(model_info["train_indices"])
+            model_info["val_indices"] = np.array(model_info["val_indices"])
+
+            # Create history object for compatibility
+            class HistoryStub:
+                def __init__(self, history_dict):
+                    self.history = history_dict
+
+            model_info["history"] = HistoryStub(result["history"])
+
+            # Store results
+            locator._ensemble_models.append(model_info)
+            locator._ensemble_histories.append(model_info["history"])
+            locator._ensemble_norm_params.append(model_info["norm_params"])
+
+        # Calculate averaged normalization parameters
+        avg_norm_params = locator._average_normalization_params(
+            locator._ensemble_norm_params
+        )
+
+        # Store averaged parameters on instance
+        locator.meanlong = avg_norm_params["meanlong"]
+        locator.sdlong = avg_norm_params["sdlong"]
+        locator.meanlat = avg_norm_params["meanlat"]
+        locator.sdlat = avg_norm_params["sdlat"]
+
+        # Save ensemble using model manager if requested
+        if use_model_manager and save_fold_models:
+            from locator.ensemble_model_manager import EnsembleModelManager
+
+            model_manager = EnsembleModelManager(f"{locator.config['out']}_ensemble")
+
+            # Create a serializable version of config (excluding DataFrames)
+            serializable_config = {
+                k: v
+                for k, v in locator.config.items()
+                if not isinstance(v, pd.DataFrame)
+            }
+
+            ensemble_metadata = {
+                "k_folds": k,
+                "na_action": na_action or locator.na_action,
+                "augment_data": augment_data,
+                "config": serializable_config,
+                "parallel_training": True,
+                "gpu_ids": gpu_ids,
+            }
+
+            # Check if we can load models for the model manager
+            models_loaded = False
+            if verbose:
+                print("Checking for saved model weights...")
+
+            for i, model_info in enumerate(locator._ensemble_models):
+                if model_info["weights_file"] and os.path.exists(
+                    model_info["weights_file"]
+                ):
+                    if not models_loaded and verbose:
+                        print("Loading models for ensemble manager...")
+                    models_loaded = True
+                    # Create model and load weights
+                    model = locator._create_model(
+                        input_shape=filtered_genotypes.shape[0]
+                    )
+                    model.load_weights(model_info["weights_file"])
+                    model_info["model"] = model
+                else:
+                    if verbose and model_info["weights_file"]:
+                        print(
+                            f"Warning: Expected weights file not found: {model_info['weights_file']}"
+                        )
+
+            if models_loaded:
+                model_manager.save_ensemble(locator._ensemble_models, ensemble_metadata)
+                if verbose:
+                    print(f"Saved ensemble to {model_manager.ensemble_dir}")
+            else:
+                if verbose:
                     print(
-                        f"Warning: Expected weights file not found: {model_info['weights_file']}"
+                        "Models were saved individually by workers, skipping ensemble manager."
                     )
 
-        if models_loaded:
-            model_manager.save_ensemble(locator._ensemble_models, ensemble_metadata)
-            if verbose:
-                print(f"Saved ensemble to {model_manager.ensemble_dir}")
-        else:
-            if verbose:
-                print(
-                    "Models were saved individually by workers, skipping ensemble manager."
-                )
-
-    return {
-        "histories": locator._ensemble_histories,
-        "models": locator._ensemble_models,
-        "normalization_params": avg_norm_params,
-        "fold_info": fold_info,
-        "training_time": total_time,
-        "parallel": True,
-    }
+        return {
+            "histories": locator._ensemble_histories,
+            "models": locator._ensemble_models,
+            "normalization_params": avg_norm_params,
+            "fold_info": fold_info,
+            "training_time": total_time,
+            "parallel": True,
+        }
 
 
 # Additional parallel methods that could be implemented:
