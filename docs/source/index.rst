@@ -9,6 +9,7 @@ Locator is a deep learning-based tool for predicting geographic coordinates from
 
    installation
    usage
+   cli
    ensemble_guide
    data_pipeline_guide
    gpu_optimization_guide
