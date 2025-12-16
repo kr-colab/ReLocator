@@ -43,14 +43,12 @@ setup(
             "pytest",
             "pytest-cov",  # Coverage reporting
             "pytest-xdist",  # Parallel test execution
-            "black",  # Code formatting
-            "flake8",  # Code linting
-            "isort",  # Import sorting
+            "ruff",  # Linting and formatting
             "pre-commit",  # Pre-commit hooks
         ],
         "docs": [
-            "sphinx>=4.0",
-            "sphinx_rtd_theme",
+            "sphinx>=4.0,<9.0",
+            "sphinx_rtd_theme>=2.0.0",
             "sphinx-autodoc-typehints",
             "sphinx-autobuild",
         ],
