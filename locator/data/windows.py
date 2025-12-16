@@ -26,7 +26,8 @@ def sort_chromosomes(chroms: List[str]) -> List[str]:
     Args:
         chroms: List of chromosome names
 
-    Returns:
+    Returns
+    -------
         List of sorted chromosome names
     """
     numeric = []
@@ -74,7 +75,8 @@ def generate_genomic_windows(  # noqa: C901
         min_snps_per_window: Minimum SNPs required per window (default: 1)
         verbose: Whether to print progress information
 
-    Returns:
+    Returns
+    -------
         List of window dictionaries, each containing:
         - 'start': Start position
         - 'stop': Stop position
@@ -83,7 +85,8 @@ def generate_genomic_windows(  # noqa: C901
         - 'label': Label for column naming
         - 'n_snps': Number of SNPs in window
 
-    Raises:
+    Raises
+    ------
         ValueError: If inputs are invalid
     """
     # Validate inputs

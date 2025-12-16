@@ -27,7 +27,7 @@ class TestAnalysisTFData:
         original_train = locator.train
 
         def track_train(*args, **kwargs):
-            site_order = kwargs.get("site_order", None)
+            site_order = kwargs.get("site_order")
             if site_order is not None:
                 site_orders_used.append(site_order.copy())
             return original_train(*args, **kwargs)

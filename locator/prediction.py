@@ -42,7 +42,9 @@ class PredictionMixin:
             site_order (np.ndarray, optional): Array of SNP indices for bootstrap resampling.
                 If provided, SNPs will be reordered according to these indices during prediction.
                 Used for bootstrap analyses to ensure consistent resampling between train and predict.
-        Returns:
+
+        Returns
+        -------
             numpy.ndarray or pandas.DataFrame: Array of predicted coordinates or DataFrame with
                 x,y coordinates and sampleID columns
         """
@@ -60,9 +62,8 @@ class PredictionMixin:
                 )
 
             # Import required modules
-            from .data import IndexSet
+            from .data import IndexSet, make_tf_dataset
             from .data import filter_snps_legacy as filter_snps
-            from .data import make_tf_dataset
 
             # Determine which samples to predict
             if indices is None:
@@ -238,10 +239,12 @@ class PredictionMixin:
         Args:
             weights_path (str): Path to the saved HDF5 weights file
 
-        Returns:
+        Returns
+        -------
             dict: Dictionary containing loaded metadata including normalization params
 
-        Raises:
+        Raises
+        ------
             ValueError: If weights file cannot be loaded or is missing metadata
         """
         import os
@@ -349,7 +352,8 @@ class PredictionMixin:
             save_preds_to_disk (bool): Whether to save predictions to disk
             return_df (bool): Whether to return predictions as DataFrame
 
-        Returns:
+        Returns
+        -------
             numpy.ndarray or pandas.DataFrame: Predictions
         """
         # Load the model and metadata
@@ -428,9 +432,7 @@ class PredictionMixin:
         # Make predictions
         return self.predict(save_preds_to_disk=save_preds_to_disk, return_df=return_df)
 
-    def sort_samples(
-        self, samples=None, sample_data_file=None, reorder=True
-    ):  # noqa: C901
+    def sort_samples(self, samples=None, sample_data_file=None, reorder=True):  # noqa: C901
         """Sort samples and match with location data.
 
         This method matches samples with their location data and ensures consistent ordering
@@ -444,12 +446,14 @@ class PredictionMixin:
             reorder (bool): If True, automatically reorder metadata to match genotype order.
                 If False, raise error on order mismatch (default: True)
 
-        Returns:
+        Returns
+        -------
             tuple: A tuple containing:
                 - sample_data (pandas.DataFrame): DataFrame with sample metadata and coordinates
                 - locs (numpy.ndarray): Array of x,y coordinates for each sample
 
-        Raises:
+        Raises
+        ------
             ValueError: If samples not provided or if no sample data available
             ValueError: If sample IDs don't match between genotype and sample data (when reorder=False)
         """
@@ -579,7 +583,8 @@ class PredictionMixin:
             plot_summary: Display error summary plot in notebook (only if return_df=True)
             plot_map: Display map of predictions (only if plot_summary=True)
 
-        Returns:
+        Returns
+        -------
             If return_df is True, returns pandas DataFrame with predictions
             Otherwise returns None
         """

@@ -17,7 +17,8 @@ class DataLoaderMixin:
         Args:
             zarr_path: Path to zarr file containing genotype data
 
-        Returns:
+        Returns
+        -------
             tuple: (genotypes, samples) where:
                 - genotypes is an allel.GenotypeArray containing genetic data
                 - samples is a numpy array of sample IDs
@@ -35,12 +36,14 @@ class DataLoaderMixin:
         Args:
             vcf_path: Path to VCF file containing genotype data
 
-        Returns:
+        Returns
+        -------
             tuple: (genotypes, samples) where:
                 - genotypes is an allel.GenotypeArray containing genetic data
                 - samples is a numpy array of sample IDs
 
-        Raises:
+        Raises
+        ------
             ValueError: If VCF file cannot be read
         """
         print("reading VCF")
@@ -75,7 +78,8 @@ class DataLoaderMixin:
                 followed by variant columns. Each row contains genotype counts (0,1,2)
                 for one sample.
 
-        Returns:
+        Returns
+        -------
             tuple: (genotypes, samples) where:
                 - genotypes is an allel.GenotypeArray containing genetic data
                 - samples is a numpy array of sample IDs
@@ -132,12 +136,14 @@ class DataLoaderMixin:
             zarr (str, optional): Path to zarr format genotype data
             matrix (str, optional): Path to tab-delimited matrix file
 
-        Returns:
+        Returns
+        -------
             tuple: (genotypes, samples) where:
                 - genotypes is an allel.GenotypeArray of shape (n_sites, n_samples, 2)
                 - samples is a numpy array of sample IDs
 
-        Examples:
+        Examples
+        --------
             >>> # Using stored DataFrame from initialization
             >>> locator = Locator({
             ...     "genotype_data": geno_df,  # DataFrame with genotypes
@@ -155,7 +161,8 @@ class DataLoaderMixin:
             >>> # Using matrix file
             >>> genotypes, samples = locator.load_genotypes(matrix="path/to/geno.txt")
 
-        Raises:
+        Raises
+        ------
             ValueError: If no input source is provided or if input format is invalid
         """
         # First load sample data if not already loaded
@@ -188,7 +195,7 @@ class DataLoaderMixin:
             # Convert each genotype count to allele counts
             # e.g., 0 -> [0,0], 1 -> [1,0], 2 -> [1,1]
             for i, count in enumerate([0, 1, 2]):
-                mask = geno_df.values.T == count
+                mask = count == geno_df.values.T
                 if count == 0:
                     continue  # already zeros
                 elif count == 1:

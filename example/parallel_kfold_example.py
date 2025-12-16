@@ -19,7 +19,6 @@ from locator.plotting import plot_error_summary
 
 
 def main():
-
     vcf_path = "data/test_genotypes.vcf.gz"
     coords_path = "data/test_sample_data.txt"
     output_dir = "demo_output"

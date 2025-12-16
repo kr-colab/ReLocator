@@ -16,7 +16,8 @@ class IndexSet:
     to enable memory-efficient data access without creating copies of
     large genotype arrays.
 
-    Attributes:
+    Attributes
+    ----------
         indices: Dictionary mapping split names to numpy arrays of indices
         total_samples: Total number of samples in the dataset
         na_mask: Optional boolean mask indicating samples without coordinates
@@ -97,7 +98,8 @@ class IndexSet:
             na_mask: Boolean mask indicating samples without coordinates
             na_action: How to handle NA samples ('separate', 'exclude', 'fail')
 
-        Returns:
+        Returns
+        -------
             IndexSet with random splits
         """
         if splits is None:
@@ -171,7 +173,8 @@ class IndexSet:
             seed: Random seed for reproducibility
             na_mask: Boolean mask indicating samples without coordinates
 
-        Returns:
+        Returns
+        -------
             IndexSet with train and test splits
         """
         if fold >= k or fold < 0:
@@ -221,7 +224,8 @@ class IndexSet:
             test_groups: List of group labels to use as test set
             na_mask: Boolean mask indicating samples without coordinates
 
-        Returns:
+        Returns
+        -------
             IndexSet with train and test splits
         """
         n = len(groups)
@@ -260,7 +264,8 @@ class IndexSet:
             predict: Prediction indices (samples without labels)
             total_samples: Total number of samples (inferred if not provided)
 
-        Returns:
+        Returns
+        -------
             IndexSet with specified splits
         """
         indices = {"train": train}
@@ -301,7 +306,8 @@ class IndexSet:
             na_mask: Boolean mask indicating samples to exclude from k-fold
                     (e.g., samples without coordinates or not in training set)
 
-        Returns:
+        Returns
+        -------
             List of k IndexSet objects, one for each fold
         """
         # Handle excluded samples - k-fold only uses included samples

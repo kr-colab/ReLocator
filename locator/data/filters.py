@@ -63,7 +63,8 @@ def normalize_locs(
     Args:
         locs: Array of shape (n_samples, 2) containing longitude and latitude
 
-    Returns:
+    Returns
+    -------
         Tuple of (meanlong, sdlong, meanlat, sdlat, unnormedlocs, normedlocs)
     """
     # Only copy if we're going to modify the original
@@ -89,7 +90,8 @@ def normalize_locs_params(
     Args:
         locs: Array of shape (n_samples, 2) containing longitude and latitude
 
-    Returns:
+    Returns
+    -------
         Tuple of (NormalizationParams, unnormedlocs, normedlocs)
     """
     unnormedlocs = locs.copy()
@@ -110,7 +112,8 @@ def impute_missing(genotypes) -> np.ndarray:
     Args:
         genotypes: GenotypeArray with missing data
 
-    Returns:
+    Returns
+    -------
         Allele counts array with imputed values
     """
     print("imputing missing data")
@@ -143,7 +146,8 @@ def filter_snps(
         impute: Whether to impute missing data
         verbose: Whether to print progress messages
 
-    Returns:
+    Returns
+    -------
         Tuple of (filtered allele counts array, FilterStats)
     """
     if verbose:

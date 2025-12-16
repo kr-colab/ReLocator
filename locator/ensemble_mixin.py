@@ -6,9 +6,8 @@ import numpy as np
 import pandas as pd
 from tensorflow import keras
 
-from .data import IndexSet, NormalizationParams
+from .data import IndexSet, NormalizationParams, make_tf_dataset, normalize_locs
 from .data import filter_snps_legacy as filter_snps
-from .data import make_tf_dataset, normalize_locs
 from .ensemble_model_manager import EnsembleModelManager
 from .gpu_optimizer import GPUOptimizer
 
@@ -32,7 +31,8 @@ class EnsembleMixin:
             na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
 
-        Returns:
+        Returns
+        -------
             dict: Dictionary with fold information:
                 - 'index_sets': List of IndexSet objects for each fold
                 - 'fold_indices': Legacy format dict for backward compatibility
@@ -148,7 +148,8 @@ class EnsembleMixin:
             use_mixed_precision: Whether to use mixed precision training (default: None, auto-detect)
             patience_multiplier: Multiply patience for ensemble training (default: 1.0)
 
-        Returns:
+        Returns
+        -------
             dict: Dictionary containing:
                 - 'histories': List of training histories for each fold
                 - 'models': List of trained model configurations
@@ -291,7 +292,8 @@ class EnsembleMixin:
             augment_config: Augmentation configuration
             verbose: Whether to show training progress
 
-        Returns:
+        Returns
+        -------
             dict: Model information including model, history, and parameters
         """
         train_idx = index_set.train
@@ -382,7 +384,8 @@ class EnsembleMixin:
             save_fold_models: Whether to save fold models
             patience_multiplier: Multiply patience for ensemble training
 
-        Returns:
+        Returns
+        -------
             list: List of Keras callbacks
         """
         callbacks = []
@@ -432,7 +435,8 @@ class EnsembleMixin:
             return_df: Return results as DataFrame (default: True)
             save_predictions: Save predictions to disk (default: True)
 
-        Returns:
+        Returns
+        -------
             pd.DataFrame or np.ndarray: Ensemble predictions with optional std
         """
         # Validate inputs
@@ -608,7 +612,8 @@ class EnsembleMixin:
         Args:
             ensemble_path: Path to the saved ensemble directory
 
-        Returns:
+        Returns
+        -------
             dict: Ensemble information including models and parameters
         """
         # Create model manager
@@ -662,7 +667,8 @@ class EnsembleMixin:
             return_df: Return results as DataFrame (default: True)
             save_predictions: Save predictions to disk (default: True)
 
-        Returns:
+        Returns
+        -------
             pd.DataFrame or np.ndarray: Ensemble predictions
         """
         if not hasattr(self, "_ensemble_model_manager"):
@@ -730,7 +736,8 @@ class EnsembleMixin:
             use_mixed_precision: Whether to use mixed precision training.
                 If None, uses config value or auto-detects based on GPU.
 
-        Returns:
+        Returns
+        -------
             bool: Whether mixed precision was enabled
         """
         # Check if we should use mixed precision
@@ -755,7 +762,8 @@ class EnsembleMixin:
             dataset_size: Size of training dataset
             fold_idx: Current fold index (for logging)
 
-        Returns:
+        Returns
+        -------
             int: Optimal batch size
         """
         # Check if we already computed batch size
@@ -791,7 +799,8 @@ class EnsembleMixin:
             patience_multiplier: Multiply base patience for ensemble training
                 (ensembles often benefit from longer training)
 
-        Returns:
+        Returns
+        -------
             keras.callbacks.EarlyStopping: Configured callback
         """
         base_patience = self.config.get("patience", 100)
@@ -814,7 +823,8 @@ class EnsembleMixin:
         Args:
             fold_idx: Current fold index
 
-        Returns:
+        Returns
+        -------
             keras.callbacks.ReduceLROnPlateau: Configured callback
         """
         # Add small variation to learning rate based on fold

@@ -200,7 +200,7 @@ def main():  # noqa: C901
 
     # Load old parameters if specified
     if args.load_params is not None:
-        with open(args.load_params, "r") as f:
+        with open(args.load_params) as f:
             args.__dict__ = json.load(f)
 
     # Initialize locator

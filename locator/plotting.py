@@ -57,7 +57,8 @@ def kde_predict(x_coords, y_coords, xlim=(0, 50), ylim=(0, 50), n_points=100):
         ylim (tuple): Tuple of (min, max) y values for grid. Default: (0, 50)
         n_points (int): Number of points for density estimation grid. Default: 100
 
-    Returns:
+    Returns
+    -------
         tuple: A 3-tuple containing:
 
             - **x_grid** (*numpy.ndarray*): X coordinates of the mesh grid
@@ -142,10 +143,12 @@ def plot_predictions(  # noqa: C901
         n_levels (int): Number of KDE contour levels to plot. Default: 3
         show (bool or None): Whether to display plot. None=auto-detect environment. Default: None
 
-    Returns:
+    Returns
+    -------
         None: Saves plot to file and optionally displays it
 
-    Examples:
+    Examples
+    --------
         For jacknife analysis::
 
             predictions = locator.run_jacknife(genotypes, samples, return_df=True)
@@ -356,15 +359,18 @@ def plot_error_summary(  # noqa: C901
         return_merged (bool): If True, return the internal merged DataFrame used for plotting.
             Default: False
 
-    Returns:
+    Returns
+    -------
         None: Saves plot to file and optionally displays it.
         If return_merged is True, returns the internal merged DataFrame containing prediction errors and true locations.
 
-    Raises:
+    Raises
+    ------
         ValueError: If predictions or sample_data are empty, have missing columns,
             or have no matching samples
 
-    Examples:
+    Examples
+    --------
         Basic usage with k-fold results::
 
             predictions = locator.run_k_fold_holdouts(genotypes, samples, return_df=True)
@@ -614,11 +620,13 @@ def plot_interactive_error_map(
         show_histogram (bool): Whether to include error distribution histogram panel.
             Default: True
 
-    Returns:
+    Returns
+    -------
         plotly.graph_objects.Figure: The interactive figure object. Can be displayed
         directly in Jupyter notebooks with fig.show() or just 'fig' in a cell.
 
-    Examples:
+    Examples
+    --------
         Basic usage::
 
             fig = plot_interactive_error_map(predictions, sample_data)
@@ -966,14 +974,17 @@ def plot_sample_weights(
         show (bool or None): Whether to display plot. None=auto-detect environment,
             True=always show, False=never show. Default: None
 
-    Returns:
+    Returns
+    -------
         None: Saves plot to file and optionally displays it
 
-    Raises:
+    Raises
+    ------
         ValueError: If locator doesn't have computed sample weights, or if
             required data is missing
 
-    Examples:
+    Examples
+    --------
         After training with KDE weighting::
 
             config = {
@@ -1176,7 +1187,8 @@ class PlottingMixin:
     This mixin is inherited by the main Locator class to provide visualization
     methods for training history and Jupyter notebook integration.
 
-    Methods:
+    Methods
+    -------
         plot_history: Plot training and validation loss curves
         _repr_html_: Generate rich HTML representation for Jupyter notebooks
     """
@@ -1199,7 +1211,8 @@ class PlottingMixin:
             history (keras.callbacks.History): History object returned by model.fit()
                 containing training metrics for each epoch
 
-        Returns:
+        Returns
+        -------
             None: Saves plot to {config['out']}_fitplot.pdf if config['plot_history'] is True
 
         Note:
@@ -1242,7 +1255,8 @@ class PlottingMixin:
         This method is automatically called by Jupyter/IPython when displaying
         a Locator instance in a notebook cell.
 
-        Returns:
+        Returns
+        -------
             str: HTML string with styled content including embedded plots
 
         Note:

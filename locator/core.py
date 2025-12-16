@@ -23,7 +23,8 @@ def setup_gpu(gpu_number=None):
     Args:
         gpu_number (int or str, optional): GPU index to use (0-based). If None, the first available GPU is used.
 
-    Returns:
+    Returns
+    -------
         bool: True if a GPU is available and successfully configured, otherwise False.
     """
     gpus = tf.config.list_physical_devices("GPU")
@@ -88,7 +89,8 @@ class Locator(
     initialization. Sample location data can be provided either as a file path or
     as a pandas DataFrame.
 
-    Attributes:
+    Attributes
+    ----------
         config (dict): Configuration dictionary containing model parameters
         model (keras.Model): The neural network model (created during training)
         history (keras.callbacks.History): Training history (available after training)
@@ -395,10 +397,12 @@ class Locator(
         """
         Returns the sample data as a pandas DataFrame.
 
-        Returns:
+        Returns
+        -------
             pd.DataFrame: The sample data DataFrame with columns ['sampleID', 'x', 'y', ...].
 
-        Raises:
+        Raises
+        ------
             ValueError: If sample data is not available.
 
         Example:
@@ -431,7 +435,8 @@ class Locator(
             sample_data (pandas.DataFrame, optional): DataFrame with columns 'sampleID', 'x', 'y'.
                 If not provided, uses the stored sample data or loads from config.
 
-        Returns:
+        Returns
+        -------
             dict: A dictionary containing:
                 - 'known_indices' (numpy.ndarray): Array indices of samples with coordinates
                 - 'na_indices' (numpy.ndarray): Array indices of samples without coordinates
@@ -490,7 +495,8 @@ class Locator(
             samples (numpy.ndarray): Array of sample IDs
             verbose (bool): If True, print detailed statistics. Default: True
 
-        Returns:
+        Returns
+        -------
             dict: Sample status dictionary from get_sample_status()
 
         Example::

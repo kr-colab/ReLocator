@@ -57,7 +57,8 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
                      ...
                      0.0 = CPU only
 
-    Returns:
+    Returns
+    -------
         Ray remote function configured with specified GPU fraction
     """
 
@@ -71,7 +72,8 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
             gpu_id: GPU ID to use
             data_file: Path to pickled data file
 
-        Returns:
+        Returns
+        -------
             Dictionary with predictions and metadata
         """
         # Set GPU before importing TensorFlow
@@ -210,7 +212,8 @@ def parallel_k_fold_holdouts(  # noqa: C901
         na_action: How to handle NA samples ('separate', 'exclude', 'fail').
             If None, uses locator.na_action
 
-    Returns:
+    Returns
+    -------
         pandas.DataFrame or None: If return_df=True, returns DataFrame with one prediction
             per held-out sample containing columns:
             - sampleID: Sample identifier
@@ -305,7 +308,6 @@ def parallel_k_fold_holdouts(  # noqa: C901
         locator.config.get("weight_samples", {}).get("enabled", False)
         and locator.config.get("weight_samples", {}).get("method") == "KD"
     ):
-
         existing_bandwidth = locator.config.get("weight_samples", {}).get("bandwidth")
 
         if existing_bandwidth is None:
@@ -491,7 +493,8 @@ def parallel_leave_one_out(
         na_action: How to handle NA samples ('separate', 'exclude', 'fail').
             If None, uses locator.na_action
 
-    Returns:
+    Returns
+    -------
         pandas.DataFrame or None: DataFrame with predictions for each left-out sample
     """
     # Get sample status to determine k
@@ -534,7 +537,8 @@ def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
     Args:
         gpu_fraction: Fraction of GPU to allocate per worker
 
-    Returns:
+    Returns
+    -------
         Ray remote function configured with specified GPU fraction
     """
 
@@ -551,7 +555,8 @@ def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
             data_file: Path to pickled data file
             holdout_indices: Indices to hold out for this replicate
 
-        Returns:
+        Returns
+        -------
             Dictionary with predictions and metadata
         """
         # Set GPU before importing TensorFlow
@@ -676,7 +681,8 @@ def parallel_holdouts(  # noqa: C901
         na_action: How to handle NA samples ('separate', 'exclude', 'fail').
             If None, uses locator.na_action
 
-    Returns:
+    Returns
+    -------
         pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
             for each holdout replicate containing columns:
             - sampleID: Sample identifier
@@ -747,7 +753,6 @@ def parallel_holdouts(  # noqa: C901
         locator.config.get("weight_samples", {}).get("enabled", False)
         and locator.config.get("weight_samples", {}).get("method") == "KD"
     ):
-
         existing_bandwidth = locator.config.get("weight_samples", {}).get("bandwidth")
 
         if existing_bandwidth is None:
@@ -944,7 +949,8 @@ def _create_ray_windows_worker(gpu_fraction: float = 1.0):
     Args:
         gpu_fraction: Fraction of GPU to allocate per worker
 
-    Returns:
+    Returns
+    -------
         Ray remote function configured with specified GPU fraction
     """
 
@@ -962,7 +968,8 @@ def _create_ray_windows_worker(gpu_fraction: float = 1.0):
             gpu_id: GPU ID to use
             data_file: Path to pickled data file
 
-        Returns:
+        Returns
+        -------
             Dictionary with predictions and metadata
         """
         # Set GPU before importing TensorFlow
@@ -1139,7 +1146,8 @@ def parallel_windows_holdouts(  # noqa: C901
         na_action: How to handle NA samples ('separate', 'exclude', 'fail').
             If None, uses locator.na_action
 
-    Returns:
+    Returns
+    -------
         pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
             for each window containing columns:
             - sampleID: Sample identifier
@@ -1322,7 +1330,6 @@ def parallel_windows_holdouts(  # noqa: C901
         locator.config.get("weight_samples", {}).get("enabled", False)
         and locator.config.get("weight_samples", {}).get("method") == "KD"
     ):
-
         existing_bandwidth = locator.config.get("weight_samples", {}).get("bandwidth")
 
         if existing_bandwidth is None:
@@ -1543,7 +1550,8 @@ def _create_ray_ensemble_worker(gpu_fraction: float = 1.0):
     Args:
         gpu_fraction: Fraction of GPU to allocate per worker (value between 0.0 to 1.0)
 
-    Returns:
+    Returns
+    -------
         Ray remote function configured with specified GPU fraction
     """
 
@@ -1559,7 +1567,8 @@ def _create_ray_ensemble_worker(gpu_fraction: float = 1.0):
             gpu_id: GPU ID to use
             data_file: Path to pickled data file
 
-        Returns:
+        Returns
+        -------
             Dictionary with model information and metadata
         """
         # Set GPU before importing TensorFlow
@@ -1703,7 +1712,8 @@ def parallel_train_ensemble(  # noqa: C901
         patience_multiplier: Multiply patience for ensemble training (default: 1.0)
         verbose: Whether to show training progress (default: True)
 
-    Returns:
+    Returns
+    -------
         dict: Dictionary containing:
             - 'histories': List of training histories for each fold
             - 'models': List of trained model configurations
@@ -1765,7 +1775,6 @@ def parallel_train_ensemble(  # noqa: C901
         locator.config.get("weight_samples", {}).get("enabled", False)
         and locator.config.get("weight_samples", {}).get("method") == "KD"
     ):
-
         existing_bandwidth = locator.config.get("weight_samples", {}).get("bandwidth")
 
         if existing_bandwidth is None:

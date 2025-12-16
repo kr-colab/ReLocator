@@ -102,12 +102,13 @@ class EnsembleModelManager:
         Args:
             model_builder_fn: Function to build model architecture
 
-        Returns:
+        Returns
+        -------
             List of model info dictionaries
         """
         # Load metadata
         metadata_path = os.path.join(self.base_path, "ensemble_metadata.json")
-        with open(metadata_path, "r") as f:
+        with open(metadata_path) as f:
             metadata = json.load(f)
 
         # Load model info
@@ -132,7 +133,8 @@ class EnsembleModelManager:
             fold: Fold index
             n_features: Number of features for model construction
 
-        Returns:
+        Returns
+        -------
             Loaded model
         """
         if fold in self.loaded_models:
@@ -161,7 +163,8 @@ class EnsembleModelManager:
         Args:
             fold: Fold index
 
-        Returns:
+        Returns
+        -------
             NormalizationParams instance
         """
         params = self.models_info[fold]["norm_params"]
@@ -175,7 +178,8 @@ class EnsembleModelManager:
     def get_averaged_normalization_params(self) -> NormalizationParams:
         """Get averaged normalization parameters across all folds.
 
-        Returns:
+        Returns
+        -------
             Averaged NormalizationParams
         """
         all_params = [info["norm_params"] for info in self.models_info]

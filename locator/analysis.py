@@ -42,11 +42,13 @@ class AnalysisMixin:
             na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
 
-        Returns:
+        Returns
+        -------
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each window, otherwise None
 
-        Notes:
+        Notes
+        -----
             - With na_action='separate': Trains on samples with known locations,
               can predict on samples with NA locations
             - With na_action='exclude': Only uses samples with known locations
@@ -224,12 +226,14 @@ class AnalysisMixin:
             na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
 
-        Returns:
+        Returns
+        -------
             pandas.DataFrame or None: If return_df=True, returns DataFrame containing
                 all predictions, with columns named 'x_0', 'y_0', 'x_1', 'y_1', etc.
                 for each jacknife replicate. Row index contains sample IDs.
 
-        Notes:
+        Notes
+        -----
             - With na_action='separate': Trains on samples with known locations,
               can predict on samples with NA locations
             - With na_action='exclude': Only uses samples with known locations
@@ -386,11 +390,13 @@ class AnalysisMixin:
             na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
 
-        Returns:
+        Returns
+        -------
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each bootstrap, otherwise None
 
-        Notes:
+        Notes
+        -----
             - With na_action='separate': Trains on samples with known locations,
               can predict on samples with NA locations
             - With na_action='exclude': Only uses samples with known locations
@@ -459,7 +465,6 @@ class AnalysisMixin:
             self.config.get("weight_samples", {}).get("enabled", False)
             and self.config.get("weight_samples", {}).get("method") == "KD"
         ):
-
             existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
 
             if existing_bandwidth is None and len(original_trainlocs) > 1:
@@ -608,7 +613,8 @@ class AnalysisMixin:
 
                 Note: True locations are not included. Merge with sample metadata to calculate errors.
 
-        Notes:
+        Notes
+        -----
             - With na_action='separate': Currently behaves like 'exclude' (holdouts
               must have known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
@@ -709,7 +715,6 @@ class AnalysisMixin:
             self.config.get("weight_samples", {}).get("enabled", False)
             and self.config.get("weight_samples", {}).get("method") == "KD"
         ):
-
             existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
 
             if existing_bandwidth is None:
@@ -827,7 +832,8 @@ class AnalysisMixin:
             na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
 
-        Returns:
+        Returns
+        -------
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each jacknife replicate containing columns:
                 - sampleID: Sample identifier
@@ -837,7 +843,8 @@ class AnalysisMixin:
 
                 Note: True locations are not included. Merge with sample metadata to calculate errors.
 
-        Notes:
+        Notes
+        -----
             - With na_action='separate': Currently behaves like 'exclude' (holdouts
               must have known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
@@ -891,7 +898,6 @@ class AnalysisMixin:
             self.config.get("weight_samples", {}).get("enabled", False)
             and self.config.get("weight_samples", {}).get("method") == "KD"
         ):
-
             existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
 
             if (
@@ -1024,11 +1030,13 @@ class AnalysisMixin:
             na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
 
-        Returns:
+        Returns
+        -------
             pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
                 for each window, otherwise None
 
-        Notes:
+        Notes
+        -----
             - With na_action='separate': Currently behaves like 'exclude' (holdouts
               must have known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
@@ -1193,7 +1201,6 @@ class AnalysisMixin:
             self.config.get("weight_samples", {}).get("enabled", False)
             and self.config.get("weight_samples", {}).get("method") == "KD"
         ):
-
             existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
 
             if existing_bandwidth is None:
@@ -1350,7 +1357,8 @@ class AnalysisMixin:
             na_action: How to handle NA samples ('separate', 'exclude', 'fail').
                 If None, uses self.na_action
 
-        Returns:
+        Returns
+        -------
             pandas.DataFrame or None: DataFrame with predictions for each left-out sample
         """
         # Get sample status to determine k
@@ -1428,7 +1436,8 @@ class AnalysisMixin:
                 Note: True locations are not included. To calculate prediction errors, merge
                 the returned DataFrame with your sample metadata using the sampleID column.
 
-        Notes:
+        Notes
+        -----
             - With na_action='separate': Currently behaves like 'exclude' (k-fold requires
               known locations). Future versions may support predicting NA samples.
             - With na_action='exclude': Only uses samples with known locations (current behavior)
@@ -1529,7 +1538,6 @@ class AnalysisMixin:
             self.config.get("weight_samples", {}).get("enabled", False)
             and self.config.get("weight_samples", {}).get("method") == "KD"
         ):
-
             existing_bandwidth = self.config.get("weight_samples", {}).get("bandwidth")
 
             if existing_bandwidth is None:

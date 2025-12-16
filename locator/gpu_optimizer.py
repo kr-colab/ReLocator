@@ -18,7 +18,8 @@ class GPUOptimizer:
     def setup_mixed_precision():
         """Enable mixed precision training for 2x speedup on modern GPUs.
 
-        Returns:
+        Returns
+        -------
             bool: True if mixed precision was enabled successfully
         """
         try:
@@ -68,7 +69,8 @@ class GPUOptimizer:
             max_batch_size: Maximum batch size to test
             dataset_size: Size of the dataset (if provided, limits max batch size)
 
-        Returns:
+        Returns
+        -------
             int: Optimal batch size for current GPU
         """
         gpus = tf.config.list_physical_devices("GPU")
@@ -177,7 +179,8 @@ class GPUOptimizer:
             cache: Whether to cache data in memory
             num_parallel_calls: Number of parallel preprocessing calls
 
-        Returns:
+        Returns
+        -------
             tf.data.Dataset: Optimized dataset
         """
         # Convert to float32 (or float16 if mixed precision is enabled)
@@ -261,7 +264,8 @@ class GPUOptimizer:
     def get_gpu_info() -> Dict[str, Any]:
         """Get information about available GPUs.
 
-        Returns:
+        Returns
+        -------
             Dict containing GPU information
         """
         gpus = tf.config.list_physical_devices("GPU")
@@ -320,7 +324,8 @@ class GradientAccumulator:
             y: Target batch
             loss_fn: Loss function to use
 
-        Returns:
+        Returns
+        -------
             Current batch loss
         """
         with tf.GradientTape() as tape:
@@ -350,7 +355,8 @@ class GradientAccumulator:
         Args:
             optimizer: Keras optimizer to use
 
-        Returns:
+        Returns
+        -------
             bool: Whether gradients were applied
         """
         if self.step_count >= self.accumulation_steps:
@@ -372,7 +378,8 @@ def create_optimized_training_config(base_config: Dict[str, Any]) -> Dict[str, A
     Args:
         base_config: Base configuration dictionary
 
-    Returns:
+    Returns
+    -------
         Optimized configuration dictionary
     """
     optimized_config = base_config.copy()

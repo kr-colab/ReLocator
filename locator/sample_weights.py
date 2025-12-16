@@ -52,7 +52,8 @@ class BandwidthOptimizer:
             n_jobs: Number of parallel jobs (-1 for all cores)
             verbose: Whether to print progress
 
-        Returns:
+        Returns
+        -------
             Optimal bandwidth value
         """
         # Return pre-specified bandwidth if provided
@@ -147,7 +148,8 @@ def calculate_optimal_bandwidth(
         n_jobs: Number of parallel jobs (-1 for all cores)
         verbose: Whether to print progress
 
-    Returns:
+    Returns
+    -------
         Tuple of (optimal_bandwidth, info_dict) where info_dict contains:
             - 'bandwidth': optimal bandwidth value
             - 'cv_scores': cross-validation scores for all tested bandwidths
@@ -210,7 +212,8 @@ def weight_samples(
         cache_bandwidth: Whether to use bandwidth caching for KDE
         n_bandwidths: Number of bandwidth values to test if calculating
 
-    Returns:
+    Returns
+    -------
         Dictionary containing:
             - 'method': weighting method used
             - 'sample_weights': array of weights
@@ -279,7 +282,8 @@ def _make_kd_weights(
         cache_bandwidth: Whether to use bandwidth caching
         n_bandwidths: Number of bandwidth values to test
 
-    Returns:
+    Returns
+    -------
         Array of normalized weights
     """
     # Get bandwidth (from cache, parameter, or calculate)
@@ -319,7 +323,8 @@ def _make_histogram_weights(
         xbins: Number of bins in x direction
         ybins: Number of bins in y direction
 
-    Returns:
+    Returns
+    -------
         Array of weights based on inverse bin density
     """
     bincount = [xbins, ybins]
@@ -349,7 +354,8 @@ def _load_sample_weights(weightdf: pd.DataFrame, trainsamps: list) -> pd.DataFra
         weightdf: DataFrame with columns 'sampleID' and 'sample_weight'
         trainsamps: List of training sample IDs
 
-    Returns:
+    Returns
+    -------
         DataFrame with sample weights for training samples
     """
     if "sampleID" not in weightdf.columns or "sample_weight" not in weightdf.columns:

@@ -40,7 +40,8 @@ def euclidean_distance_loss(y_true, y_pred):
         y_true: Tensor of true coordinates
         y_pred: Tensor of predicted coordinates
 
-    Returns:
+    Returns
+    -------
         Euclidean distance between true and predicted coordinates
     """
     return K.sqrt(K.sum(K.square(y_pred - y_true), axis=-1))

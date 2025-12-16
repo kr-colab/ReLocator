@@ -9,9 +9,8 @@ import numpy as np
 import pandas as pd
 from tensorflow import keras
 
-from .data import IndexSet
+from .data import IndexSet, make_tf_dataset, normalize_locs
 from .data import filter_snps_legacy as filter_snps
-from .data import make_tf_dataset, normalize_locs
 from .gpu_optimizer import GPUOptimizer
 from .models import create_network, loss_with_range_penalty, rasterize_species_range
 from .utils import weight_samples
@@ -35,7 +34,8 @@ class TrainingMixin:
             train_split: Proportion of samples to use for training (default: 0.9)
             na_action: How to handle NA samples ('separate', 'exclude', 'fail')
 
-        Returns:
+        Returns
+        -------
             tuple: (index_set, train_idx, test_idx, train_locs, test_locs, pred_idx)
                 index_set: IndexSet containing train/test/predict indices
                 train_idx: Training sample indices
@@ -81,7 +81,8 @@ class TrainingMixin:
         Args:
             boot: Bootstrap replicate number (default: 0)
 
-        Returns:
+        Returns
+        -------
             list: List of Keras callbacks
         """
         callbacks = []
@@ -180,10 +181,12 @@ class TrainingMixin:
                 If provided, SNPs will be reordered according to these indices during training.
                 Used for bootstrap analyses to resample SNPs with replacement.
 
-        Returns:
+        Returns
+        -------
             keras.callbacks.History or None: The Keras training history object if training is performed, or None if `setup_only` is True.
 
-        Raises:
+        Raises
+        ------
             ValueError: If required sample data is missing or improperly formatted.
 
         Example:
@@ -460,7 +463,8 @@ class TrainingMixin:
             k: Number of samples to hold out (ignored if holdout_indices provided)
             holdout_indices: Optional specific indices of samples to hold out
 
-        Returns:
+        Returns
+        -------
             keras.callbacks.History object from model training
         """
         # Store samples
@@ -790,7 +794,8 @@ class TrainingMixin:
             index_set: Pre-computed IndexSet with train/test/holdout splits
             normalized_locs: Pre-normalized location coordinates
 
-        Returns:
+        Returns
+        -------
             keras.callbacks.History object from model training
         """
         # Store samples and index set
@@ -950,7 +955,8 @@ class TrainingMixin:
             train_indices: Indices of training samples
             test_indices: Indices of test samples
 
-        Returns:
+        Returns
+        -------
             normalized_locs: Array of all locations normalized using training parameters
         """
         # Get training locations and normalize them

@@ -49,7 +49,8 @@ def make_tf_dataset(  # noqa: C901
         dtype_policy: Optional dtype policy ('float32', 'float16', 'mixed_float16')
         site_order: Optional array of SNP indices for bootstrap resampling
 
-    Returns:
+    Returns
+    -------
         tf.data.Dataset with structure:
             - Without weights: (features, labels)
             - With weights: (features, labels, sample_weights)
@@ -142,7 +143,8 @@ def make_tf_dataset(  # noqa: C901
                 return augmented_features, labels, weights
 
             dataset = dataset.map(
-                augment_with_weights, num_parallel_calls=4  # Fixed instead of AUTOTUNE
+                augment_with_weights,
+                num_parallel_calls=4,  # Fixed instead of AUTOTUNE
             )
         else:
             # Without weights: (features, labels)
@@ -195,7 +197,8 @@ def flip_genotypes_tf(genotypes: tf.Tensor, flip_rate: float = 0.05) -> tf.Tenso
         genotypes: Tensor of genotype values
         flip_rate: Probability of flipping each value
 
-    Returns:
+    Returns
+    -------
         Augmented genotypes tensor
     """
     # Create random mask
@@ -236,7 +239,8 @@ def make_tf_dataset_from_arrays(
         batch_size: Batch size
         **kwargs: Additional arguments passed to make_tf_dataset
 
-    Returns:
+    Returns
+    -------
         Single dataset or tuple of datasets (train, test, val)
     """
     # Transpose to get (n_features, n_samples) shape expected by make_tf_dataset

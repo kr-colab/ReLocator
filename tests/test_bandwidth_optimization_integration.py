@@ -93,7 +93,6 @@ class TestBandwidthOptimizationIntegration(unittest.TestCase):
         with patch.object(locator, "train_holdout"), patch.object(
             locator, "predict_holdout", return_value=pd.DataFrame()
         ):
-
             locator.run_k_fold_holdouts(self.genotypes, self.samples, k=2, verbose=True)
 
         # Bandwidth should be restored to None (or key removed)
@@ -116,7 +115,6 @@ class TestBandwidthOptimizationIntegration(unittest.TestCase):
             with patch.object(locator, "train_holdout"), patch.object(
                 locator, "predict_holdout", return_value=pd.DataFrame()
             ):
-
                 locator.run_k_fold_holdouts(
                     self.genotypes, self.samples, k=2, verbose=False
                 )
@@ -194,7 +192,6 @@ class TestBandwidthOptimizationIntegration(unittest.TestCase):
         with patch.object(locator, "train", side_effect=mock_train_impl), patch.object(
             locator, "predict", return_value=pd.DataFrame({"x": [1], "y": [2]})
         ):
-
             locator.samples = self.samples
             locator.model = MagicMock()
 
@@ -221,7 +218,6 @@ class TestBandwidthOptimizationIntegration(unittest.TestCase):
         with patch.object(locator_no_cache, "train_holdout"), patch.object(
             locator_no_cache, "predict_holdout", return_value=pd.DataFrame()
         ):
-
             start_time = time.time()
             locator_no_cache.run_k_fold_holdouts(
                 self.genotypes, self.samples, k=2, verbose=False
@@ -234,7 +230,6 @@ class TestBandwidthOptimizationIntegration(unittest.TestCase):
         with patch.object(locator_cache, "train_holdout"), patch.object(
             locator_cache, "predict_holdout", return_value=pd.DataFrame()
         ):
-
             start_time = time.time()
             locator_cache.run_k_fold_holdouts(
                 self.genotypes, self.samples, k=2, verbose=False
@@ -284,7 +279,6 @@ class TestKDEWeightsDisabled(unittest.TestCase):
             with patch.object(locator, "train_holdout"), patch.object(
                 locator, "predict_holdout", return_value=pd.DataFrame()
             ):
-
                 locator.run_k_fold_holdouts(
                     self.genotypes, self.samples, k=2, verbose=False
                 )
@@ -310,7 +304,6 @@ class TestKDEWeightsDisabled(unittest.TestCase):
             with patch.object(locator, "train_holdout"), patch.object(
                 locator, "predict_holdout", return_value=pd.DataFrame()
             ):
-
                 locator.run_k_fold_holdouts(
                     self.genotypes, self.samples, k=2, verbose=False
                 )
