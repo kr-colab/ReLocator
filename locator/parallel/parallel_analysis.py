@@ -413,7 +413,7 @@ def parallel_k_fold_holdouts(  # noqa: C901
 
     if verbose:
         print(
-            f"\nCompleted {k}-fold CV in {total_time:.1f}s ({total_time/k:.1f}s per fold)"
+            f"\nCompleted {k}-fold CV in {total_time:.1f}s ({total_time / k:.1f}s per fold)"
         )
 
     # Restore original bandwidth setting if we changed it
@@ -902,7 +902,7 @@ def parallel_holdouts(  # noqa: C901
 
     if verbose:
         print(
-            f"\nCompleted {n_reps} replicates in {total_time:.1f}s ({total_time/n_reps:.1f}s per replicate)"
+            f"\nCompleted {n_reps} replicates in {total_time:.1f}s ({total_time / n_reps:.1f}s per replicate)"
         )
 
     # Restore original bandwidth setting if we changed it
@@ -1450,7 +1450,7 @@ def parallel_windows_holdouts(  # noqa: C901
             )
 
     if verbose and len(windows) > 10:
-        print(f"... and {len(windows)-10} more windows")
+        print(f"... and {len(windows) - 10} more windows")
 
     # Wait for all windows to complete with progress bar
     if verbose:
@@ -1485,7 +1485,7 @@ def parallel_windows_holdouts(  # noqa: C901
 
     if verbose:
         print(
-            f"\nCompleted {len(windows)} windows in {total_time:.1f}s ({total_time/len(windows):.1f}s per window)"
+            f"\nCompleted {len(windows)} windows in {total_time:.1f}s ({total_time / len(windows):.1f}s per window)"
         )
 
         # Show GPU utilization summary
@@ -1497,7 +1497,7 @@ def parallel_windows_holdouts(  # noqa: C901
         print("\nGPU utilization:")
         for gpu_id in sorted(gpu_counts.keys()):
             print(
-                f"  GPU {gpu_id}: {gpu_counts[gpu_id]} windows ({gpu_counts[gpu_id]/len(windows)*100:.1f}%)"
+                f"  GPU {gpu_id}: {gpu_counts[gpu_id]} windows ({gpu_counts[gpu_id] / len(windows) * 100:.1f}%)"
             )
 
     # Restore original bandwidth setting if we changed it
@@ -1884,7 +1884,7 @@ def parallel_train_ensemble(  # noqa: C901
 
     if verbose:
         print(
-            f"\nCompleted ensemble training in {total_time:.1f}s ({total_time/k:.1f}s per fold)"
+            f"\nCompleted ensemble training in {total_time:.1f}s ({total_time / k:.1f}s per fold)"
         )
 
         # Show speedup vs sequential

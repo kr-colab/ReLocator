@@ -318,14 +318,14 @@ class TrainingMixin:
             if self.config.get("verbose_splits", False):
                 print("\nData split summary:")
                 print(
-                    f"  Training samples: {len(train)} ({len(train)/len(samples)*100:.1f}%)"
+                    f"  Training samples: {len(train)} ({len(train) / len(samples) * 100:.1f}%)"
                 )
                 print(
-                    f"  Validation samples: {len(test)} ({len(test)/len(samples)*100:.1f}%)"
+                    f"  Validation samples: {len(test)} ({len(test) / len(samples) * 100:.1f}%)"
                 )
                 if len(pred) > 0:
                     print(
-                        f"  Prediction samples (no coords): {len(pred)} ({len(pred)/len(samples)*100:.1f}%)"
+                        f"  Prediction samples (no coords): {len(pred)} ({len(pred) / len(samples) * 100:.1f}%)"
                     )
                 print(f"  Total samples: {len(samples)}")
                 print(f"  Total SNPs: {self.filtered_genotypes.shape[0]}")
@@ -548,13 +548,13 @@ class TrainingMixin:
         if self.config.get("verbose_splits", False):
             print("\nHoldout split summary:")
             print(
-                f"  Training samples: {len(train_indices)} ({len(train_indices)/len(samples)*100:.1f}%)"
+                f"  Training samples: {len(train_indices)} ({len(train_indices) / len(samples) * 100:.1f}%)"
             )
             print(
-                f"  Validation samples: {len(test_indices)} ({len(test_indices)/len(samples)*100:.1f}%)"
+                f"  Validation samples: {len(test_indices)} ({len(test_indices) / len(samples) * 100:.1f}%)"
             )
             print(
-                f"  Holdout samples: {len(holdout_idx)} ({len(holdout_idx)/len(samples)*100:.1f}%)"
+                f"  Holdout samples: {len(holdout_idx)} ({len(holdout_idx) / len(samples) * 100:.1f}%)"
             )
             print(f"  Total samples: {len(samples)}")
             print(f"  Total SNPs: {self.filtered_genotypes.shape[0]}")
@@ -739,12 +739,12 @@ class TrainingMixin:
         """Create neural network model. Extracted to avoid duplication."""
         loss_fn = None
         if self.config.get("use_range_penalty"):
-            assert (
-                self.config.get("species_range_shapefile") is not None
-            ), "species_range_shapefile must be provided if use_range_penalty is True"
-            assert (
-                self.config.get("resolution") is not None
-            ), "resolution must be provided if use_range_penalty is True"
+            assert self.config.get("species_range_shapefile") is not None, (
+                "species_range_shapefile must be provided if use_range_penalty is True"
+            )
+            assert self.config.get("resolution") is not None, (
+                "resolution must be provided if use_range_penalty is True"
+            )
 
             mask_tensor, mask_transform = rasterize_species_range(
                 self.config["species_range_shapefile"],

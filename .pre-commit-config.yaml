@@ -1,7 +1,7 @@
 repos:
   # Basic file fixes
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -16,7 +16,7 @@ repos:
 
   # Ruff - replaces black, isort, flake8, and all their plugins
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
+    rev: v0.14.9
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
@@ -24,7 +24,7 @@ repos:
 
   # Spell checking (catches typos in code/comments)
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.3.0
+    rev: v2.4.1
     hooks:
       - id: codespell
         args: [--skip, "*.ipynb,*.html,*.css,*.js"]

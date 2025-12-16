@@ -70,16 +70,16 @@ class TestSeparateModePredictAll:
         predictions = locator.predict(return_df=True, save_preds_to_disk=False)
 
         # Check that we got predictions for ALL samples
-        assert (
-            len(predictions) == 20
-        ), f"Expected 20 predictions but got {len(predictions)}"
+        assert len(predictions) == 20, (
+            f"Expected 20 predictions but got {len(predictions)}"
+        )
 
         # Check that predictions include all sample IDs
         pred_sample_ids = set(predictions["sampleID"])
         all_sample_ids = set(samples)
-        assert (
-            pred_sample_ids == all_sample_ids
-        ), "Predictions should include all samples"
+        assert pred_sample_ids == all_sample_ids, (
+            "Predictions should include all samples"
+        )
 
     def test_separate_mode_with_no_na_samples(self, tmp_path):
         """Test that 'separate' mode works correctly when all samples have coordinates."""
@@ -105,9 +105,9 @@ class TestSeparateModePredictAll:
         predictions = locator.predict(return_df=True, save_preds_to_disk=False)
 
         # Check that we still get predictions for all samples
-        assert (
-            len(predictions) == 10
-        ), f"Expected 10 predictions but got {len(predictions)}"
+        assert len(predictions) == 10, (
+            f"Expected 10 predictions but got {len(predictions)}"
+        )
 
     def test_exclude_mode_only_predicts_na(self, tmp_path):
         """Test that 'exclude' mode excludes NA samples from both training and prediction."""
@@ -137,6 +137,6 @@ class TestSeparateModePredictAll:
         predictions = locator.predict(return_df=True, save_preds_to_disk=False)
 
         # In exclude mode, there are no samples to predict
-        assert (
-            len(predictions) == 0
-        ), f"Expected 0 predictions in exclude mode but got {len(predictions)}"
+        assert len(predictions) == 0, (
+            f"Expected 0 predictions in exclude mode but got {len(predictions)}"
+        )

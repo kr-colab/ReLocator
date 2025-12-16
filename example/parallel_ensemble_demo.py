@@ -56,7 +56,7 @@ def train_sequential_ensemble(locator_seq, genotypes, samples, k_folds, output_d
 
     seq_time = time.time() - start_time
     print(f"\nSequential training completed in {seq_time:.1f} seconds")
-    print(f"Average time per fold: {seq_time/k_folds:.1f} seconds")
+    print(f"Average time per fold: {seq_time / k_folds:.1f} seconds")
 
     # Get averaged normalization parameters
     seq_norm = seq_result["normalization_params"]
@@ -91,7 +91,7 @@ def train_parallel_ensemble(
         par_time = time.time() - start_time
 
         print(f"\nParallel training completed in {par_time:.1f} seconds")
-        print(f"Average time per fold: {par_time/k_folds:.1f} seconds")
+        print(f"Average time per fold: {par_time / k_folds:.1f} seconds")
 
         # Get averaged normalization parameters
         par_norm = par_result["normalization_params"]

@@ -290,7 +290,7 @@ def main():  # noqa: C901
 
     # Report runtime
     end = time.time()
-    print(f"Run time: {(end-start)/60:.2f} minutes")
+    print(f"Run time: {(end - start) / 60:.2f} minutes")
 
     return 0
 

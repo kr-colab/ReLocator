@@ -552,8 +552,8 @@ def plot_error_summary(  # noqa: C901
         f"Mean error: {merged['error'].mean():.2f} {error_units}\n"
         f"Median error: {merged['error'].median():.2f} {error_units}\n"
         f"Max error: {merged['error'].max():.2f} {error_units}\n"
-        f"R² (x): {np.corrcoef(merged['x_pred'], merged['x_true'])[0,1]**2:.3f}\n"
-        f"R² (y): {np.corrcoef(merged['y_pred'], merged['y_true'])[0,1]**2:.3f}"
+        f"R² (x): {np.corrcoef(merged['x_pred'], merged['x_true'])[0, 1] ** 2:.3f}\n"
+        f"R² (y): {np.corrcoef(merged['y_pred'], merged['y_true'])[0, 1] ** 2:.3f}"
     )
     hist_ax.text(
         0.95,
@@ -1313,7 +1313,7 @@ class PlottingMixin:
                 if k in self.config["weight_samples"].keys():
                     if self.config["weight_samples"][k] is not None:
                         html.append(
-                            f"<tr><td style='padding:5px'>{'weight_samples '+k}</td>"
+                            f"<tr><td style='padding:5px'>{'weight_samples ' + k}</td>"
                             f"<td style='padding:5px'>{self.config['weight_samples'][k]}</td></tr>"
                         )
 

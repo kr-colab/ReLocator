@@ -126,7 +126,8 @@ ignore = [
     "B904",   # raise from err/None in except clause
     # pyupgrade (type annotation modernization - requires Python 3.10+)
     "UP006",  # use tuple instead of Tuple
-    "UP007",  # use X | Y instead of Optional[X]
+    "UP007",  # use X | Y instead of Union[X, Y]
+    "UP045",  # use X | None instead of Optional[X]
 ]
 
 [tool.ruff.lint.per-file-ignores]
