@@ -77,28 +77,15 @@ jobs:
       with:
         python-version: "3.11"
 
-    - name: Cache pip packages
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-lint-${{ hashFiles('**/setup.py', '**/requirements*.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-lint-
-          ${{ runner.os }}-pip-
-
-    - name: Install linting dependencies
+    - name: Install Ruff
       run: |
         python -m pip install --upgrade pip
-        pip install flake8 black isort
+        pip install ruff
 
-    - name: Check code formatting with black
+    - name: Check linting with Ruff
       run: |
-        black --check --line-length=89 locator/ tests/ scripts/ example/
+        ruff check locator/ tests/ scripts/ example/
 
-    - name: Check import sorting with isort
+    - name: Check formatting with Ruff
       run: |
-        isort --check-only --profile=black --line-length=89 locator/ tests/ scripts/ example/
-
-    - name: Lint with flake8
-      run: |
-        flake8 locator/ tests/ scripts/ example/ --config=.flake8
+        ruff format --check locator/ tests/ scripts/ example/
