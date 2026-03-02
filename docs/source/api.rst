@@ -7,15 +7,6 @@ Core Module
 
 .. autofunction:: setup_gpu
 
-   Configure GPU settings for optimal usage.
-
-   Args:
-       gpu_number: Optional int or str specifying which GPU to use (0-based index).
-                  If None, uses the first available GPU.
-
-   Returns:
-       bool: True if GPU is available and configured, False otherwise
-
 Locator
 ^^^^^^^
 .. autoclass:: Locator
@@ -44,8 +35,6 @@ EnsembleModelManager
 .. autoclass:: EnsembleModelManager
    :members:
    :show-inheritance:
-
-   Efficient storage and loading of ensemble models.
 
 Parallel Ensemble Training
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -78,7 +67,7 @@ The parallel ensemble training function is available when Ray is installed:
    :returns: dict containing histories, models, normalization_params, fold_info
 
    .. note::
-      This function requires Ray to be installed. Install with ``pip install locator[parallel]``.
+      This function requires Ray to be installed. Install with ``pip install locator[ray]``.
 
 
 
@@ -88,15 +77,9 @@ Models Module
 
 .. autofunction:: create_network
 
-   Creates a neural network model for location prediction.
-
 .. autofunction:: loss_with_range_penalty
 
-   Custom loss function incorporating species range constraints.
-
 .. autofunction:: rasterize_species_range
-
-   Converts species range shapefile to raster format.
 
 Data Module
 -----------
@@ -110,94 +93,31 @@ IndexSet
    :members:
    :show-inheritance:
 
-   Memory-efficient data splitting using indices instead of array copies.
-
-   Class Methods:
-       - random_split: Create random train/test/validation splits
-       - k_fold: Create k-fold cross-validation splits
-       - group_split: Create splits based on group membership
-       - leave_one_out: Create leave-one-out splits
-
-   Attributes:
-       - indices: Dictionary mapping split names to index arrays
-       - n: Total number of samples
-
 Data Pipeline Functions
 ^^^^^^^^^^^^^^^^^^^^^^^
 .. autofunction:: make_tf_dataset
-
-   Create an optimized TensorFlow dataset for training or evaluation.
-
-   Args:
-       genotypes: Genotype array of shape (n_snps, n_samples)
-       coordinates: Coordinate array of shape (n_samples, 2)
-       index_set: IndexSet object defining data splits
-       split: Which split to use ('train', 'test', 'val', etc.)
-       batch_size: Batch size for the dataset
-       training: Whether this is for training (enables shuffling)
-       cache: Whether to cache the dataset in memory
-       augment_flip_rate: Rate for genotype flipping augmentation
-       sample_weights: Optional array of sample weights
-       site_order: Optional array for SNP resampling (bootstrap)
-
-   Returns:
-       tf.data.Dataset: Optimized TensorFlow dataset
 
 Preprocessing Functions
 ^^^^^^^^^^^^^^^^^^^^^^^
 .. autofunction:: filter_snps
 
-   Filter SNPs based on criteria and return statistics.
-
-   Args:
-       genotypes: GenotypeArray to filter
-       min_mac: Minimum minor allele count
-       max_snps: Maximum number of SNPs to retain
-       impute: Whether to impute missing data
-
-   Returns:
-       tuple: (filtered_array, FilterStats)
-
 .. autofunction:: normalize_locs
 
-   Normalize geographic coordinates to zero mean and unit variance.
-
-   Args:
-       locs: Array of [longitude, latitude] coordinates
-
-   Returns:
-       tuple: (NormalizationParams, normalized_coordinates)
-
 .. autofunction:: impute_missing
-
-   Impute missing genotype values.
-
-   Args:
-       allele_counts: Allele count array with missing values
-       verbose: Whether to print progress
-
-   Returns:
-       numpy.ndarray: Imputed allele counts
 
 Data Classes
 ^^^^^^^^^^^^
 .. autoclass:: FilterStats
    :members:
 
-   Statistics from SNP filtering operations.
-
 .. autoclass:: NormalizationParams
    :members:
-
-   Parameters for coordinate normalization with apply/reverse methods.
 
 Utils Module
 ------------
 .. module:: locator.utils
 
 .. autofunction:: weight_samples
-
-   Calculate sample weights based on geographic density.
 
 GPU Optimizer Module
 --------------------
@@ -206,22 +126,10 @@ GPU Optimizer Module
 .. autoclass:: GPUOptimizer
    :members:
 
-   Utilities for optimizing GPU performance in TensorFlow.
-
 .. autoclass:: GradientAccumulator
    :members:
 
-   Helper class for gradient accumulation to simulate larger batch sizes.
-
 .. autofunction:: create_optimized_training_config
-
-   Create an optimized configuration for GPU training.
-
-   Args:
-       base_config (dict): Base configuration dictionary
-
-   Returns:
-       dict: Optimized configuration with GPU settings
 
 Internal Modules (Implementation Details)
 -----------------------------------------
@@ -267,86 +175,11 @@ This module provides Ray-based parallel implementations of analysis methods for 
 
 .. autofunction:: parallel_k_fold_holdouts
 
-   Run true k-fold cross-validation in parallel across multiple GPUs.
-
-   Args:
-       locator: Locator instance
-       genotypes: GenotypeArray
-       samples: List of sample IDs
-       k: Number of folds (default: 10)
-       gpu_ids: List of GPU IDs to use (default: [0, 1])
-       gpu_fraction: Fraction of GPU per worker (default: 1.0)
-       return_df: Whether to return DataFrame (default: True)
-       save_full_pred_matrix: Whether to save predictions (default: True)
-       verbose: Show progress (default: True)
-       na_action: NA handling mode (default: None)
-
-   Returns:
-       DataFrame with predictions or None
-
 .. autofunction:: parallel_leave_one_out
-
-   Parallel leave-one-out cross-validation across multiple GPUs.
-
-   Args:
-       locator: Locator instance
-       genotypes: GenotypeArray
-       samples: List of sample IDs
-       gpu_ids: List of GPU IDs to use
-       gpu_fraction: Fraction of GPU per worker
-       return_df: Whether to return DataFrame
-       save_full_pred_matrix: Whether to save predictions
-       na_action: NA handling mode
-
-   Returns:
-       DataFrame with predictions or None
 
 .. autofunction:: parallel_holdouts
 
-   Run multiple holdout replicates in parallel across multiple GPUs.
-
-   Args:
-       locator: Locator instance
-       genotypes: GenotypeArray
-       samples: List of sample IDs
-       k: Number of samples to hold out
-       n_reps: Number of replicates
-       holdout_indices: Optional specific indices
-       holdout_sample_ids: Optional sample IDs to hold out
-       gpu_ids: List of GPU IDs to use
-       gpu_fraction: Fraction of GPU per worker
-       return_df: Whether to return DataFrame
-       save_full_pred_matrix: Whether to save predictions
-       verbose: Show progress
-       na_action: NA handling mode
-
-   Returns:
-       DataFrame with predictions or None
-
 .. autofunction:: parallel_windows_holdouts
-
-   Run windowed analysis on holdout samples in parallel.
-
-   Args:
-       locator: Locator instance
-       genotypes: GenotypeArray
-       samples: List of sample IDs
-       k: Number of samples to hold out
-       window_start: Start position for windows
-       window_size: Size of windows in base pairs
-       window_stop: Stop position for windows
-       respect_chromosomes: Respect chromosome boundaries
-       holdout_indices: Optional specific indices
-       holdout_sample_ids: Optional sample IDs to hold out
-       gpu_ids: List of GPU IDs to use
-       gpu_fraction: Fraction of GPU per worker
-       return_df: Whether to return DataFrame
-       save_full_pred_matrix: Whether to save predictions
-       verbose: Show progress
-       na_action: NA handling mode
-
-   Returns:
-       DataFrame with window predictions or None
 
 Plotting Module
 ---------------
@@ -422,7 +255,18 @@ The default configuration for Locator includes:
        # Data augmentation
        "augmentation": {
            "enabled": False,
-           "flip_rate": 0.05
+           "flip_rate": 0.05,
+       },
+
+       # Sample weighting
+       "weight_samples": {
+           "enabled": False,
+           "method": "KD",
+           "xbins": 10,
+           "ybins": 10,
+           "lam": 1.0,
+           "bandwidth": None,
+           "weightdf": None,
        },
 
        # Range penalty
@@ -430,13 +274,26 @@ The default configuration for Locator includes:
        "species_range_shapefile": None,
        "resolution": 0.05,
        "penalty_weight": 1.0,
+       "out": "locator",
+
+       # NA handling
+       "na_action": "separate",
 
        # GPU optimization (enabled by default)
        "use_mixed_precision": True,
        "gpu_batch_size": "auto",
        "gradient_accumulation_steps": 1,
        "gpu_memory_mode": "growth",
-       "enable_xla": False
+       "enable_xla": False,
+
+       # Performance optimization
+       "optimize_tf_parallelism": True,
+       "holdout_no_intermediate_saves": True,
+       "save_fold_models": True,
+
+       # Verbosity control
+       "verbose_splits": False,
+       "verbose_batch_size": False,
    }
 
 Input Formats
@@ -478,89 +335,3 @@ For special analyses:
 - ``{out}_jacknife_predlocs.csv``: Jacknife results
 - ``{out}_windows_predlocs.csv``: Windowed analysis results
 - ``{out}_holdout_predlocs.csv``: Holdout analysis results
-
-Error Handling
-^^^^^^^^^^^^^^
-Common error messages and their solutions:
-
-GPU Errors
-""""""""""
-- ``GPU memory allocation error``: Reduce batch size or model size
-- ``CUDA initialization error``: Check GPU drivers and TensorFlow installation
-
-Examples
---------
-
-This section provides examples of how to use the Locator package for various analysis scenarios.
-
-Basic Usage
-^^^^^^^^^^^
-
-.. code-block:: python
-
-    import locator
-    from locator.core import Locator
-
-    # Initialize Locator with configuration
-    loc = Locator({
-        "out": "my_analysis",
-        "sample_data": "samples.txt",
-        "zarr": "genotypes.zarr"
-    })
-
-    # Load genotype data
-    genotypes, samples = loc.load_genotypes(zarr="genotypes.zarr")
-
-    # Train the model
-    loc.train(genotypes=genotypes, samples=samples)
-
-    # Make predictions
-    predictions = loc.predict(return_df=True)
-
-    # Plot results
-    loc.plot_history(loc.history)
-
-Advanced Analysis
-^^^^^^^^^^^^^^^^^
-
-.. code-block:: python
-
-    # Run windowed analysis
-    window_results = loc.run_windows(
-        genotypes=genotypes,
-        samples=samples,
-        window_size=1e6
-    )
-
-    # Run jacknife analysis
-    jacknife_results = loc.run_jacknife(
-        genotypes=genotypes,
-        samples=samples,
-        prop=0.1
-    )
-
-    # Run bootstrap analysis
-    bootstrap_results = loc.run_bootstraps(
-        genotypes=genotypes,
-        samples=samples,
-        n_bootstraps=100
-    )
-
-Ensemble Analysis
-^^^^^^^^^^^^^^^^^
-
-.. code-block:: python
-
-    from locator import EnsembleLocator
-
-    # Initialize ensemble
-    ensemble = EnsembleLocator(
-        base_config={"out": "ensemble_analysis"},
-        k_folds=5
-    )
-
-    # Train ensemble
-    ensemble.train(genotypes=genotypes, samples=samples)
-
-    # Make predictions
-    ensemble_predictions = ensemble.predict()

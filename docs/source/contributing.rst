@@ -1,104 +1,56 @@
 Contributing
 ============
 
-Thank you for your interest in contributing to Locator! This guide will help you get started with development.
+Thank you for your interest in contributing to Locator! This guide will help
+you get started with development.
 
 Development Setup
 -----------------
 
-1. Clone the repository
-~~~~~~~~~~~~~~~~~~~~~~~
+1. **Clone the repository and create a conda environment:**
 
-.. code-block:: bash
+   .. code-block:: bash
 
-   git clone https://github.com/kr-colab/relocator.git
-   cd relocator
+      git clone https://github.com/kr-colab/relocator.git
+      cd relocator
+      conda create -n relocator python=3.12
+      conda activate relocator
 
-2. Create a Conda environment with Python 3.12 (recommended)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+2. **Install in development mode:**
 
-.. code-block:: bash
+   .. code-block:: bash
 
-   conda create -n locator-dev python=3.12
-   conda activate locator-dev
+      pip install -e ".[dev]"
 
-3. Install the package in development mode
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   This installs Locator in editable mode along with all development
+   dependencies including ``pytest``, ``ruff``, ``pre-commit``, and
+   ``codespell``.
 
-.. code-block:: bash
+3. **Set up pre-commit hooks:**
 
-   pip install -e ".[dev]"
+   .. code-block:: bash
 
-This installs Locator in editable mode along with all development dependencies including:
-
-- ``pytest`` for testing
-- ``black`` for code formatting
-- ``isort`` for import sorting
-- ``flake8`` for linting
-- ``pre-commit`` for git hooks
-
-4. Set up pre-commit hooks
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Pre-commit hooks ensure code quality by automatically running formatters and linters before each commit.
-
-.. code-block:: bash
-
-   python scripts/setup_pre_commit.py
-
-Or manually:
-
-.. code-block:: bash
-
-   pre-commit install
+      pre-commit install
 
 Code Style
 ----------
 
-We use the following tools to maintain consistent code style:
+We use `ruff <https://docs.astral.sh/ruff/>`_ for both linting and formatting,
+configured in ``pyproject.toml`` with a line length of 89 characters.
 
-- **Black**: Code formatter with a line length of 89 characters
-- **isort**: Sorts and organizes imports
-- **flake8**: Linting for code quality
-
-These tools run automatically via pre-commit hooks, but you can also run them manually:
+Pre-commit hooks run ruff automatically on each commit. You can also run
+the tools manually:
 
 .. code-block:: bash
 
-   # Format all Python files
-   black locator/ tests/ scripts/
+   # Lint (with auto-fix)
+   ruff check --fix locator/ tests/
 
-   # Sort imports
-   isort locator/ tests/ scripts/
+   # Format
+   ruff format locator/ tests/
 
-   # Run linting
-   flake8 locator/ tests/ scripts/
-
-   # Or run all pre-commit hooks
+   # Run all pre-commit hooks at once
    pre-commit run --all-files
-
-Pre-commit Hook Details
------------------------
-
-Our pre-commit configuration includes:
-
-1. **File fixes**:
-
-   - Remove trailing whitespace
-   - Ensure files end with a newline
-   - Check YAML/TOML syntax
-   - Prevent large files (>1MB) from being committed
-   - Check for merge conflicts
-   - Fix line endings (LF)
-
-2. **Python formatting**:
-
-   - Black (89 character line limit)
-   - isort (compatible with Black)
-
-3. **Linting**:
-
-   - flake8 with plugins for docstrings, bugbear, comprehensions, and simplify
 
 Testing
 -------
@@ -110,14 +62,16 @@ Run the test suite with pytest:
    # Run all tests
    pytest
 
-   # Run with coverage
-   pytest --cov=locator
-
-   # Run specific test file
+   # Run a specific test file or test
    pytest tests/test_core.py
+   pytest tests/test_core.py::test_name -v
 
-   # Run tests in parallel (requires pytest-xdist)
-   pytest -n auto
+   # Skip slow or GPU tests
+   pytest -m "not slow"
+   pytest -m "not gpu"
+
+   # Force CPU-only
+   CUDA_VISIBLE_DEVICES=-1 pytest
 
 Making Changes
 --------------
@@ -128,31 +82,29 @@ Making Changes
 
       git checkout -b feature/your-feature-name
 
-2. Make your changes and ensure tests pass
+2. Make your changes and ensure tests pass.
 
 3. Commit your changes (pre-commit hooks will run automatically):
 
    .. code-block:: bash
 
-      git add .
       git commit -m "feat: add new feature"
 
-   If pre-commit hooks fail, they may have automatically fixed issues. Review the changes and commit again.
+   If pre-commit hooks fail, they may have automatically fixed issues.
+   Review the changes, stage them, and commit again.
 
-4. Push your branch and create a pull request
+4. Push your branch and create a pull request.
 
 Commit Messages
 ---------------
 
-We're trying to follow conventional commits format:
+We use conventional commits format. A few examples:
 
-- ``feat:`` for new features
-- ``fix:`` for bug fixes
-- ``docs:`` for documentation changes
-- ``test:`` for test additions/changes
-- ``refactor:`` for code refactoring
-- ``perf:`` for performance improvements
-- ``chore:`` for maintenance tasks
+- ``feat: add windowed analysis support``
+- ``fix: correct sample index alignment after exclusion``
+- ``docs: update API reference for EnsembleMixin``
+- ``test: add coverage for k-fold holdouts``
+- ``refactor: simplify IndexSet creation logic``
 
 Documentation
 -------------
@@ -163,7 +115,9 @@ When adding new features, please:
 - Add examples if appropriate
 - Update the user guide if necessary
 
-All public functions and classes should have docstrings following the Google style guide.
+All public functions and classes should have docstrings following the
+`NumPy style <https://numpydoc.readthedocs.io/en/latest/format.html>`_
+convention.
 
 Reporting Issues
 ----------------
@@ -172,64 +126,11 @@ When reporting issues, please include:
 
 - A clear description of the problem
 - Steps to reproduce
-- Expected behavior
-- Actual behavior
+- Expected vs. actual behavior
 - Environment details (OS, Python version, etc.)
-
-Troubleshooting
----------------
-
-Pre-commit hooks failing
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-If pre-commit hooks fail, they often fix issues automatically. Simply:
-
-1. Review the changes made by the hooks
-2. Add the modified files: ``git add .``
-3. Commit again
-
-Skipping hooks temporarily
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-If you need to skip hooks for a specific commit:
-
-.. code-block:: bash
-
-   git commit --no-verify -m "your message"
-
-However, please ensure your code passes all checks before creating a pull request.
-
-IDE Integration
----------------
-
-VS Code
-~~~~~~~
-
-Add to ``.vscode/settings.json``:
-
-.. code-block:: json
-
-   {
-       "python.formatting.provider": "black",
-       "python.formatting.blackArgs": ["--line-length=89"],
-       "python.sortImports.args": ["--profile", "black", "--line-length", "89"],
-       "editor.formatOnSave": true,
-       "python.linting.flake8Enabled": true
-   }
-
-
-Questions?
-----------
-
-If you have questions or need help, please:
-
-- Check existing issues on GitHub
-- Create a new issue for bugs or feature requests
-- Reach out to the maintainers
 
 License
 -------
 
-By contributing to Locator, you agree that your contributions will be licensed under the project's license.
-
-Thank you for contributing to Locator!
+By contributing to Locator, you agree that your contributions will be
+licensed under the project's license.
