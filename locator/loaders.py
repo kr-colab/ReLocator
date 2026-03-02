@@ -1,11 +1,31 @@
 """Data loading functionality for locator"""
 
-import sys
-
 import allel
 import numpy as np
 import pandas as pd
 import zarr
+
+
+def _counts_to_genotype_array(gmat):
+    """Convert a genotype count matrix (0/1/2) to an allel.GenotypeArray.
+
+    Uses vectorized numpy operations instead of Python loops.
+
+    Args:
+        gmat: numpy array of shape (n_samples, n_snps) with values 0, 1, or 2
+
+    Returns
+    -------
+        allel.GenotypeArray of shape (n_snps, n_samples, 2)
+    """
+    # Build haplotype arrays: h1 = min(count, 1), h2 = max(count - 1, 0)
+    h1 = np.minimum(gmat, 1).astype(np.int8)
+    h2 = np.clip(gmat - 1, 0, 1).astype(np.int8)
+    # Interleave h1 and h2 rows: [h1_sample0, h2_sample0, h1_sample1, h2_sample1, ...]
+    hmat = np.empty((gmat.shape[0] * 2, gmat.shape[1]), dtype=np.int8)
+    hmat[0::2] = h1
+    hmat[1::2] = h2
+    return allel.HaplotypeArray(np.transpose(hmat)).to_genotypes(ploidy=2)
 
 
 class DataLoaderMixin:
@@ -91,30 +111,7 @@ class DataLoaderMixin:
             raise ValueError("Genotype values must be 0, 1, or 2")
         gmat = np.array(gmat, dtype="int8")
 
-        # Convert to haplotype format
-        hmat = None
-        for i in range(gmat.shape[0]):
-            h1 = []
-            h2 = []
-            for j in range(gmat.shape[1]):
-                count = gmat[i, j]
-                if count == 0:
-                    h1.append(0)
-                    h2.append(0)
-                elif count == 1:
-                    h1.append(1)
-                    h2.append(0)
-                elif count == 2:
-                    h1.append(1)
-                    h2.append(1)
-            if i == 0:
-                hmat = h1
-                hmat = np.vstack((hmat, h2))
-            else:
-                hmat = np.vstack((hmat, h1))
-                hmat = np.vstack((hmat, h2))
-
-        genotypes = allel.HaplotypeArray(np.transpose(hmat)).to_genotypes(ploidy=2)
+        genotypes = _counts_to_genotype_array(gmat)
         return genotypes, samples
 
     def load_genotypes(self, vcf=None, zarr=None, matrix=None):  # noqa: C901
@@ -211,49 +208,11 @@ class DataLoaderMixin:
 
         # Load from VCF
         elif vcf is not None:
-            print("reading VCF")
-            vcf_data = allel.read_vcf(vcf, log=sys.stderr)
-            if vcf_data is None:
-                raise ValueError(f"Could not read VCF file: {vcf}")
-            genotypes = allel.GenotypeArray(vcf_data["calldata/GT"])
-            samples = vcf_data["samples"]
-            return genotypes, samples
+            return self._load_from_vcf(vcf)
 
         # Load from matrix
         elif matrix is not None:
-            print("reading matrix")
-            gmat = pd.read_csv(matrix, sep="\t")
-            samples = np.array(gmat["sampleID"])
-            gmat = gmat.drop(labels="sampleID", axis=1)
-            if not np.all(np.isin(gmat, [0, 1, 2])):
-                raise ValueError("Genotype values must be 0, 1, or 2")
-            gmat = np.array(gmat, dtype="int8")
-
-            # Convert to haplotype format
-            hmat = None
-            for i in range(gmat.shape[0]):
-                h1 = []
-                h2 = []
-                for j in range(gmat.shape[1]):
-                    count = gmat[i, j]
-                    if count == 0:
-                        h1.append(0)
-                        h2.append(0)
-                    elif count == 1:
-                        h1.append(1)
-                        h2.append(0)
-                    elif count == 2:
-                        h1.append(1)
-                        h2.append(1)
-                if i == 0:
-                    hmat = h1
-                    hmat = np.vstack((hmat, h2))
-                else:
-                    hmat = np.vstack((hmat, h1))
-                    hmat = np.vstack((hmat, h2))
-
-            genotypes = allel.HaplotypeArray(np.transpose(hmat)).to_genotypes(ploidy=2)
-            return genotypes, samples
+            return self._load_from_matrix(matrix)
 
         else:
             raise ValueError(

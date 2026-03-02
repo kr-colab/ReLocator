@@ -87,9 +87,8 @@ class TrainingMixin:
         """
         callbacks = []
 
-        # Check if we should save fold models (skip if this is k-fold and save_fold_models is False)
-        is_kfold = "_fold" in self.config.get("out", "")
-        should_save = not is_kfold or self.config.get("save_fold_models", True)
+        # Check if we should save fold models
+        should_save = self.config.get("save_fold_models", True)
 
         if should_save:
             filepath = (
@@ -152,8 +151,6 @@ class TrainingMixin:
         train_locs=None,
         test_locs=None,
         setup_only=False,
-        weight_samples=False,
-        weight_method=None,
         na_action=None,
         site_order=None,
     ):
@@ -626,9 +623,8 @@ class TrainingMixin:
             callbacks=callbacks,
         )
 
-        # Check if we should save fold models (skip if this is k-fold and save_fold_models is False)
-        is_kfold = "_fold" in self.config.get("out", "")
-        should_save = not is_kfold or self.config.get("save_fold_models", True)
+        # Check if we should save fold models
+        should_save = self.config.get("save_fold_models", True)
 
         if should_save:
             # Save training history
@@ -665,7 +661,7 @@ class TrainingMixin:
         else:
             filepath = f"{self.config['out']}.weights.h5"
 
-        # Wait a moment to ensure the weights file is written
+        # Brief pause to ensure Keras has fully flushed the weights file
         import time
 
         time.sleep(0.5)
