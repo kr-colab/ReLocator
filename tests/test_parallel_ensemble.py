@@ -441,33 +441,38 @@ class TestParallelEnsemble:
                         mock_model = MagicMock()
                         mock_create_model.return_value = mock_model
 
-                        # Mock EnsembleModelManager
+                        # Mock os.path.exists so fake weight files pass the check
                         with patch(
-                            "locator.ensemble_model_manager.EnsembleModelManager"
-                        ) as mock_manager_class:
-                            mock_manager = MagicMock()
-                            mock_manager_class.return_value = mock_manager
+                            "locator.parallel.parallel_analysis.os.path.exists",
+                            return_value=True,
+                        ):
+                            # Mock EnsembleModelManager
+                            with patch(
+                                "locator.ensemble_model_manager.EnsembleModelManager"
+                            ) as mock_manager_class:
+                                mock_manager = MagicMock()
+                                mock_manager_class.return_value = mock_manager
 
-                            _ = parallel_train_ensemble(
-                                locator=locator,
-                                genotypes=genotypes,
-                                samples=samples,
-                                k=2,
-                                gpu_ids=[0, 1],
-                                save_fold_models=True,
-                                use_model_manager=True,
-                                verbose=False,
-                            )
+                                _ = parallel_train_ensemble(
+                                    locator=locator,
+                                    genotypes=genotypes,
+                                    samples=samples,
+                                    k=2,
+                                    gpu_ids=[0, 1],
+                                    save_fold_models=True,
+                                    use_model_manager=True,
+                                    verbose=False,
+                                )
 
-                            # Verify model manager was used
-                            mock_manager_class.assert_called_once()
-                            mock_manager.save_ensemble.assert_called_once()
+                                # Verify model manager was used
+                                mock_manager_class.assert_called_once()
+                                mock_manager.save_ensemble.assert_called_once()
 
-                            # Check metadata includes parallel training info
-                            call_args = mock_manager.save_ensemble.call_args
-                            metadata = call_args[0][1]
-                            assert metadata["parallel_training"] is True
-                            assert metadata["gpu_ids"] == [0, 1]
+                                # Check metadata includes parallel training info
+                                call_args = mock_manager.save_ensemble.call_args
+                                metadata = call_args[0][1]
+                                assert metadata["parallel_training"] is True
+                                assert metadata["gpu_ids"] == [0, 1]
 
     # Integration tests (from test_parallel_ensemble_integration.py)
 
