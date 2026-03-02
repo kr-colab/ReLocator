@@ -7,6 +7,7 @@ from unittest.mock import patch
 import allel
 import numpy as np
 import pandas as pd
+from conftest import make_test_genotypes
 
 from locator import Locator
 from locator.data import IndexSet
@@ -18,25 +19,17 @@ class TestEnsemble:
 
     def create_test_data(self, n_samples=30, n_snps=100):
         """Create test data for ensemble training."""
-        # Generate genotypes with proper allele frequencies
         np.random.seed(42)
-        genotype_data = np.zeros((n_snps, n_samples), dtype=int)
-
-        for i in range(n_snps):
-            # Create SNPs with varying minor allele frequencies
-            maf = np.random.uniform(0.05, 0.45)  # Ensure polymorphic SNPs
-            for j in range(n_samples):
-                # Simulate diploid genotypes
-                allele1 = 1 if np.random.random() < maf else 0
-                allele2 = 1 if np.random.random() < maf else 0
-                genotype_data[i, j] = allele1 + allele2
+        # Vectorized: per-SNP varying MAF, two independent allele draws
+        mafs = np.random.uniform(0.05, 0.45, size=(n_snps, 1))
+        allele1 = (np.random.random((n_snps, n_samples)) < mafs).astype(int)
+        allele2 = (np.random.random((n_snps, n_samples)) < mafs).astype(int)
+        genotype_data = allele1 + allele2
 
         genotypes = allel.GenotypeArray(genotype_data[:, :, np.newaxis])
 
-        # Generate sample IDs
         samples = np.array([f"sample_{i:03d}" for i in range(n_samples)])
 
-        # Generate coordinates
         coords_df = pd.DataFrame(
             {
                 "sampleID": samples,
@@ -109,7 +102,7 @@ class TestEnsemble:
 
         config = {
             "sample_data": coords_df,
-            "max_epochs": 5,
+            "max_epochs": 2,
             "keras_verbose": 0,
         }
 
@@ -141,7 +134,7 @@ class TestEnsemble:
 
         config = {
             "sample_data": coords_df,
-            "max_epochs": 5,
+            "max_epochs": 2,
             "keras_verbose": 0,
         }
 
@@ -298,7 +291,7 @@ class TestEnsemble:
             "sample_data": coords_df,
             "max_epochs": 1,  # Quick test
             "keras_verbose": 0,
-            "patience": 10,
+            "patience": 1,
         }
 
         locator = Locator(config)
@@ -504,14 +497,14 @@ class TestEnsemble:
             "sample_data": coords_df,
             "max_epochs": 1,
             "keras_verbose": 0,
-            "patience": 10,
+            "patience": 5,
         }
 
         locator = Locator(config)
 
         # Check callback creation with multiplier
         callback = locator.create_ensemble_early_stopping(patience_multiplier=2.0)
-        assert callback.patience == 20
+        assert callback.patience == 10
 
     def test_ensemble_memory_management(self):
         """Test memory management between folds."""

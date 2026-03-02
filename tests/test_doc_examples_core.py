@@ -26,20 +26,14 @@ def sample_data():
     n_samples = 20
     n_snps = 100  # More SNPs to ensure some pass filtering
 
-    # Create genotype data to ensure we have biallelic SNPs
+    # Vectorized genotype generation with custom probabilities
+    # ~30% hom ref, ~30% het, ~40% hom alt
+    allele_counts = np.random.choice(
+        [0, 1, 2], size=(n_snps, n_samples), p=[0.3, 0.3, 0.4]
+    )
     gt_array = np.zeros((n_snps, n_samples, 2), dtype=int)
-
-    # Create a mix of genotypes ensuring each SNP has variation
-    for i in range(n_snps):
-        # Ensure each SNP is biallelic with some variation
-        # Create random genotypes with frequencies that ensure MAC > 0
-        for j in range(n_samples):
-            if np.random.random() < 0.3:  # 30% homozygous ref
-                gt_array[i, j, :] = [0, 0]
-            elif np.random.random() < 0.6:  # 30% heterozygous
-                gt_array[i, j, :] = [0, 1]
-            else:  # 40% homozygous alt
-                gt_array[i, j, :] = [1, 1]
+    gt_array[:, :, 0] = (allele_counts >= 1).astype(int)
+    gt_array[:, :, 1] = (allele_counts >= 2).astype(int)
 
     # Add a small amount of missing data
     # Only on first SNP to avoid filtering issues
