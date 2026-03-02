@@ -181,7 +181,7 @@ def plot_predictions(  # noqa: C901
         if pred_path.is_file():
             preds = pd.read_csv(pred_path)
         else:
-            pred_files = list(pred_path.glob("*predlocs.txt"))
+            pred_files = list(pred_path.glob("*predlocs.*"))
             preds = pd.concat([pd.read_csv(f) for f in pred_files])
     else:
         preds = predictions

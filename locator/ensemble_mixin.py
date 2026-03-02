@@ -186,19 +186,13 @@ class EnsembleMixin:
         self._ensemble_norm_params = []
 
         # Configure augmentation if requested
+        augment_config = None
         if augment_data:
-            self.config["augmentation"] = {"enabled": True, "flip_rate": flip_rate}
+            augment_config = {"enabled": True, "flip_rate": flip_rate}
+            self.config["augmentation"] = augment_config
 
         # Get locations once
         _, locs = self.sort_samples(samples)
-
-        # Configure augmentation if requested
-        augment_config = None
-        if augment_data:
-            augment_config = {
-                "enabled": True,
-                "flip_rate": flip_rate,
-            }
 
         # Train each fold
         for fold_idx in range(k):

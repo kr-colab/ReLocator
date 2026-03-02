@@ -299,10 +299,6 @@ class TrainingMixin:
                 locs, samples, train, test
             )
 
-            # Store normalized locations for the splits
-            trainlocs = normalized_locs[train]
-            testlocs = normalized_locs[test]
-
             # Calculate sample weights using helper method
             # Pass unnormalized training locations
             train_locs_unnormed = locs[train]
@@ -344,8 +340,8 @@ class TrainingMixin:
 
             # Use provided locations if available
             if train_locs is not None and test_locs is not None:
-                trainlocs = train_locs
-                testlocs = test_locs
+                self.trainlocs = train_locs
+                self.testlocs = test_locs
             else:
                 # Get train/test indices and locations from original split
                 train = np.where(~np.isnan(normalized_locs[:, 0]))[0]
@@ -354,13 +350,9 @@ class TrainingMixin:
                     round((1 - self.config.get("train_split", 0.9)) * len(train)),
                     replace=False,
                 )
-                train = np.array([x for x in train if x not in test])
-                trainlocs = normalized_locs[train]
-                testlocs = normalized_locs[test]
-
-        # Store both training and test locations
-        self.trainlocs = trainlocs
-        self.testlocs = testlocs
+                train = np.setdiff1d(train, test)
+                self.trainlocs = normalized_locs[train]
+                self.testlocs = normalized_locs[test]
 
         # Create model if not already created
         if self.model is None:
@@ -661,11 +653,6 @@ class TrainingMixin:
         else:
             filepath = f"{self.config['out']}.weights.h5"
 
-        # Brief pause to ensure Keras has fully flushed the weights file
-        import time
-
-        time.sleep(0.5)
-
         # Open the HDF5 file and add metadata as attributes
         try:
             with h5py.File(filepath, "a") as f:
@@ -735,16 +722,19 @@ class TrainingMixin:
         """Create neural network model. Extracted to avoid duplication."""
         loss_fn = None
         if self.config.get("use_range_penalty"):
-            assert self.config.get("species_range_shapefile") is not None, (
-                "species_range_shapefile must be provided if use_range_penalty is True"
-            )
-            assert self.config.get("resolution") is not None, (
-                "resolution must be provided if use_range_penalty is True"
-            )
+            if self.config.get("species_range_shapefile") is None:
+                raise ValueError(
+                    "species_range_shapefile must be provided "
+                    "if use_range_penalty is True"
+                )
+            if self.config.get("resolution") is None:
+                raise ValueError(
+                    "resolution must be provided if use_range_penalty is True"
+                )
 
             mask_tensor, mask_transform = rasterize_species_range(
                 self.config["species_range_shapefile"],
-                resolution=self.config.get("raster_resolution", 0.1),
+                resolution=self.config.get("resolution", 0.05),
             )
 
             def loss_fn(y_true, y_pred):  # noqa: F811
@@ -906,7 +896,7 @@ class TrainingMixin:
                     wmethod,
                     trainlocs=locs_for_weights,
                     trainsamps=self.samples[train_indices],
-                    weightdf=self.config.get("weight_samples", {}).get("dataframe"),
+                    weightdf=self.config.get("weight_samples", {}).get("weightdf"),
                     xbins=self.config.get("weight_samples", {}).get("xbins"),
                     ybins=self.config.get("weight_samples", {}).get("ybins"),
                     lam=self.config.get("weight_samples", {}).get("lam"),

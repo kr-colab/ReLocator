@@ -276,15 +276,6 @@ class Locator(
                 f"Must be one of: {valid_na_actions}"
             )
 
-        # If using range penalty and a species_range_geom is provided, set it in models
-        if (
-            self.config.get("use_range_penalty")
-            and self.config.get("species_range_geom") is not None
-        ):
-            from .models import set_species_range_geom
-
-            set_species_range_geom(self.config["species_range_geom"])
-
         # Handle sample_data DataFrame input
         if isinstance(self.config.get("sample_data"), pd.DataFrame):
             sample_df = self.config["sample_data"]
