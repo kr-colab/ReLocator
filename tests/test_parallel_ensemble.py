@@ -66,7 +66,7 @@ class TestParallelEnsemble:
             locator = Locator(config)
 
             # Mock Ray to avoid actual parallel execution in tests
-            with patch("ray") as mock_ray:
+            with patch("locator.parallel.parallel_analysis.ray") as mock_ray:
                 # Mock Ray initialization check
                 mock_ray.is_initialized.return_value = False
                 mock_ray.init.return_value = None
@@ -166,7 +166,7 @@ class TestParallelEnsemble:
             # For parallel, we'll mock to return similar structure
             locator_par = Locator(config.copy())
 
-            with patch("ray") as mock_ray:
+            with patch("locator.parallel.parallel_analysis.ray") as mock_ray:
                 mock_ray.is_initialized.return_value = False
 
                 # Use sequential results to create parallel mock results
@@ -398,7 +398,7 @@ class TestParallelEnsemble:
             locator = Locator(config)
 
             # Mock Ray and model creation
-            with patch("ray") as mock_ray:
+            with patch("locator.parallel.parallel_analysis.ray") as mock_ray:
                 mock_ray.is_initialized.return_value = False
 
                 # Create mock results
