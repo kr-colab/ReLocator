@@ -63,7 +63,7 @@ jobs:
         echo "Documentation build completed successfully (known harmless warnings ignored)"
 
     - name: Upload documentation artifacts
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: documentation
         path: docs/build/html/
