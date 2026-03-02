@@ -11,6 +11,10 @@ addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
+    "-n",
+    "auto",
+    "--dist",
+    "loadfile",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

@@ -66,6 +66,7 @@ class PredictionMixin:
             from .data import filter_snps_legacy as filter_snps
 
             # Determine which samples to predict
+            locs = None
             if indices is None:
                 # For new tf.data API, determine NA samples from provided data
                 # Get sample data to identify NA samples
@@ -88,7 +89,7 @@ class PredictionMixin:
                             return empty_df if return_df else None
 
                 # If we got sample data, find NA samples
-                if "locs" in locals():
+                if locs is not None:
                     na_mask = np.isnan(locs[:, 0]) | np.isnan(locs[:, 1])
                     indices = np.where(na_mask)[0]
                     if len(indices) == 0:
@@ -198,12 +199,9 @@ class PredictionMixin:
             )
 
         # Denormalize predictions
-        predictions = np.array(
-            [
-                [x[0] * self.sdlong + self.meanlong, x[1] * self.sdlat + self.meanlat]
-                for x in predictions
-            ]
-        )
+        predictions = predictions.copy()
+        predictions[:, 0] = predictions[:, 0] * self.sdlong + self.meanlong
+        predictions[:, 1] = predictions[:, 1] * self.sdlat + self.meanlat
 
         # Create DataFrame
         pred_df = pd.DataFrame(predictions, columns=["x", "y"])
@@ -411,9 +409,7 @@ class PredictionMixin:
         if self.model is None:
             from .models import create_network
 
-            # Infer input shape from filtered genotypes
             n_snps = filtered_genotypes.shape[0]
-
             self.model = create_network(
                 input_shape=n_snps,
                 width=self.config.get("width", 256),
@@ -425,8 +421,6 @@ class PredictionMixin:
                     "weight_decay": self.config.get("weight_decay", 0.004),
                 },
             )
-
-            # Now load the weights
             self.model.load_weights(weights_path)
 
         # Make predictions

@@ -5,6 +5,7 @@ import matplotlib
 import numpy as np
 import pandas as pd
 import pytest
+from conftest import make_test_genotypes
 
 from locator import Locator
 
@@ -16,34 +17,12 @@ class TestWindowAnalysis:
 
     def create_test_data_with_positions(self, n_samples=15, n_snps=100, n_known=12):
         """Create test genotype data with position information."""
-        # Create sample IDs
-        samples = np.array([f"sample_{i}" for i in range(n_samples)])
-
-        # Create biallelic genotype data
-        genotype_array = np.zeros((n_snps, n_samples, 2), dtype=np.int8)
-
-        # Fill with random genotypes
-        for i in range(n_snps):
-            for j in range(n_samples):
-                allele_count = np.random.randint(0, 3)
-                if allele_count == 0:
-                    genotype_array[i, j, :] = [0, 0]
-                elif allele_count == 1:
-                    genotype_array[i, j, :] = [0, 1]
-                else:
-                    genotype_array[i, j, :] = [1, 1]
-
-        # Convert to allel.GenotypeArray
-        genotypes = allel.GenotypeArray(genotype_array)
+        genotypes, samples, sample_df = make_test_genotypes(
+            n_snps=n_snps, n_samples=n_samples, n_known=n_known
+        )
 
         # Create positions spanning 1 Mb
         positions = np.sort(np.random.randint(0, 1_000_000, size=n_snps))
-
-        # Create coordinate data
-        x_coords = [float(i) if i < n_known else np.nan for i in range(n_samples)]
-        y_coords = [float(i + 10) if i < n_known else np.nan for i in range(n_samples)]
-
-        sample_df = pd.DataFrame({"sampleID": samples, "x": x_coords, "y": y_coords})
 
         # Create genotype DataFrame with positions as columns
         ac = genotypes.to_allele_counts()[:, :, 1]
@@ -62,7 +41,8 @@ class TestWindowAnalysis:
                 "sample_data": sample_df,
                 "genotype_data": geno_df,
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_windows_basic"),
             }
         )
@@ -102,7 +82,8 @@ class TestWindowAnalysis:
                 "genotype_data": geno_df,
                 "na_action": "separate",
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_windows_na"),
             }
         )
@@ -136,7 +117,8 @@ class TestWindowAnalysis:
                 "genotype_data": geno_df,
                 "na_action": "exclude",
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_windows_exclude"),
             }
         )
@@ -176,7 +158,8 @@ class TestWindowAnalysis:
                 "sample_data": sample_df,
                 "genotype_data": geno_df,
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_windows_size_small"),
             }
         )
@@ -195,7 +178,8 @@ class TestWindowAnalysis:
                 "sample_data": sample_df,
                 "genotype_data": geno_df,
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_windows_size_large"),
             }
         )
@@ -228,7 +212,8 @@ class TestWindowAnalysis:
                 "sample_data": sample_df,
                 "genotype_data": geno_df,
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_windows_holdouts"),
             }
         )
@@ -289,7 +274,8 @@ class TestWindowAnalysis:
                 "sample_data": sample_df,
                 "genotype_data": geno_df,
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_window_range"),
             }
         )
@@ -320,7 +306,8 @@ class TestWindowAnalysis:
                 "sample_data": sample_df,
                 "genotype_data": geno_df,
                 "keras_verbose": 0,
-                "max_epochs": 10,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_consistency"),
             }
         )
@@ -361,7 +348,8 @@ class TestWindowAnalysis:
                 "sample_data": sample_df,
                 "genotype_data": geno_df,
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_windows_holdouts_na"),
             }
         )
@@ -420,7 +408,8 @@ class TestWindowAnalysis:
                 "sample_data": sample_df,
                 "genotype_data": geno_df,
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_windows_holdouts_indices"),
             }
         )
@@ -455,7 +444,8 @@ class TestWindowAnalysis:
                 "sample_data": sample_df,
                 "genotype_data": geno_df,
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_windows_holdouts_params"),
             }
         )
@@ -497,7 +487,8 @@ class TestWindowAnalysis:
                     "sample_data": sample_df,
                     "genotype_data": geno_df,
                     "keras_verbose": 0,
-                    "max_epochs": 5,
+                    "max_epochs": 2,
+                    "patience": 1,
                     "out": out_path,
                 }
             )
@@ -557,7 +548,8 @@ class TestWindowAnalysis:
                 "sample_data": sample_df,
                 "genotype_data": geno_df,
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_empty_windows"),
             }
         )

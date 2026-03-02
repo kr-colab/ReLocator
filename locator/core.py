@@ -247,7 +247,7 @@ class Locator(
             # Performance optimization
             "optimize_tf_parallelism": True,  # Reduce TF parallelism to prevent forking
             "holdout_no_intermediate_saves": True,  # Skip intermediate model saves in k-fold CV
-            "save_fold_models": False,  # Skip saving individual fold models and histories
+            "save_fold_models": True,  # Save model checkpoints during training
             # Verbosity control
             "verbose_splits": False,  # Show train/val/test split sizes
             "verbose_batch_size": False,  # Show batch size optimization details
@@ -275,15 +275,6 @@ class Locator(
                 f"Invalid na_action '{self.config['na_action']}'. "
                 f"Must be one of: {valid_na_actions}"
             )
-
-        # If using range penalty and a species_range_geom is provided, set it in models
-        if (
-            self.config.get("use_range_penalty")
-            and self.config.get("species_range_geom") is not None
-        ):
-            from .models import set_species_range_geom
-
-            set_species_range_geom(self.config["species_range_geom"])
 
         # Handle sample_data DataFrame input
         if isinstance(self.config.get("sample_data"), pd.DataFrame):

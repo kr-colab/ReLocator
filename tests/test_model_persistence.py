@@ -10,6 +10,7 @@ import h5py
 import numpy as np
 import pandas as pd
 import pytest
+from conftest import make_test_genotypes
 
 from locator.core import Locator
 
@@ -20,39 +21,7 @@ class TestModelPersistence:
     @pytest.fixture
     def sample_data(self):
         """Create sample genotype and location data."""
-        np.random.seed(42)
-        n_samples = 50
-        n_snps = 100
-
-        # Create genotype data as numpy array with proper biallelic SNPs
-        # Make sure most SNPs are biallelic (0 or 1 alleles only)
-        geno_array = np.zeros((n_snps, n_samples, 2), dtype=np.int8)
-        for i in range(n_snps):
-            # Create biallelic genotypes (0/0, 0/1, 1/1)
-            for j in range(n_samples):
-                allele_count = np.random.choice([0, 1, 2], p=[0.25, 0.5, 0.25])
-                if allele_count == 0:
-                    geno_array[i, j, :] = [0, 0]
-                elif allele_count == 1:
-                    geno_array[i, j, :] = [0, 1]
-                else:
-                    geno_array[i, j, :] = [1, 1]
-
-        # Create real GenotypeArray from allel
-        genotypes = allel.GenotypeArray(geno_array)
-
-        # Create sample IDs
-        samples = np.array([f"sample_{i:03d}" for i in range(n_samples)])
-
-        # Create location data (some with NA)
-        locs = np.random.uniform(-180, 180, size=(n_samples, 2))
-        # Make last 10 samples have NA locations
-        locs[-10:] = np.nan
-
-        # Create sample data DataFrame
-        sample_df = pd.DataFrame({"sampleID": samples, "x": locs[:, 0], "y": locs[:, 1]})
-
-        return genotypes, samples, sample_df
+        return make_test_genotypes(n_snps=100, n_samples=50, n_known=40, seed=42)
 
     def test_save_model_metadata(self, sample_data):
         """Test that model metadata is saved correctly to HDF5."""

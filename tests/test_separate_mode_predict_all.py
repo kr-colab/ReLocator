@@ -4,6 +4,7 @@ import allel
 import numpy as np
 import pandas as pd
 import pytest
+from conftest import make_test_genotypes
 
 from locator import Locator
 
@@ -13,38 +14,9 @@ class TestSeparateModePredictAll:
 
     def create_test_data(self, n_samples=20, n_known=15):
         """Create test genotype and sample data with some NA coordinates."""
-        np.random.seed(42)
-
-        # Create sample IDs
-        samples = np.array([f"sample_{i}" for i in range(n_samples)])
-
-        # Create genotype data (100 SNPs x n_samples x 2)
-        genotype_array = np.zeros((100, n_samples, 2), dtype=np.int8)
-
-        # Fill with biallelic genotypes (only 0s and 1s)
-        for i in range(100):
-            for j in range(n_samples):
-                # Generate allele counts between 0 and 2
-                allele_count = np.random.randint(0, 3)
-                if allele_count == 0:
-                    genotype_array[i, j, :] = [0, 0]
-                elif allele_count == 1:
-                    genotype_array[i, j, :] = [0, 1]
-                else:  # allele_count == 2
-                    genotype_array[i, j, :] = [1, 1]
-
-        # Convert to allel.GenotypeArray
-        genotypes = allel.GenotypeArray(genotype_array)
-
-        # Create coordinate data with some NAs
-        x_coords = [float(i) for i in range(n_known)] + [np.nan] * (n_samples - n_known)
-        y_coords = [float(i + 10) for i in range(n_known)] + [np.nan] * (
-            n_samples - n_known
+        return make_test_genotypes(
+            n_snps=100, n_samples=n_samples, n_known=n_known, seed=42
         )
-
-        sample_df = pd.DataFrame({"sampleID": samples, "x": x_coords, "y": y_coords})
-
-        return genotypes, samples, sample_df
 
     def test_separate_mode_predicts_all_samples(self, tmp_path):
         """Test that 'separate' mode predicts on all samples (both known and NA)."""
@@ -57,7 +29,8 @@ class TestSeparateModePredictAll:
                 "sample_data": sample_df,
                 "na_action": "separate",
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_separate_all"),
             }
         )
@@ -92,7 +65,8 @@ class TestSeparateModePredictAll:
                 "sample_data": sample_df,
                 "na_action": "separate",
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_separate_no_na"),
             }
         )
@@ -120,7 +94,8 @@ class TestSeparateModePredictAll:
                 "sample_data": sample_df,
                 "na_action": "exclude",
                 "keras_verbose": 0,
-                "max_epochs": 5,
+                "max_epochs": 2,
+                "patience": 1,
                 "out": str(tmp_path / "test_exclude"),
             }
         )

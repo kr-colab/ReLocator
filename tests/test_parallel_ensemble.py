@@ -30,25 +30,17 @@ class TestParallelEnsemble:
 
     def create_test_data(self, n_samples=30, n_snps=100):
         """Create test data for ensemble training."""
-        # Generate genotypes with proper allele frequencies
         np.random.seed(42)
-        genotype_data = np.zeros((n_snps, n_samples), dtype=int)
-
-        for i in range(n_snps):
-            # Create SNPs with varying minor allele frequencies
-            maf = np.random.uniform(0.05, 0.45)  # Ensure polymorphic SNPs
-            for j in range(n_samples):
-                # Simulate diploid genotypes
-                allele1 = 1 if np.random.random() < maf else 0
-                allele2 = 1 if np.random.random() < maf else 0
-                genotype_data[i, j] = allele1 + allele2
+        # Vectorized: per-SNP varying MAF, two independent allele draws
+        mafs = np.random.uniform(0.05, 0.45, size=(n_snps, 1))
+        allele1 = (np.random.random((n_snps, n_samples)) < mafs).astype(int)
+        allele2 = (np.random.random((n_snps, n_samples)) < mafs).astype(int)
+        genotype_data = allele1 + allele2
 
         genotypes = allel.GenotypeArray(genotype_data[:, :, np.newaxis])
 
-        # Generate sample IDs
         samples = np.array([f"sample_{i:03d}" for i in range(n_samples)])
 
-        # Generate coordinates
         coords_df = pd.DataFrame(
             {
                 "sampleID": samples,
@@ -74,7 +66,7 @@ class TestParallelEnsemble:
             locator = Locator(config)
 
             # Mock Ray to avoid actual parallel execution in tests
-            with patch("ray") as mock_ray:
+            with patch("locator.parallel.parallel_analysis.ray") as mock_ray:
                 # Mock Ray initialization check
                 mock_ray.is_initialized.return_value = False
                 mock_ray.init.return_value = None
@@ -174,7 +166,7 @@ class TestParallelEnsemble:
             # For parallel, we'll mock to return similar structure
             locator_par = Locator(config.copy())
 
-            with patch("ray") as mock_ray:
+            with patch("locator.parallel.parallel_analysis.ray") as mock_ray:
                 mock_ray.is_initialized.return_value = False
 
                 # Use sequential results to create parallel mock results
@@ -406,7 +398,7 @@ class TestParallelEnsemble:
             locator = Locator(config)
 
             # Mock Ray and model creation
-            with patch("ray") as mock_ray:
+            with patch("locator.parallel.parallel_analysis.ray") as mock_ray:
                 mock_ray.is_initialized.return_value = False
 
                 # Create mock results
@@ -449,33 +441,38 @@ class TestParallelEnsemble:
                         mock_model = MagicMock()
                         mock_create_model.return_value = mock_model
 
-                        # Mock EnsembleModelManager
+                        # Mock os.path.exists so fake weight files pass the check
                         with patch(
-                            "locator.ensemble_model_manager.EnsembleModelManager"
-                        ) as mock_manager_class:
-                            mock_manager = MagicMock()
-                            mock_manager_class.return_value = mock_manager
+                            "locator.parallel.parallel_analysis.os.path.exists",
+                            return_value=True,
+                        ):
+                            # Mock EnsembleModelManager
+                            with patch(
+                                "locator.ensemble_model_manager.EnsembleModelManager"
+                            ) as mock_manager_class:
+                                mock_manager = MagicMock()
+                                mock_manager_class.return_value = mock_manager
 
-                            _ = parallel_train_ensemble(
-                                locator=locator,
-                                genotypes=genotypes,
-                                samples=samples,
-                                k=2,
-                                gpu_ids=[0, 1],
-                                save_fold_models=True,
-                                use_model_manager=True,
-                                verbose=False,
-                            )
+                                _ = parallel_train_ensemble(
+                                    locator=locator,
+                                    genotypes=genotypes,
+                                    samples=samples,
+                                    k=2,
+                                    gpu_ids=[0, 1],
+                                    save_fold_models=True,
+                                    use_model_manager=True,
+                                    verbose=False,
+                                )
 
-                            # Verify model manager was used
-                            mock_manager_class.assert_called_once()
-                            mock_manager.save_ensemble.assert_called_once()
+                                # Verify model manager was used
+                                mock_manager_class.assert_called_once()
+                                mock_manager.save_ensemble.assert_called_once()
 
-                            # Check metadata includes parallel training info
-                            call_args = mock_manager.save_ensemble.call_args
-                            metadata = call_args[0][1]
-                            assert metadata["parallel_training"] is True
-                            assert metadata["gpu_ids"] == [0, 1]
+                                # Check metadata includes parallel training info
+                                call_args = mock_manager.save_ensemble.call_args
+                                metadata = call_args[0][1]
+                                assert metadata["parallel_training"] is True
+                                assert metadata["gpu_ids"] == [0, 1]
 
     # Integration tests (from test_parallel_ensemble_integration.py)
 
