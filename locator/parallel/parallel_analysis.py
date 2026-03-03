@@ -8,7 +8,7 @@ Key Features:
 - Configurable GPU resource allocation via gpu_fraction parameter
 - Support for multiple workers per GPU to maximize throughput
 - Automatic load balancing across available GPUs
-- Memory-efficient data serialization
+- Memory-efficient data sharing via Ray's object store
 
 GPU Fraction Settings:
 - gpu_fraction=1.0: One worker per GPU (default, safest)
@@ -24,8 +24,6 @@ Default Logging Settings:
 """
 
 import os
-import pickle
-import tempfile
 import time
 from typing import Any, Dict, List, Optional, Union
 
@@ -43,6 +41,181 @@ if "RAY_verbose_spill_logs" not in os.environ:
 
 # Ray imports
 import ray
+
+# -------------------------------------------------------------------
+# Helper functions shared by workers and main functions
+# -------------------------------------------------------------------
+
+
+def _setup_worker_env(gpu_id):
+    """Configure GPU and threading env vars for a Ray worker.
+
+    Must be called before importing TensorFlow.
+    """
+    if gpu_id == -1:
+        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+    os.environ["TF_NUM_INTRAOP_THREADS"] = "4"
+    os.environ["TF_DATA_EXPERIMENTAL_SLACK"] = "false"
+
+
+def _create_worker_locator(data, suffix):
+    """Create a Locator instance inside a Ray worker.
+
+    Parameters
+    ----------
+    data : dict
+        Shared data dict containing ``config``, ``samples``, and
+        optionally ``sample_data``.
+    suffix : str
+        Suffix appended to the output path (e.g. ``fold0``).
+
+    Returns
+    -------
+    Locator
+    """
+    from locator import Locator
+
+    config = data["config"].copy()
+    config["out"] = f"{config['out']}_{suffix}"
+    config["disable_gpu"] = False
+    config["gpu_number"] = 0
+    config["keras_verbose"] = 0
+
+    if "_sample_data_df" not in config:
+        config["_sample_data_df"] = data.get("sample_data")
+
+    locator = Locator(config)
+    locator.samples = data["samples"]
+    return locator
+
+
+def _ensure_ray_initialized():
+    """Initialize Ray if not already running."""
+    if not ray.is_initialized():
+        ray.init(
+            log_to_driver=False,
+            logging_level="ERROR",
+            include_dashboard=False,
+        )
+
+
+def _collect_ray_results(futures, desc, postfix_fn, verbose):
+    """Collect results from Ray futures with optional progress bar.
+
+    Parameters
+    ----------
+    futures : list
+        Ray ObjectRefs to collect.
+    desc : str
+        Progress bar description.
+    postfix_fn : callable
+        ``result -> str`` for the progress bar postfix.
+    verbose : bool
+        Whether to show a tqdm progress bar.
+
+    Returns
+    -------
+    list
+        Collected result dicts.
+    """
+    if verbose:
+        from tqdm import tqdm
+
+        total = len(futures)
+        results = []
+        remaining = list(futures)
+        with tqdm(total=total, desc=desc) as pbar:
+            while remaining:
+                ready, remaining = ray.wait(remaining, num_returns=1)
+                result = ray.get(ready[0])
+                results.append(result)
+                pbar.set_postfix_str(postfix_fn(result))
+                pbar.update(1)
+    else:
+        results = ray.get(futures)
+    return results
+
+
+def _precalculate_bandwidth(locator, locs, cache_key, verbose):
+    """Pre-calculate KDE bandwidth if sample weighting is enabled.
+
+    Parameters
+    ----------
+    locator : Locator
+        Locator instance whose config may request KDE weighting.
+    locs : np.ndarray
+        Training locations for bandwidth estimation.
+    cache_key : str
+        Cache key for the bandwidth optimizer.
+    verbose : bool
+        Whether to print progress.
+
+    Returns
+    -------
+    tuple[bool, object]
+        ``(calculated, original_bandwidth)``.
+    """
+    ws = locator.config.get("weight_samples", {})
+    if not (ws.get("enabled", False) and ws.get("method") == "KD"):
+        return False, None
+
+    existing = ws.get("bandwidth")
+    if existing is not None:
+        return False, None
+
+    if len(locs) <= 1:
+        return False, None
+
+    if verbose:
+        print("Pre-calculating optimal KDE bandwidth...")
+
+    from locator.sample_weights import (
+        get_global_bandwidth_optimizer,
+    )
+
+    optimizer = get_global_bandwidth_optimizer()
+    optimal = optimizer.get_bandwidth(
+        locs,
+        cache_key=cache_key,
+        n_bandwidths=ws.get("n_bandwidths", 100),
+        verbose=verbose,
+    )
+
+    original = existing  # None
+    locator.config["weight_samples"]["bandwidth"] = optimal
+
+    if verbose:
+        print(f"Using bandwidth: {optimal:.3f}")
+
+    return True, original
+
+
+def _restore_bandwidth(locator, calculated, original):
+    """Restore the original bandwidth setting after a parallel run.
+
+    Parameters
+    ----------
+    locator : Locator
+        Locator instance.
+    calculated : bool
+        Whether bandwidth was set by ``_precalculate_bandwidth``.
+    original : object
+        The original bandwidth value to restore.
+    """
+    if not calculated:
+        return
+    if original is None:
+        locator.config.get("weight_samples", {}).pop("bandwidth", None)
+    else:
+        locator.config["weight_samples"]["bandwidth"] = original
+
+
+# -------------------------------------------------------------------
+# K-fold cross-validation
+# -------------------------------------------------------------------
 
 
 def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
@@ -63,78 +236,40 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
     """
 
     @ray.remote(num_gpus=gpu_fraction)
-    def _ray_kfold_worker(fold_idx: int, gpu_id: int, data_file: str) -> Dict[str, Any]:
+    def _ray_kfold_worker(fold_idx: int, gpu_id: int, data: dict) -> Dict[str, Any]:
         """
         Ray worker function that runs a single k-fold on a specific GPU.
 
         Args:
             fold_idx: Fold index
             gpu_id: GPU ID to use
-            data_file: Path to pickled data file
+            data: Shared data dict (resolved from Ray object store)
 
         Returns
         -------
             Dictionary with predictions and metadata
         """
-        # Set GPU before importing TensorFlow
-        if gpu_id == -1:
-            os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Disable GPU
-        else:
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        _setup_worker_env(gpu_id)
 
-        # Set TensorFlow threading environment variables BEFORE import
-        # This ensures the tf.data pipeline doesn't fork excessively
-        os.environ["TF_NUM_INTEROP_THREADS"] = "1"
-        os.environ["TF_NUM_INTRAOP_THREADS"] = "4"
-        os.environ["TF_DATA_EXPERIMENTAL_SLACK"] = "false"
-
-        # Import inside worker to ensure proper GPU setup
         import allel
         import tensorflow as tf
 
-        from locator import Locator
-
-        # Suppress TF warnings
         tf.get_logger().setLevel("ERROR")
 
         print(f"Worker processing fold {fold_idx} on GPU {gpu_id}")
 
-        # Load data from pickle file
-        with open(data_file, "rb") as f:
-            data = pickle.load(f)
-
-        # Reconstruct GenotypeArray
-        gt_array = data["genotypes_array"]
-        # shape = data["genotypes_shape"]  # noqa: F841
-        # FIXED: Simply reconstruct from the raw values
-        genotypes = allel.GenotypeArray(gt_array)
+        genotypes = allel.GenotypeArray(data["genotypes_array"])
+        locator = _create_worker_locator(data, f"fold{fold_idx}")
 
         # Get fold's IndexSet
         index_set = data["fold_index_sets"][fold_idx]
         holdout_indices = index_set.test
 
-        # Create Locator instance
-        locator_config = data["config"].copy()
-        locator_config["out"] = f"{locator_config['out']}_fold{fold_idx}"
-        locator_config["disable_gpu"] = False
-        locator_config["gpu_number"] = 0  # Use first visible GPU
-        locator_config["keras_verbose"] = 0  # Suppress keras output
-
-        # CRITICAL FIX: Store the sample data DataFrame in the config
-        # This ensures sort_samples works correctly
-        if "_sample_data_df" not in locator_config:
-            locator_config["_sample_data_df"] = data["sample_data"]
-
-        locator = Locator(locator_config)  # Pass as dictionary
-
-        # This must match the exact order used when creating the IndexSets
-        locator.samples = data["samples"]
-
         # Train with holdout
         start_time = time.time()
         history = locator.train_holdout(
             genotypes=genotypes,
-            samples=data["samples"],  # Pass the same samples list
+            samples=data["samples"],
             holdout_indices=holdout_indices,
         )
         train_time = time.time() - start_time
@@ -158,7 +293,6 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
             print(f"First 5 expected: {expected_samples[:5]}")
             print(f"First 5 actual: {actual_samples[:5]}")
 
-        # Clear keras session
         tf.keras.backend.clear_session()
 
         return {
@@ -224,13 +358,7 @@ def parallel_k_fold_holdouts(  # noqa: C901
             Note: True locations are not included. To calculate prediction errors, merge
             the returned DataFrame with your sample metadata using the sampleID column.
     """
-    # Initialize Ray if not already initialized
-    if not ray.is_initialized():
-        ray.init(
-            log_to_driver=False,  # Don't log worker output to driver
-            logging_level="ERROR",  # Only show errors
-            include_dashboard=False,  # Don't start Ray dashboard
-        )
+    _ensure_ray_initialized()
 
     # Use instance default if na_action not specified
     if na_action is None:
@@ -242,13 +370,15 @@ def parallel_k_fold_holdouts(  # noqa: C901
     # Report status
     if verbose:
         print(
-            f"K-fold CV: {status['n_known']} samples with coordinates, {status['n_na']} without"
+            f"K-fold CV: {status['n_known']} samples with coordinates, "
+            f"{status['n_na']} without"
         )
         if status["n_na"] > 0:
             print(f"NA handling mode: {na_action}")
             if na_action == "separate":
                 print(
-                    "Note: K-fold CV requires known locations; 'separate' behaves like 'exclude'"
+                    "Note: K-fold CV requires known locations; "
+                    "'separate' behaves like 'exclude'"
                 )
 
     # Apply NA action
@@ -275,7 +405,9 @@ def parallel_k_fold_holdouts(  # noqa: C901
 
     if k > n_samples_with_coords:
         raise ValueError(
-            f"k ({k}) must be less than or equal to number of samples with known locations ({n_samples_with_coords})"
+            f"k ({k}) must be less than or equal to number of "
+            f"samples with known locations "
+            f"({n_samples_with_coords})"
         )
 
     # Import IndexSet
@@ -286,7 +418,6 @@ def parallel_k_fold_holdouts(  # noqa: C901
     if "seed" in locator.config and locator.config["seed"] is not None:
         kfold_seed = locator.config["seed"]
     else:
-        # Generate a seed from current numpy state to ensure consistency
         kfold_seed = np.random.randint(0, 2**31)
 
     fold_index_sets = []
@@ -295,66 +426,33 @@ def parallel_k_fold_holdouts(  # noqa: C901
             n=n_total_samples,
             k=k,
             fold=fold_idx,
-            seed=kfold_seed,  # Use consistent seed for all folds
+            seed=kfold_seed,
             na_mask=na_mask,
         )
         fold_index_sets.append(index_set)
 
     # Pre-calculate KDE bandwidth if needed
-    bandwidth_calculated = False
-    original_bandwidth = None
+    bw_locs = locs[~na_mask]
+    bw_calculated, bw_original = _precalculate_bandwidth(
+        locator,
+        bw_locs,
+        f"kfold_k{k}_n{len(bw_locs)}",
+        verbose,
+    )
 
-    if (
-        locator.config.get("weight_samples", {}).get("enabled", False)
-        and locator.config.get("weight_samples", {}).get("method") == "KD"
-    ):
-        existing_bandwidth = locator.config.get("weight_samples", {}).get("bandwidth")
-
-        if existing_bandwidth is None:
-            # Get all samples with coordinates for bandwidth calculation
-            coords_mask = ~na_mask
-            all_train_locs = locs[coords_mask]
-
-            if len(all_train_locs) > 1:
-                if verbose:
-                    print("Pre-calculating optimal KDE bandwidth for k-fold CV...")
-
-                from locator.sample_weights import get_global_bandwidth_optimizer
-
-                optimizer = get_global_bandwidth_optimizer()
-
-                optimal_bandwidth = optimizer.get_bandwidth(
-                    all_train_locs,
-                    cache_key=f"kfold_k{k}_n{len(all_train_locs)}",
-                    n_bandwidths=locator.config.get("weight_samples", {}).get(
-                        "n_bandwidths", 100
-                    ),
-                    verbose=verbose,
-                )
-
-                # Store original value
-                original_bandwidth = existing_bandwidth
-                # Set in config
-                locator.config["weight_samples"]["bandwidth"] = optimal_bandwidth
-                bandwidth_calculated = True
-
-                if verbose:
-                    print(f"Using bandwidth: {optimal_bandwidth:.3f}")
-
-    # Save data to temporary file
-    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".pkl") as f:
-        data = {
-            "genotypes_array": genotypes.values,  # FIXED: Save raw values, not to_n_alt()
+    # Share data via Ray object store (zero-copy for numpy arrays)
+    data_ref = ray.put(
+        {
+            "genotypes_array": genotypes.values,
             "genotypes_shape": genotypes.shape,
-            "samples": samples,  # CRITICAL: Pass the original samples list
-            "sample_data": sample_data,  # Pass the sorted sample data
+            "samples": samples,
+            "sample_data": sample_data,
             "locs": locs,
             "config": locator.config,
             "fold_index_sets": fold_index_sets,
             "na_mask": na_mask,
         }
-        pickle.dump(data, f)
-        data_file = f.name
+    )
 
     if verbose:
         print(
@@ -369,60 +467,36 @@ def parallel_k_fold_holdouts(  # noqa: C901
     # Submit all folds to Ray
     futures = []
     for fold_idx in range(k):
-        # Handle empty gpu_ids (CPU only mode)
         if len(gpu_ids) == 0:
-            gpu_id = -1  # Use CPU
+            gpu_id = -1
         else:
             gpu_id = gpu_ids[fold_idx % len(gpu_ids)]
 
         future = _ray_kfold_worker.remote(
-            fold_idx=fold_idx, gpu_id=gpu_id, data_file=data_file
+            fold_idx=fold_idx, gpu_id=gpu_id, data=data_ref
         )
         futures.append(future)
         if verbose:
             device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
             print(f"Submitted fold {fold_idx} to {device_str}")
 
-    # Wait for all folds to complete with progress bar
-    if verbose:
-        print("\nProcessing folds across GPUs...")
-        from tqdm import tqdm
-
-        # Process results with progress bar
-        results = []
-        with tqdm(total=k, desc="Folds completed") as pbar:
-            while futures:
-                # Wait for any task to complete
-                ready, futures = ray.wait(futures, num_returns=1)
-                result = ray.get(ready[0])
-                results.append(result)
-
-                # Update progress bar
-                pbar.set_postfix_str(
-                    f"Last: Fold {result['fold']}, GPU {result['gpu_id']}"
-                )
-                pbar.update(1)
-    else:
-        # No progress bar if not verbose
-        results = ray.get(futures)
+    # Wait for all folds to complete
+    results = _collect_ray_results(
+        futures,
+        desc="Folds completed",
+        postfix_fn=lambda r: f"Last: Fold {r['fold']}, GPU {r['gpu_id']}",
+        verbose=verbose,
+    )
 
     total_time = time.time() - start_time
 
-    # Clean up
-    os.unlink(data_file)
-
     if verbose:
         print(
-            f"\nCompleted {k}-fold CV in {total_time:.1f}s ({total_time / k:.1f}s per fold)"
+            f"\nCompleted {k}-fold CV in {total_time:.1f}s "
+            f"({total_time / k:.1f}s per fold)"
         )
 
-    # Restore original bandwidth setting if we changed it
-    if bandwidth_calculated:
-        if original_bandwidth is None:
-            # Remove the key if it wasn't there originally
-            locator.config.get("weight_samples", {}).pop("bandwidth", None)
-        else:
-            locator.config["weight_samples"]["bandwidth"] = original_bandwidth
+    _restore_bandwidth(locator, bw_calculated, bw_original)
 
     if return_df:
         # Build predictions DataFrame
@@ -457,7 +531,8 @@ def parallel_k_fold_holdouts(  # noqa: C901
 
         if save_full_pred_matrix:
             all_predictions.to_csv(
-                f"{locator.config['out']}_kfold_holdouts_predlocs.csv", index=False
+                f"{locator.config['out']}_kfold_holdouts_predlocs.csv",
+                index=False,
             )
 
         return all_predictions
@@ -505,11 +580,10 @@ def parallel_leave_one_out(
         raise ValueError("No samples with known coordinates for leave-one-out CV")
 
     print(
-        f"Running leave-one-out cross-validation for {n_known} samples across GPUs {gpu_ids}"
+        f"Running leave-one-out cross-validation for "
+        f"{n_known} samples across GPUs {gpu_ids}"
     )
 
-    # Run k-fold with k equal to number of known samples
-    # This will create folds with exactly 1 sample each
     result = parallel_k_fold_holdouts(
         locator=locator,
         genotypes=genotypes,
@@ -518,16 +592,23 @@ def parallel_leave_one_out(
         gpu_ids=gpu_ids,
         gpu_fraction=gpu_fraction,
         return_df=return_df,
-        save_full_pred_matrix=False,  # We'll save with our own name
-        verbose=False,  # We already printed our message
+        save_full_pred_matrix=False,
+        verbose=False,
         na_action=na_action,
     )
 
-    # Save with leave-one-out specific filename if requested
     if result is not None and save_full_pred_matrix:
-        result.to_csv(f"{locator.config['out']}_leave_one_out_predlocs.csv", index=False)
+        result.to_csv(
+            f"{locator.config['out']}_leave_one_out_predlocs.csv",
+            index=False,
+        )
 
     return result
+
+
+# -------------------------------------------------------------------
+# Holdout replicates
+# -------------------------------------------------------------------
 
 
 def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
@@ -544,7 +625,10 @@ def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
 
     @ray.remote(num_gpus=gpu_fraction)
     def _ray_holdout_worker(
-        rep_idx: int, gpu_id: int, data_file: str, holdout_indices: np.ndarray
+        rep_idx: int,
+        gpu_id: int,
+        data: dict,
+        holdout_indices: np.ndarray,
     ) -> Dict[str, Any]:
         """
         Ray worker function that runs a single holdout replicate on a specific GPU.
@@ -552,64 +636,31 @@ def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
         Args:
             rep_idx: Replicate index
             gpu_id: GPU ID to use
-            data_file: Path to pickled data file
+            data: Shared data dict (resolved from Ray object store)
             holdout_indices: Indices to hold out for this replicate
 
         Returns
         -------
             Dictionary with predictions and metadata
         """
-        # Set GPU before importing TensorFlow
-        if gpu_id == -1:
-            os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Disable GPU
-        else:
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        _setup_worker_env(gpu_id)
 
-        # Set TensorFlow threading environment variables BEFORE import
-        # This ensures the tf.data pipeline doesn't fork excessively
-        os.environ["TF_NUM_INTEROP_THREADS"] = "1"
-        os.environ["TF_NUM_INTRAOP_THREADS"] = "4"
-        os.environ["TF_DATA_EXPERIMENTAL_SLACK"] = "false"
-
-        # Import inside worker to ensure proper GPU setup
         import allel
         import tensorflow as tf
 
-        from locator import Locator
-
-        # Suppress TF warnings
         tf.get_logger().setLevel("ERROR")
 
         print(f"Worker processing replicate {rep_idx} on GPU {gpu_id}")
 
-        # Load data from pickle file
-        with open(data_file, "rb") as f:
-            data = pickle.load(f)
-
-        # Reconstruct GenotypeArray
-        gt_array = data["genotypes_array"]
-        genotypes = allel.GenotypeArray(gt_array)
-
-        # Create Locator instance
-        locator_config = data["config"].copy()
-        locator_config["out"] = f"{locator_config['out']}_rep{rep_idx}"
-        locator_config["disable_gpu"] = False
-        locator_config["gpu_number"] = 0  # Use first visible GPU
-        locator_config["keras_verbose"] = 0  # Suppress keras output
-
-        # Store the sample data DataFrame in the config
-        if "_sample_data_df" not in locator_config:
-            locator_config["_sample_data_df"] = data["sample_data"]
-
-        locator = Locator(locator_config)
-
-        # Ensure samples are set correctly
-        locator.samples = data["samples"]
+        genotypes = allel.GenotypeArray(data["genotypes_array"])
+        locator = _create_worker_locator(data, f"rep{rep_idx}")
 
         # Train with holdout
         start_time = time.time()
         history = locator.train_holdout(
-            genotypes=genotypes, samples=data["samples"], holdout_indices=holdout_indices
+            genotypes=genotypes,
+            samples=data["samples"],
+            holdout_indices=holdout_indices,
         )
         train_time = time.time() - start_time
 
@@ -622,7 +673,6 @@ def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
             plot_map=False,
         )
 
-        # Clear keras session
         tf.keras.backend.clear_session()
 
         return {
@@ -692,13 +742,7 @@ def parallel_holdouts(  # noqa: C901
 
             Note: True locations are not included. Merge with sample metadata to calculate errors.
     """
-    # Initialize Ray if not already initialized
-    if not ray.is_initialized():
-        ray.init(
-            log_to_driver=False,  # Don't log worker output to driver
-            logging_level="ERROR",  # Only show errors
-            include_dashboard=False,  # Don't start Ray dashboard
-        )
+    _ensure_ray_initialized()
 
     # Use instance default if na_action not specified
     if na_action is None:
@@ -710,13 +754,15 @@ def parallel_holdouts(  # noqa: C901
     # Report status
     if verbose:
         print(
-            f"Holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+            f"Holdout analysis: {status['n_known']} samples "
+            f"with coordinates, {status['n_na']} without"
         )
         if status["n_na"] > 0:
             print(f"NA handling mode: {na_action}")
             if na_action == "separate":
                 print(
-                    "Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'"
+                    "Note: Holdout analysis requires known "
+                    "locations; 'separate' behaves like 'exclude'"
                 )
 
     # Apply NA action
@@ -736,68 +782,32 @@ def parallel_holdouts(  # noqa: C901
         sample_data, locs = locator.sort_samples(samples, sample_data_path)
 
     # Get indices of samples with known locations (optimized)
-    # Use boolean indexing instead of argwhere for efficiency
     known_mask = ~np.isnan(locs[:, 0])
     known_idx = np.where(known_mask)[0]
 
     if k >= len(known_idx):
         raise ValueError(
-            f"k ({k}) must be less than number of samples with known locations ({len(known_idx)})"
+            f"k ({k}) must be less than number of samples with "
+            f"known locations ({len(known_idx)})"
         )
 
     # Pre-calculate KDE bandwidth if needed
-    bandwidth_calculated = False
-    original_bandwidth = None
-
-    if (
-        locator.config.get("weight_samples", {}).get("enabled", False)
-        and locator.config.get("weight_samples", {}).get("method") == "KD"
-    ):
-        existing_bandwidth = locator.config.get("weight_samples", {}).get("bandwidth")
-
-        if existing_bandwidth is None:
-            # Get all samples with coordinates for bandwidth calculation
-            all_train_locs = locs[known_idx]
-
-            if len(all_train_locs) > 1:
-                if verbose:
-                    print(
-                        "Pre-calculating optimal KDE bandwidth for holdout analysis..."
-                    )
-
-                from locator.sample_weights import get_global_bandwidth_optimizer
-
-                optimizer = get_global_bandwidth_optimizer()
-
-                optimal_bandwidth = optimizer.get_bandwidth(
-                    all_train_locs,
-                    cache_key=f"holdouts_k{k}_n{len(all_train_locs)}",
-                    n_bandwidths=locator.config.get("weight_samples", {}).get(
-                        "n_bandwidths", 100
-                    ),
-                    verbose=verbose,
-                )
-
-                # Store original value
-                original_bandwidth = existing_bandwidth
-                # Set in config
-                locator.config["weight_samples"]["bandwidth"] = optimal_bandwidth
-                bandwidth_calculated = True
-
-                if verbose:
-                    print(f"Using bandwidth: {optimal_bandwidth:.3f}")
+    bw_locs = locs[known_idx]
+    bw_calculated, bw_original = _precalculate_bandwidth(
+        locator,
+        bw_locs,
+        f"holdouts_k{k}_n{len(bw_locs)}",
+        verbose,
+    )
 
     # Handle holdout_sample_ids if provided
     if holdout_sample_ids is not None:
-        # Convert samples to list if it's a numpy array
         if hasattr(samples, "tolist"):
             samples_list = samples.tolist()
         else:
             samples_list = list(samples)
 
-        # Convert sample IDs to indices
         if isinstance(holdout_sample_ids[0], str):
-            # Single list of sample IDs for all replicates
             try:
                 holdout_indices = [
                     [samples_list.index(sid) for sid in holdout_sample_ids]
@@ -805,11 +815,9 @@ def parallel_holdouts(  # noqa: C901
             except ValueError:
                 missing = [sid for sid in holdout_sample_ids if sid not in samples_list]
                 raise ValueError(f"Sample IDs not found in samples list: {missing}")
-            # Replicate for all n_reps if needed
             holdout_indices = holdout_indices * n_reps
-            k = len(holdout_sample_ids)  # Update k to match
+            k = len(holdout_sample_ids)
         else:
-            # List of lists - different sample IDs per replicate
             holdout_indices = []
             for rep_ids in holdout_sample_ids:
                 try:
@@ -818,7 +826,7 @@ def parallel_holdouts(  # noqa: C901
                     missing = [sid for sid in rep_ids if sid not in samples_list]
                     raise ValueError(f"Sample IDs not found in samples list: {missing}")
                 holdout_indices.append(rep_indices)
-            n_reps = len(holdout_indices)  # Update n_reps to match
+            n_reps = len(holdout_indices)
 
     # Generate holdout indices for all replicates
     all_holdout_indices = []
@@ -826,13 +834,12 @@ def parallel_holdouts(  # noqa: C901
         if holdout_indices is not None and rep < len(holdout_indices):
             rep_holdout_idx = holdout_indices[rep]
         else:
-            # Random selection
             rep_holdout_idx = np.random.choice(known_idx, k, replace=False)
         all_holdout_indices.append(rep_holdout_idx)
 
-    # Save data to temporary file
-    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".pkl") as f:
-        data = {
+    # Share data via Ray object store
+    data_ref = ray.put(
+        {
             "genotypes_array": genotypes.values,
             "genotypes_shape": genotypes.shape,
             "samples": samples,
@@ -841,30 +848,27 @@ def parallel_holdouts(  # noqa: C901
             "config": locator.config,
             "known_idx": known_idx,
         }
-        pickle.dump(data, f)
-        data_file = f.name
+    )
 
     if verbose:
         print(f"Running {n_reps} holdout replicates across GPUs {gpu_ids} using Ray...")
 
     start_time = time.time()
 
-    # Create the Ray worker with specified GPU fraction
     _ray_holdout_worker = _create_ray_holdout_worker(gpu_fraction)
 
     # Submit all replicates to Ray
     futures = []
     for rep_idx in range(n_reps):
-        # Handle empty gpu_ids (CPU only mode)
         if len(gpu_ids) == 0:
-            gpu_id = -1  # Use CPU
+            gpu_id = -1
         else:
             gpu_id = gpu_ids[rep_idx % len(gpu_ids)]
 
         future = _ray_holdout_worker.remote(
             rep_idx=rep_idx,
             gpu_id=gpu_id,
-            data_file=data_file,
+            data=data_ref,
             holdout_indices=all_holdout_indices[rep_idx],
         )
         futures.append(future)
@@ -872,74 +876,58 @@ def parallel_holdouts(  # noqa: C901
             device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
             print(f"Submitted replicate {rep_idx} to {device_str}")
 
-    # Wait for all replicates to complete with progress bar
-    if verbose:
-        print("\nProcessing replicates across GPUs...")
-        from tqdm import tqdm
-
-        # Process results with progress bar
-        results = []
-        with tqdm(total=n_reps, desc="Replicates completed") as pbar:
-            while futures:
-                # Wait for any task to complete
-                ready, futures = ray.wait(futures, num_returns=1)
-                result = ray.get(ready[0])
-                results.append(result)
-
-                # Update progress bar
-                pbar.set_postfix_str(
-                    f"Last: Rep {result['rep']}, GPU {result['gpu_id']}"
-                )
-                pbar.update(1)
-    else:
-        # No progress bar if not verbose
-        results = ray.get(futures)
+    # Wait for all replicates to complete
+    results = _collect_ray_results(
+        futures,
+        desc="Replicates completed",
+        postfix_fn=lambda r: f"Last: Rep {r['rep']}, GPU {r['gpu_id']}",
+        verbose=verbose,
+    )
 
     total_time = time.time() - start_time
 
-    # Clean up
-    os.unlink(data_file)
-
     if verbose:
         print(
-            f"\nCompleted {n_reps} replicates in {total_time:.1f}s ({total_time / n_reps:.1f}s per replicate)"
+            f"\nCompleted {n_reps} replicates in "
+            f"{total_time:.1f}s "
+            f"({total_time / n_reps:.1f}s per replicate)"
         )
 
-    # Restore original bandwidth setting if we changed it
-    if bandwidth_calculated:
-        if original_bandwidth is None:
-            # Remove the key if it wasn't there originally
-            locator.config.get("weight_samples", {}).pop("bandwidth", None)
-        else:
-            locator.config["weight_samples"]["bandwidth"] = original_bandwidth
+    _restore_bandwidth(locator, bw_calculated, bw_original)
 
     if return_df:
-        # Build predictions DataFrame in the same format as sequential version
         pred_dfs = []
 
         for result in results:
             rep_idx = result["rep"]
             predictions = pd.DataFrame(result["predictions"])
 
-            # Rename columns to include replicate number
             holdout_preds = predictions[["x_pred", "y_pred"]].copy()
-            holdout_preds.columns = [f"x_rep{rep_idx}", f"y_rep{rep_idx}"]
+            holdout_preds.columns = [
+                f"x_rep{rep_idx}",
+                f"y_rep{rep_idx}",
+            ]
             holdout_preds["sampleID"] = predictions["sampleID"]
             pred_dfs.append(holdout_preds)
 
-        # Merge all predictions
         all_predictions = pred_dfs[0]
         for df in pred_dfs[1:]:
             all_predictions = pd.merge(all_predictions, df, on="sampleID", how="outer")
 
         if save_full_pred_matrix:
             all_predictions.to_csv(
-                f"{locator.config['out']}_holdouts_predlocs.csv", index=False
+                f"{locator.config['out']}_holdouts_predlocs.csv",
+                index=False,
             )
 
         return all_predictions
 
     return None
+
+
+# -------------------------------------------------------------------
+# Windowed holdout analysis
+# -------------------------------------------------------------------
 
 
 def _create_ray_windows_worker(gpu_fraction: float = 1.0):
@@ -956,7 +944,11 @@ def _create_ray_windows_worker(gpu_fraction: float = 1.0):
 
     @ray.remote(num_gpus=gpu_fraction)
     def _ray_windows_worker(
-        window_idx: int, window_start: int, window_stop: int, gpu_id: int, data_file: str
+        window_idx: int,
+        window_start: int,
+        window_stop: int,
+        gpu_id: int,
+        data: dict,
     ) -> Dict[str, Any]:
         """
         Ray worker function that runs holdout analysis for a single genomic window.
@@ -966,57 +958,37 @@ def _create_ray_windows_worker(gpu_fraction: float = 1.0):
             window_start: Start position of window
             window_stop: Stop position of window
             gpu_id: GPU ID to use
-            data_file: Path to pickled data file
+            data: Shared data dict (resolved from Ray object store)
 
         Returns
         -------
             Dictionary with predictions and metadata
         """
-        # Set GPU before importing TensorFlow
-        if gpu_id == -1:
-            os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Disable GPU
-        else:
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        _setup_worker_env(gpu_id)
 
-        # Set TensorFlow threading environment variables BEFORE import
-        # This ensures the tf.data pipeline doesn't fork excessively
-        os.environ["TF_NUM_INTEROP_THREADS"] = "1"
-        os.environ["TF_NUM_INTRAOP_THREADS"] = "4"
-        os.environ["TF_DATA_EXPERIMENTAL_SLACK"] = "false"
-
-        # Import inside worker to ensure proper GPU setup
         import allel
         import tensorflow as tf
 
-        from locator import Locator
         from locator.data.filters import normalize_locs  # noqa: F401
         from locator.data.indexset import IndexSet  # noqa: F401
 
-        # Suppress TF warnings
         tf.get_logger().setLevel("ERROR")
 
         print(
-            f"Worker processing window {window_idx} ({window_start}-{window_stop}) on GPU {gpu_id}"
+            f"Worker processing window {window_idx} "
+            f"({window_start}-{window_stop}) on GPU {gpu_id}"
         )
 
-        # Load data from pickle file
-        with open(data_file, "rb") as f:
-            data = pickle.load(f)
-
-        # Reconstruct GenotypeArray
-        gt_array = data["genotypes_array"]
-        genotypes = allel.GenotypeArray(gt_array)
+        genotypes = allel.GenotypeArray(data["genotypes_array"])
 
         # Get window specification
         windows = data.get("windows", [])
         if window_idx < len(windows):
-            # Use pre-computed window indices
             window_spec = windows[window_idx]
             snp_indices = np.where(window_spec["indices"])[0]
             window_label = window_spec["label"]
             window_chromosome = window_spec.get("chromosome")
         else:
-            # Fallback to position-based calculation
             positions = data["positions"]
             snp_mask = (positions >= window_start) & (positions < window_stop)
             snp_indices = np.where(snp_mask)[0]
@@ -1035,21 +1007,7 @@ def _create_ray_windows_worker(gpu_fraction: float = 1.0):
                 "n_snps": 0,
             }
 
-        # Create Locator instance
-        locator_config = data["config"].copy()
-        locator_config["out"] = f"{locator_config['out']}_win{window_idx}"
-        locator_config["disable_gpu"] = False
-        locator_config["gpu_number"] = 0  # Use first visible GPU
-        locator_config["keras_verbose"] = 0  # Suppress keras output
-
-        # Store the sample data DataFrame in the config
-        if "_sample_data_df" not in locator_config:
-            locator_config["_sample_data_df"] = data["sample_data"]
-
-        locator = Locator(locator_config)
-
-        # Ensure samples are set correctly
-        locator.samples = data["samples"]
+        locator = _create_worker_locator(data, f"win{window_idx}")
         locator.genotypes = genotypes
         locator.index_set = data["index_set"]
 
@@ -1080,7 +1038,6 @@ def _create_ray_windows_worker(gpu_fraction: float = 1.0):
             plot_map=False,
         )
 
-        # Clear keras session
         tf.keras.backend.clear_session()
 
         return {
@@ -1163,13 +1120,7 @@ def parallel_windows_holdouts(  # noqa: C901
         chromosomes, windows may span across chromosome boundaries. Use
         respect_chromosomes=True (default) for biologically meaningful windows.
     """
-    # Initialize Ray if not already initialized
-    if not ray.is_initialized():
-        ray.init(
-            log_to_driver=False,  # Don't log worker output to driver
-            logging_level="ERROR",  # Only show errors
-            include_dashboard=False,  # Don't start Ray dashboard
-        )
+    _ensure_ray_initialized()
 
     # Use instance default if na_action not specified
     if na_action is None:
@@ -1183,35 +1134,35 @@ def parallel_windows_holdouts(  # noqa: C901
     status = locator.get_sample_status(samples)
     na_mask = None
     if status["n_na"] > 0:
-        # Create boolean mask for NA samples
         if isinstance(samples, pd.DataFrame):
             na_mask = samples["x"].isna() | samples["y"].isna()
         else:
-            # Use stored sample data or load from config
             if hasattr(locator, "_sample_data_df"):
-                sample_data = locator._sample_data_df
+                sample_data_df = locator._sample_data_df
             else:
                 sample_data_path = locator.config.get("sample_data")
                 if sample_data_path:
-                    sample_data = pd.read_csv(sample_data_path, sep="\t")
+                    sample_data_df = pd.read_csv(sample_data_path, sep="\t")
                 else:
                     raise ValueError("No sample data available")
-
             merged = pd.DataFrame({"sampleID": samples})
-            merged = merged.merge(sample_data, on="sampleID", how="left")
+            merged = merged.merge(sample_data_df, on="sampleID", how="left")
             na_mask = merged["x"].isna() | merged["y"].isna()
         na_mask = na_mask.values
 
     # Report status
     if verbose:
         print(
-            f"Windows holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+            f"Windows holdout analysis: "
+            f"{status['n_known']} samples with coordinates, "
+            f"{status['n_na']} without"
         )
         if status["n_na"] > 0:
             print(f"NA handling mode: {na_action}")
             if na_action == "separate":
                 print(
-                    "Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'"
+                    "Note: Holdout analysis requires known "
+                    "locations; 'separate' behaves like 'exclude'"
                 )
 
     # Apply NA action
@@ -1231,12 +1182,14 @@ def parallel_windows_holdouts(  # noqa: C901
             callset = zarr.open_group(locator.config["zarr"], mode="r")
             locator.positions = callset["variants/POS"][:]
         elif locator.config.get("vcf"):
-            # Re-read VCF to get positions and chromosomes
             if verbose:
                 print("Loading SNP positions from VCF...")
             import allel
 
-            vcf = allel.read_vcf(locator.config["vcf"], fields=["POS", "CHROM"])
+            vcf = allel.read_vcf(
+                locator.config["vcf"],
+                fields=["POS", "CHROM"],
+            )
             if vcf is not None and "variants/POS" in vcf:
                 locator.positions = vcf["variants/POS"]
                 if "variants/CHROM" in vcf:
@@ -1249,14 +1202,13 @@ def parallel_windows_holdouts(  # noqa: C901
                 )
         else:
             raise ValueError(
-                "SNP positions required for windowed analysis. Use VCF, zarr input or "
-                "genotype DataFrame with position-labeled columns."
+                "SNP positions required for windowed analysis. "
+                "Use VCF, zarr input or genotype DataFrame "
+                "with position-labeled columns."
             )
 
     # Handle holdout_sample_ids if provided
     if holdout_sample_ids is not None:
-        # Convert sample IDs to indices
-        # Handle both list and numpy array cases
         if hasattr(samples, "tolist"):
             samples_list = samples.tolist()
         else:
@@ -1267,7 +1219,7 @@ def parallel_windows_holdouts(  # noqa: C901
         except ValueError:
             missing = [sid for sid in holdout_sample_ids if sid not in samples_list]
             raise ValueError(f"Sample IDs not found in samples list: {missing}")
-        k = len(holdout_indices)  # Update k to match
+        k = len(holdout_indices)
 
     # Create IndexSet for holdout splitting
     from locator.data.indexset import IndexSet
@@ -1275,16 +1227,12 @@ def parallel_windows_holdouts(  # noqa: C901
     n_samples = len(samples)
 
     if holdout_indices is not None:
-        # Use provided holdout indices
         holdout_idx = np.array(holdout_indices)
-        # More efficient than setdiff1d for this use case
         train_mask = np.ones(n_samples, dtype=bool)
         train_mask[holdout_idx] = False
         train_idx = np.where(train_mask)[0]
 
-        # Apply NA mask if needed
         if na_mask is not None and (na_action == "exclude" or na_action == "separate"):
-            # Only keep samples with known coordinates
             valid_mask = ~na_mask
             holdout_idx = holdout_idx[valid_mask[holdout_idx]]
             train_idx = train_idx[valid_mask[train_idx]]
@@ -1295,19 +1243,21 @@ def parallel_windows_holdouts(  # noqa: C901
             na_mask=na_mask,
         )
     else:
-        # Random holdout selection using IndexSet
         index_set = IndexSet.random_split(
             n=n_samples,
-            splits={"train": 1.0 - k / n_samples, "test": k / n_samples},
+            splits={
+                "train": 1.0 - k / n_samples,
+                "test": k / n_samples,
+            },
             seed=locator.config.get("seed", 42),
             na_mask=na_mask,
-            na_action=na_action if na_action != "separate" else "exclude",
+            na_action=(na_action if na_action != "separate" else "exclude"),
         )
 
     if window_stop is None:
         window_stop = max(locator.positions)
 
-    # Generate windows using the new helper function
+    # Generate windows
     from locator.data.windows import generate_genomic_windows
 
     chromosomes = getattr(locator, "chromosomes", None)
@@ -1322,63 +1272,8 @@ def parallel_windows_holdouts(  # noqa: C901
         verbose=verbose,
     )
 
-    # Pre-calculate KDE bandwidth if needed
-    bandwidth_calculated = False
-    original_bandwidth = None
-
-    if (
-        locator.config.get("weight_samples", {}).get("enabled", False)
-        and locator.config.get("weight_samples", {}).get("method") == "KD"
-    ):
-        existing_bandwidth = locator.config.get("weight_samples", {}).get("bandwidth")
-
-        if existing_bandwidth is None:
-            # Get sample data and locations
-            if hasattr(locator, "_sample_data_df"):
-                sample_data, locs = locator.sort_samples(samples)
-            else:
-                sample_data_path = locator.config.get("sample_data")
-                if not sample_data_path:
-                    raise ValueError("sample_data file path must be provided in config")
-                sample_data, locs = locator.sort_samples(samples, sample_data_path)
-
-            # Get training locations (exclude holdout samples) - optimized
-            # Avoid creating intermediate arrays
-            train_mask = np.ones(len(samples), dtype=bool)
-            train_mask[index_set.test] = False
-            # Combine with location mask in-place
-            train_mask &= ~np.isnan(locs[:, 0])
-            train_locs = locs[train_mask]
-
-            if len(train_locs) > 1:
-                if verbose:
-                    print(
-                        "Pre-calculating optimal KDE bandwidth for windows holdout analysis..."
-                    )
-
-                from locator.sample_weights import get_global_bandwidth_optimizer
-
-                optimizer = get_global_bandwidth_optimizer()
-
-                optimal_bandwidth = optimizer.get_bandwidth(
-                    train_locs,
-                    cache_key=f"windows_holdouts_n{len(train_locs)}",
-                    n_bandwidths=locator.config.get("weight_samples", {}).get(
-                        "n_bandwidths", 100
-                    ),
-                    verbose=verbose,
-                )
-
-                # Store original value
-                original_bandwidth = existing_bandwidth
-                # Set in config
-                locator.config["weight_samples"]["bandwidth"] = optimal_bandwidth
-                bandwidth_calculated = True
-
-                if verbose:
-                    print(f"Using bandwidth: {optimal_bandwidth:.3f}")
-
-    # Pre-normalize locations for efficiency
+    # Get sample data and locations (single call, used for both
+    # bandwidth calculation and location normalization)
     if hasattr(locator, "_sample_data_df"):
         sample_data, locs = locator.sort_samples(samples)
     else:
@@ -1387,23 +1282,40 @@ def parallel_windows_holdouts(  # noqa: C901
             raise ValueError("sample_data file path must be provided in config")
         sample_data, locs = locator.sort_samples(samples, sample_data_path)
 
+    # Pre-calculate KDE bandwidth if needed
+    bw_train_mask = np.ones(len(samples), dtype=bool)
+    bw_train_mask[index_set.test] = False
+    bw_train_mask &= ~np.isnan(locs[:, 0])
+    bw_locs = locs[bw_train_mask]
+    bw_calculated, bw_original = _precalculate_bandwidth(
+        locator,
+        bw_locs,
+        f"windows_holdouts_n{len(bw_locs)}",
+        verbose,
+    )
+
     # Normalize locations once
     from locator.data.filters import normalize_locs
 
-    meanlong, sdlong, meanlat, sdlat, unnormedlocs, normalized_locs = normalize_locs(
-        locs
-    )
+    (
+        meanlong,
+        sdlong,
+        meanlat,
+        sdlat,
+        unnormedlocs,
+        normalized_locs,
+    ) = normalize_locs(locs)
 
-    # Save data to temporary file
-    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".pkl") as f:
-        data = {
+    # Share data via Ray object store
+    data_ref = ray.put(
+        {
             "genotypes_array": genotypes.values,
             "genotypes_shape": genotypes.shape,
             "samples": samples,
             "sample_data": sample_data,
             "config": locator.config,
             "positions": locator.positions,
-            "windows": windows,  # Include window specifications
+            "windows": windows,
             "index_set": index_set,
             "meanlong": meanlong,
             "sdlong": sdlong,
@@ -1412,25 +1324,23 @@ def parallel_windows_holdouts(  # noqa: C901
             "unnormedlocs": unnormedlocs,
             "normalized_locs": normalized_locs,
         }
-        pickle.dump(data, f)
-        data_file = f.name
+    )
 
     if verbose:
         print(
-            f"Running windowed analysis for {len(windows)} windows across GPUs {gpu_ids} using Ray..."
+            f"Running windowed analysis for {len(windows)} "
+            f"windows across GPUs {gpu_ids} using Ray..."
         )
 
     start_time = time.time()
 
-    # Create the Ray worker with specified GPU fraction
     _ray_windows_worker = _create_ray_windows_worker(gpu_fraction)
 
     # Submit all windows to Ray
     futures = []
     for window_idx, window in enumerate(windows):
-        # Handle empty gpu_ids (CPU only mode)
         if len(gpu_ids) == 0:
-            gpu_id = -1  # Use CPU
+            gpu_id = -1
         else:
             gpu_id = gpu_ids[window_idx % len(gpu_ids)]
 
@@ -1439,108 +1349,96 @@ def parallel_windows_holdouts(  # noqa: C901
             window_start=window["start"],
             window_stop=window["stop"],
             gpu_id=gpu_id,
-            data_file=data_file,
+            data=data_ref,
         )
         futures.append(future)
-        if verbose and window_idx < 10:  # Only print first few for brevity
+        if verbose and window_idx < 10:
             chrom_str = f" (chr{window['chromosome']})" if window["chromosome"] else ""
             device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
             print(
-                f"Submitted window {window_idx}{chrom_str} ({window['start']}-{window['stop']}) to {device_str}"
+                f"Submitted window {window_idx}{chrom_str} "
+                f"({window['start']}-{window['stop']}) "
+                f"to {device_str}"
             )
 
     if verbose and len(windows) > 10:
         print(f"... and {len(windows) - 10} more windows")
 
-    # Wait for all windows to complete with progress bar
-    if verbose:
-        print("\nProcessing windows across GPUs...")
-        from tqdm import tqdm
-
-        # Process results with progress bar
-        results = []
-        completed = 0
-        with tqdm(total=len(futures), desc="Windows completed") as pbar:
-            while futures:
-                # Wait for any task to complete
-                ready, futures = ray.wait(futures, num_returns=1)
-                result = ray.get(ready[0])
-                results.append(result)
-
-                # Update progress bar with window info
-                window_info = f"Window {result['window_idx']}"
-                if result["window_chromosome"]:
-                    window_info += f" (chr{result['window_chromosome']})"
-                pbar.set_postfix_str(f"Last: {window_info}, GPU {result['gpu_id']}")
-                pbar.update(1)
-                completed += 1
-    else:
-        # No progress bar if not verbose
-        results = ray.get(futures)
+    # Wait for all windows to complete
+    results = _collect_ray_results(
+        futures,
+        desc="Windows completed",
+        postfix_fn=lambda r: (
+            f"Last: Window {r['window_idx']}"
+            + (f" (chr{r['window_chromosome']})" if r["window_chromosome"] else "")
+            + f", GPU {r['gpu_id']}"
+        ),
+        verbose=verbose,
+    )
 
     total_time = time.time() - start_time
 
-    # Clean up
-    os.unlink(data_file)
-
     if verbose:
         print(
-            f"\nCompleted {len(windows)} windows in {total_time:.1f}s ({total_time / len(windows):.1f}s per window)"
+            f"\nCompleted {len(windows)} windows in "
+            f"{total_time:.1f}s "
+            f"({total_time / len(windows):.1f}s per window)"
         )
 
         # Show GPU utilization summary
         gpu_counts = {}
         for result in results:
-            gpu_id = result["gpu_id"]
-            gpu_counts[gpu_id] = gpu_counts.get(gpu_id, 0) + 1
+            gid = result["gpu_id"]
+            gpu_counts[gid] = gpu_counts.get(gid, 0) + 1
 
         print("\nGPU utilization:")
-        for gpu_id in sorted(gpu_counts.keys()):
-            print(
-                f"  GPU {gpu_id}: {gpu_counts[gpu_id]} windows ({gpu_counts[gpu_id] / len(windows) * 100:.1f}%)"
-            )
+        for gid in sorted(gpu_counts.keys()):
+            pct = gpu_counts[gid] / len(windows) * 100
+            print(f"  GPU {gid}: {gpu_counts[gid]} windows ({pct:.1f}%)")
 
-    # Restore original bandwidth setting if we changed it
-    if bandwidth_calculated:
-        if original_bandwidth is None:
-            # Remove the key if it wasn't there originally
-            locator.config.get("weight_samples", {}).pop("bandwidth", None)
-        else:
-            locator.config["weight_samples"]["bandwidth"] = original_bandwidth
+    _restore_bandwidth(locator, bw_calculated, bw_original)
 
     if return_df:
-        # Build predictions DataFrame in the same format as sequential version
         pred_dfs = []
 
         for result in results:
             if result["predictions"] is not None:
-                window_label = result.get("window_label", f"pos{result['window_start']}")
+                window_label = result.get(
+                    "window_label",
+                    f"pos{result['window_start']}",
+                )
                 predictions = pd.DataFrame(result["predictions"])
 
-                # Rename columns to include window label
                 window_preds = predictions[["x_pred", "y_pred"]].copy()
-                window_preds.columns = [f"x_{window_label}", f"y_{window_label}"]
+                window_preds.columns = [
+                    f"x_{window_label}",
+                    f"y_{window_label}",
+                ]
                 window_preds["sampleID"] = predictions["sampleID"]
                 pred_dfs.append(window_preds)
 
-        # Check if any windows had predictions
         if not pred_dfs:
             print("Warning: No windows contained SNPs. No predictions generated.")
             return None
 
-        # Merge all predictions
         all_predictions = pred_dfs[0]
         for df in pred_dfs[1:]:
             all_predictions = pd.merge(all_predictions, df, on="sampleID")
 
         if save_full_pred_matrix:
             all_predictions.to_csv(
-                f"{locator.config['out']}_windows_holdouts_predlocs.csv", index=False
+                f"{locator.config['out']}_windows_holdouts_predlocs.csv",
+                index=False,
             )
 
         return all_predictions
 
     return None
+
+
+# -------------------------------------------------------------------
+# Ensemble training
+# -------------------------------------------------------------------
 
 
 def _create_ray_ensemble_worker(gpu_fraction: float = 1.0):
@@ -1556,67 +1454,35 @@ def _create_ray_ensemble_worker(gpu_fraction: float = 1.0):
     """
 
     @ray.remote(num_gpus=gpu_fraction)
-    def _ray_ensemble_worker(
-        fold_idx: int, gpu_id: int, data_file: str
-    ) -> Dict[str, Any]:
+    def _ray_ensemble_worker(fold_idx: int, gpu_id: int, data: dict) -> Dict[str, Any]:
         """
         Ray worker function that trains a single ensemble fold on a specific GPU.
 
         Args:
             fold_idx: Fold index
             gpu_id: GPU ID to use
-            data_file: Path to pickled data file
+            data: Shared data dict (resolved from Ray object store)
 
         Returns
         -------
             Dictionary with model information and metadata
         """
-        # Set GPU before importing TensorFlow
-        if gpu_id == -1:
-            os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Disable GPU
-        else:
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        _setup_worker_env(gpu_id)
 
-        # Set TensorFlow threading environment variables BEFORE import
-        # This ensures the tf.data pipeline doesn't fork excessively
-        os.environ["TF_NUM_INTEROP_THREADS"] = "1"
-        os.environ["TF_NUM_INTRAOP_THREADS"] = "4"
-        os.environ["TF_DATA_EXPERIMENTAL_SLACK"] = "false"
-
-        # Import inside worker to ensure proper GPU setup
         import allel
         import tensorflow as tf
 
-        from locator import Locator
-
-        # Suppress TF warnings
         tf.get_logger().setLevel("ERROR")
 
         print(f"Worker training ensemble fold {fold_idx} on GPU {gpu_id}")
 
-        # Load data from pickle file
-        with open(data_file, "rb") as f:
-            data = pickle.load(f)
+        # Reconstruct GenotypeArray (for consistency check)
+        _ = allel.GenotypeArray(  # noqa: F841
+            data["genotypes_array"]
+        )
+        filtered_genotypes = data["filtered_genotypes_array"]
 
-        # Reconstruct GenotypeArrays (genotypes not used but reconstructed for consistency)
-        _ = allel.GenotypeArray(data["genotypes_array"])  # noqa: F841
-        filtered_genotypes = data["filtered_genotypes_array"]  # Already a numpy array
-
-        # Create Locator instance
-        locator_config = data["config"].copy()
-        locator_config["out"] = f"{locator_config['out']}_fold{fold_idx}"
-        locator_config["disable_gpu"] = False
-        locator_config["gpu_number"] = 0  # Use first visible GPU
-        locator_config["keras_verbose"] = 0  # Suppress keras output
-
-        # Store the sample data DataFrame in the config
-        if "_sample_data_df" not in locator_config:
-            locator_config["_sample_data_df"] = data.get("sample_data")
-
-        locator = Locator(locator_config)
-
-        # Set samples to ensure consistency
-        locator.samples = data["samples"]
+        locator = _create_worker_locator(data, f"fold{fold_idx}")
 
         # Train single fold using existing method
         start_time = time.time()
@@ -1629,18 +1495,16 @@ def _create_ray_ensemble_worker(gpu_fraction: float = 1.0):
             augment_config=data.get("augment_config"),
             save_fold_models=data["save_fold_models"],
             patience_multiplier=data["patience_multiplier"],
-            verbose=False,  # Suppress individual fold output
+            verbose=False,
         )
         train_time = time.time() - start_time
 
         # Add weights file path if saving
         if data["save_fold_models"]:
-            model_info["weights_file"] = f"{locator_config['out']}.weights.h5"
+            model_info["weights_file"] = f"{locator.config['out']}.weights.h5"
         else:
             model_info["weights_file"] = None
 
-        # Don't include the actual model in the result to avoid serialization issues
-        # We'll load it from disk if needed
         result = {
             "fold": fold_idx,
             "gpu_id": gpu_id,
@@ -1649,8 +1513,8 @@ def _create_ray_ensemble_worker(gpu_fraction: float = 1.0):
                 "fold": model_info["fold"],
                 "weights_file": model_info["weights_file"],
                 "norm_params": model_info["norm_params"],
-                "train_indices": model_info["train_indices"].tolist(),
-                "val_indices": model_info["val_indices"].tolist(),
+                "train_indices": (model_info["train_indices"].tolist()),
+                "val_indices": (model_info["val_indices"].tolist()),
             },
             "history": {
                 "loss": model_info["history"].history.get("loss", []),
@@ -1660,7 +1524,6 @@ def _create_ray_ensemble_worker(gpu_fraction: float = 1.0):
             "final_val_loss": float(model_info["history"].history["val_loss"][-1]),
         }
 
-        # Clear keras session
         tf.keras.backend.clear_session()
 
         return result
@@ -1720,13 +1583,7 @@ def parallel_train_ensemble(  # noqa: C901
             - 'normalization_params': Averaged normalization parameters
             - 'fold_info': Information about fold splits
     """
-    # Initialize Ray if not already initialized
-    if not ray.is_initialized():
-        ray.init(
-            log_to_driver=False,  # Don't log worker output to driver
-            logging_level="ERROR",  # Only show errors
-            include_dashboard=False,  # Don't start Ray dashboard
-        )
+    _ensure_ray_initialized()
 
     # Setup GPU optimizations for ensemble training in main process
     if verbose:
@@ -1759,7 +1616,6 @@ def parallel_train_ensemble(  # noqa: C901
             "enabled": True,
             "flip_rate": flip_rate,
         }
-        # Also set in config for consistency
         locator.config["augmentation"] = augment_config
 
     # Get sample data for serialization
@@ -1767,55 +1623,21 @@ def parallel_train_ensemble(  # noqa: C901
     if hasattr(locator, "_sample_data_df"):
         sample_data = locator._sample_data_df
 
-    # Pre-calculate KDE bandwidth if needed (same pattern as k-fold)
-    bandwidth_calculated = False
-    original_bandwidth = None
+    # Pre-calculate KDE bandwidth if needed
+    na_mask = np.isnan(locs[:, 0]) | np.isnan(locs[:, 1])
+    bw_locs = locs[~na_mask]
+    bw_calculated, bw_original = _precalculate_bandwidth(
+        locator,
+        bw_locs,
+        f"ensemble_k{k}_n{len(bw_locs)}",
+        verbose,
+    )
 
-    if (
-        locator.config.get("weight_samples", {}).get("enabled", False)
-        and locator.config.get("weight_samples", {}).get("method") == "KD"
-    ):
-        existing_bandwidth = locator.config.get("weight_samples", {}).get("bandwidth")
-
-        if existing_bandwidth is None:
-            # Get all samples with coordinates for bandwidth calculation
-            na_mask = np.isnan(locs[:, 0]) | np.isnan(locs[:, 1])
-            coords_mask = ~na_mask
-            all_train_locs = locs[coords_mask]
-
-            if len(all_train_locs) > 1:
-                if verbose:
-                    print(
-                        "Pre-calculating optimal KDE bandwidth for ensemble training..."
-                    )
-
-                from locator.sample_weights import get_global_bandwidth_optimizer
-
-                optimizer = get_global_bandwidth_optimizer()
-
-                optimal_bandwidth = optimizer.get_bandwidth(
-                    all_train_locs,
-                    cache_key=f"ensemble_k{k}_n{len(all_train_locs)}",
-                    n_bandwidths=locator.config.get("weight_samples", {}).get(
-                        "n_bandwidths", 100
-                    ),
-                    verbose=verbose,
-                )
-
-                # Store original value
-                original_bandwidth = existing_bandwidth
-                # Set in config
-                locator.config["weight_samples"]["bandwidth"] = optimal_bandwidth
-                bandwidth_calculated = True
-
-                if verbose:
-                    print(f"Using bandwidth: {optimal_bandwidth:.3f}")
-
-    # Save data to temporary file
-    with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".pkl") as f:
-        data = {
+    # Share data via Ray object store
+    data_ref = ray.put(
+        {
             "genotypes_array": genotypes.values,
-            "filtered_genotypes_array": filtered_genotypes,  # Already a numpy array
+            "filtered_genotypes_array": filtered_genotypes,
             "samples": samples,
             "sample_data": sample_data,
             "locs": locs,
@@ -1825,66 +1647,50 @@ def parallel_train_ensemble(  # noqa: C901
             "save_fold_models": save_fold_models,
             "patience_multiplier": patience_multiplier,
         }
-        pickle.dump(data, f)
-        data_file = f.name
+    )
 
     if verbose:
         print(f"Training {k}-fold ensemble across GPUs {gpu_ids} using Ray...")
 
     start_time = time.time()
 
-    # Create the Ray worker with specified GPU fraction
     _ray_ensemble_worker = _create_ray_ensemble_worker(gpu_fraction)
 
     # Submit all folds to Ray
     futures = []
     for fold_idx in range(k):
-        # Handle empty gpu_ids (CPU only mode)
         if len(gpu_ids) == 0:
-            gpu_id = -1  # Use CPU
+            gpu_id = -1
         else:
             gpu_id = gpu_ids[fold_idx % len(gpu_ids)]
 
         future = _ray_ensemble_worker.remote(
-            fold_idx=fold_idx, gpu_id=gpu_id, data_file=data_file
+            fold_idx=fold_idx, gpu_id=gpu_id, data=data_ref
         )
         futures.append(future)
         if verbose:
             device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
             print(f"Submitted fold {fold_idx} to {device_str}")
 
-    # Wait for all folds to complete with progress bar
-    if verbose:
-        print("\nTraining ensemble folds across GPUs...")
-        from tqdm import tqdm
-
-        # Process results with progress bar
-        results = []
-        with tqdm(total=k, desc="Folds completed") as pbar:
-            while futures:
-                # Wait for any task to complete
-                ready, futures = ray.wait(futures, num_returns=1)
-                result = ray.get(ready[0])
-                results.append(result)
-
-                # Update progress bar
-                pbar.set_postfix_str(
-                    f"Last: Fold {result['fold']}, GPU {result['gpu_id']}, "
-                    f"Final loss: {result['final_loss']:.4f}"
-                )
-                pbar.update(1)
-    else:
-        # No progress bar if not verbose
-        results = ray.get(futures)
+    # Wait for all folds to complete
+    results = _collect_ray_results(
+        futures,
+        desc="Folds completed",
+        postfix_fn=lambda r: (
+            f"Last: Fold {r['fold']}, "
+            f"GPU {r['gpu_id']}, "
+            f"Final loss: {r['final_loss']:.4f}"
+        ),
+        verbose=verbose,
+    )
 
     total_time = time.time() - start_time
 
-    # Clean up
-    os.unlink(data_file)
-
     if verbose:
         print(
-            f"\nCompleted ensemble training in {total_time:.1f}s ({total_time / k:.1f}s per fold)"
+            f"\nCompleted ensemble training in "
+            f"{total_time:.1f}s "
+            f"({total_time / k:.1f}s per fold)"
         )
 
         # Show speedup vs sequential
@@ -1892,23 +1698,19 @@ def parallel_train_ensemble(  # noqa: C901
             num_gpus = len(set(gpu_ids))
             estimated_speedup = k / num_gpus
             print(
-                f"Estimated speedup: {estimated_speedup:.1f}x (using {num_gpus} GPU{'s' if num_gpus > 1 else ''})"
+                f"Estimated speedup: {estimated_speedup:.1f}x "
+                f"(using {num_gpus} "
+                f"GPU{'s' if num_gpus > 1 else ''})"
             )
         else:
             print("CPU mode - no GPU speedup available")
 
-    # Restore original bandwidth setting if we changed it
-    if bandwidth_calculated:
-        if original_bandwidth is None:
-            # Remove the key if it wasn't there originally
-            locator.config.get("weight_samples", {}).pop("bandwidth", None)
-        else:
-            locator.config["weight_samples"]["bandwidth"] = original_bandwidth
+    _restore_bandwidth(locator, bw_calculated, bw_original)
 
-    # Aggregate results (sort by fold index to ensure correct order)
+    # Aggregate results (sort by fold index)
     results_sorted = sorted(results, key=lambda x: x["fold"])
 
-    # Store results on locator instance (mimicking sequential version)
+    # Store results on locator instance
     locator._ensemble_genotypes = genotypes
     locator._ensemble_fold_info = fold_info
     locator._ensemble_models = []
@@ -1916,20 +1718,17 @@ def parallel_train_ensemble(  # noqa: C901
     locator._ensemble_norm_params = []
 
     for result in results_sorted:
-        # Reconstruct model info
         model_info = result["model_info"]
-        model_info["model"] = None  # Model will be loaded from disk when needed
+        model_info["model"] = None
         model_info["train_indices"] = np.array(model_info["train_indices"])
         model_info["val_indices"] = np.array(model_info["val_indices"])
 
-        # Create history object for compatibility
         class HistoryStub:
             def __init__(self, history_dict):
                 self.history = history_dict
 
         model_info["history"] = HistoryStub(result["history"])
 
-        # Store results
         locator._ensemble_models.append(model_info)
         locator._ensemble_histories.append(model_info["history"])
         locator._ensemble_norm_params.append(model_info["norm_params"])
@@ -1947,13 +1746,14 @@ def parallel_train_ensemble(  # noqa: C901
 
     # Save ensemble using model manager if requested
     if use_model_manager and save_fold_models:
-        from locator.ensemble_model_manager import EnsembleModelManager
+        from locator.ensemble_model_manager import (
+            EnsembleModelManager,
+        )
 
         model_manager = EnsembleModelManager(f"{locator.config['out']}_ensemble")
 
-        # Create a serializable version of config (excluding DataFrames)
         serializable_config = {
-            k: v for k, v in locator.config.items() if not isinstance(v, pd.DataFrame)
+            k_: v for k_, v in locator.config.items() if not isinstance(v, pd.DataFrame)
         }
 
         ensemble_metadata = {
@@ -1965,24 +1765,23 @@ def parallel_train_ensemble(  # noqa: C901
             "gpu_ids": gpu_ids,
         }
 
-        # Check if we can load models for the model manager
         models_loaded = False
         if verbose:
             print("Checking for saved model weights...")
 
-        for i, model_info in enumerate(locator._ensemble_models):
-            if model_info["weights_file"] and os.path.exists(model_info["weights_file"]):
+        for i, m_info in enumerate(locator._ensemble_models):
+            if m_info["weights_file"] and os.path.exists(m_info["weights_file"]):
                 if not models_loaded and verbose:
                     print("Loading models for ensemble manager...")
                 models_loaded = True
-                # Create model and load weights
                 model = locator._create_model(input_shape=filtered_genotypes.shape[0])
-                model.load_weights(model_info["weights_file"])
-                model_info["model"] = model
+                model.load_weights(m_info["weights_file"])
+                m_info["model"] = model
             else:
-                if verbose and model_info["weights_file"]:
+                if verbose and m_info["weights_file"]:
                     print(
-                        f"Warning: Expected weights file not found: {model_info['weights_file']}"
+                        "Warning: Expected weights file "
+                        f"not found: {m_info['weights_file']}"
                     )
 
         if models_loaded:
@@ -1992,7 +1791,8 @@ def parallel_train_ensemble(  # noqa: C901
         else:
             if verbose:
                 print(
-                    "Models were saved individually by workers, skipping ensemble manager."
+                    "Models were saved individually by workers,"
+                    " skipping ensemble manager."
                 )
 
     return {
