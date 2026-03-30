@@ -14,6 +14,90 @@ from .data import IndexSet, normalize_locs
 class AnalysisMixin:
     """Mixin class providing analysis functionality for Locator."""
 
+    def _ensure_positions(self):
+        """Load SNP positions from VCF, zarr, or DataFrame if not already stored.
+
+        Sets self.positions (and self.chromosomes when available from VCF).
+
+        Raises
+        ------
+            ValueError: If no source of SNP positions is available.
+        """
+        if hasattr(self, "positions") and self.positions is not None:
+            return
+
+        if hasattr(self, "_genotype_df"):
+            # Use positions from DataFrame columns
+            self.positions = np.array(self._genotype_df.columns, dtype=int)
+        elif self.config.get("zarr"):
+            # Get positions from zarr file
+            callset = zarr.open_group(self.config["zarr"], mode="r")
+            self.positions = callset["variants/POS"][:]
+        elif self.config.get("vcf"):
+            # Re-read VCF to get positions and chromosomes
+            print("Loading SNP positions from VCF...")
+            import allel
+
+            vcf = allel.read_vcf(self.config["vcf"], fields=["POS", "CHROM"])
+            if vcf is not None and "variants/POS" in vcf:
+                self.positions = vcf["variants/POS"]
+                if "variants/CHROM" in vcf:
+                    self.chromosomes = vcf["variants/CHROM"]
+                print(f"Loaded {len(self.positions)} SNP positions")
+            else:
+                raise ValueError(
+                    f"Could not load positions from VCF: {self.config['vcf']}"
+                )
+        else:
+            raise ValueError(
+                "SNP positions required for windowed analysis. Use VCF, zarr input or "
+                "genotype DataFrame with position-labeled columns."
+            )
+
+        # Final check
+        if not hasattr(self, "positions") or self.positions is None:
+            raise ValueError(
+                "SNP positions required for windowed analysis. Use zarr input or "
+                "genotype DataFrame with position-labeled columns."
+            )
+
+    def _validate_na_action(self, samples, na_action, analysis_name):
+        """Resolve NA action default, check sample status, print summary, and enforce fail mode.
+
+        Args:
+            samples: Array of sample IDs
+            na_action: How to handle NA samples, or None to use instance default
+            analysis_name: Human-readable name for log messages (e.g. "Window analysis")
+
+        Returns
+        -------
+            tuple: (na_action, status) where na_action is the resolved string and
+                status is the dict returned by get_sample_status.
+
+        Raises
+        ------
+            ValueError: If na_action is 'fail' and NA samples are present.
+        """
+        if na_action is None:
+            na_action = self.na_action
+
+        status = self.get_sample_status(samples)
+
+        print(
+            f"{analysis_name}: {status['n_known']} samples with coordinates, "
+            f"{status['n_na']} without"
+        )
+        if status["n_na"] > 0:
+            print(f"NA handling mode: {na_action}")
+
+        if na_action == "fail" and status["n_na"] > 0:
+            raise ValueError(
+                f"Found {status['n_na']} samples without coordinates. "
+                f"Set na_action='separate' or 'exclude' to proceed."
+            )
+
+        return na_action, status
+
     def run_windows(  # noqa: C901
         self,
         genotypes,
@@ -63,63 +147,12 @@ class AnalysisMixin:
         # Store samples
         self.samples = samples
 
-        # Use instance default if na_action not specified
-        if na_action is None:
-            na_action = self.na_action
-
-        # Get sample status
-        status = self.get_sample_status(samples)
-
-        # Report status
-        print(
-            f"Window analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+        na_action, status = self._validate_na_action(
+            samples, na_action, "Window analysis"
         )
-        if status["n_na"] > 0:
-            print(f"NA handling mode: {na_action}")
-
-        # Apply NA action
-        if na_action == "fail" and status["n_na"] > 0:
-            raise ValueError(
-                f"Found {status['n_na']} samples without coordinates. "
-                f"Set na_action='separate' or 'exclude' to proceed."
-            )
 
         # Get positions if not already stored
-        if not hasattr(self, "positions") or self.positions is None:
-            if hasattr(self, "_genotype_df"):
-                # Use positions from DataFrame columns
-                self.positions = np.array(self._genotype_df.columns, dtype=int)
-            elif self.config.get("zarr"):
-                # Get positions from zarr file
-                callset = zarr.open_group(self.config["zarr"], mode="r")
-                self.positions = callset["variants/POS"][:]
-            elif self.config.get("vcf"):
-                # Re-read VCF to get positions and chromosomes
-                print("Loading SNP positions from VCF...")
-                import allel
-
-                vcf = allel.read_vcf(self.config["vcf"], fields=["POS", "CHROM"])
-                if vcf is not None and "variants/POS" in vcf:
-                    self.positions = vcf["variants/POS"]
-                    if "variants/CHROM" in vcf:
-                        self.chromosomes = vcf["variants/CHROM"]
-                    print(f"Loaded {len(self.positions)} SNP positions")
-                else:
-                    raise ValueError(
-                        f"Could not load positions from VCF: {self.config['vcf']}"
-                    )
-            else:
-                raise ValueError(
-                    "SNP positions required for windowed analysis. Use VCF, zarr input or "
-                    "genotype DataFrame with position-labeled columns."
-                )
-
-        # Ensure positions were found
-        if not hasattr(self, "positions") or self.positions is None:
-            raise ValueError(
-                "SNP positions required for windowed analysis. Use zarr input or "
-                "genotype DataFrame with position-labeled columns."
-            )
+        self._ensure_positions()
 
         if window_stop is None:
             window_stop = max(self.positions)
@@ -242,26 +275,9 @@ class AnalysisMixin:
         # Store samples
         self.samples = samples
 
-        # Use instance default if na_action not specified
-        if na_action is None:
-            na_action = self.na_action
-
-        # Get sample status
-        status = self.get_sample_status(samples)
-
-        # Report status
-        print(
-            f"Jacknife analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+        na_action, status = self._validate_na_action(
+            samples, na_action, "Jacknife analysis"
         )
-        if status["n_na"] > 0:
-            print(f"NA handling mode: {na_action}")
-
-        # Apply NA action
-        if na_action == "fail" and status["n_na"] > 0:
-            raise ValueError(
-                f"Found {status['n_na']} samples without coordinates. "
-                f"Set na_action='separate' or 'exclude' to proceed."
-            )
 
         # Set jacknife flag in config
         self.config["jacknife"] = True
@@ -405,26 +421,9 @@ class AnalysisMixin:
         # Store samples
         self.samples = samples
 
-        # Use instance default if na_action not specified
-        if na_action is None:
-            na_action = self.na_action
-
-        # Get sample status
-        status = self.get_sample_status(samples)
-
-        # Report status
-        print(
-            f"Bootstrap analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+        na_action, status = self._validate_na_action(
+            samples, na_action, "Bootstrap analysis"
         )
-        if status["n_na"] > 0:
-            print(f"NA handling mode: {na_action}")
-
-        # Apply NA action
-        if na_action == "fail" and status["n_na"] > 0:
-            raise ValueError(
-                f"Found {status['n_na']} samples without coordinates. "
-                f"Set na_action='separate' or 'exclude' to proceed."
-            )
 
         # Set bootstrap flag in config
         self.config["bootstrap"] = True
@@ -608,42 +607,19 @@ class AnalysisMixin:
         # Store samples
         self.samples = samples
 
-        # Use instance default if na_action not specified
-        if na_action is None:
-            na_action = self.na_action
-
-        # Get sample status
-        status = self.get_sample_status(samples)
-
-        # Report status
-        print(
-            f"Holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+        na_action, status = self._validate_na_action(
+            samples, na_action, "Holdout analysis"
         )
-        if status["n_na"] > 0:
-            print(f"NA handling mode: {na_action}")
-            if na_action == "separate":
-                print(
-                    "Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'"
-                )
-
-        # Apply NA action
-        if na_action == "fail" and status["n_na"] > 0:
-            raise ValueError(
-                f"Found {status['n_na']} samples without coordinates. "
-                f"Set na_action='separate' or 'exclude' to proceed."
+        if status["n_na"] > 0 and na_action == "separate":
+            print(
+                "Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'"
             )
 
         # Create lists to store predictions
         pred_dfs = []
 
         # Get sample data and locations
-        if hasattr(self, "_sample_data_df"):
-            sample_data, locs = self.sort_samples(samples)
-        else:
-            sample_data_path = self.config.get("sample_data")
-            if not sample_data_path:
-                raise ValueError("sample_data file path must be provided in config")
-            sample_data, locs = self.sort_samples(samples, sample_data_path)
+        sample_data, locs = self._resolve_locations(samples)
 
         # Get indices of samples with known locations
         known_idx = np.argwhere(~np.isnan(locs[:, 0]))
@@ -838,29 +814,12 @@ class AnalysisMixin:
         # Store samples
         self.samples = samples
 
-        # Use instance default if na_action not specified
-        if na_action is None:
-            na_action = self.na_action
-
-        # Get sample status
-        status = self.get_sample_status(samples)
-
-        # Report status
-        print(
-            f"Jacknife holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
+        na_action, status = self._validate_na_action(
+            samples, na_action, "Jacknife holdout analysis"
         )
-        if status["n_na"] > 0:
-            print(f"NA handling mode: {na_action}")
-            if na_action == "separate":
-                print(
-                    "Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'"
-                )
-
-        # Apply NA action
-        if na_action == "fail" and status["n_na"] > 0:
-            raise ValueError(
-                f"Found {status['n_na']} samples without coordinates. "
-                f"Set na_action='separate' or 'exclude' to proceed."
+        if status["n_na"] > 0 and na_action == "separate":
+            print(
+                "Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'"
             )
 
         # Set jacknife flag
@@ -1037,12 +996,15 @@ class AnalysisMixin:
         self.samples = samples
         self.genotypes = genotypes
 
-        # Use instance default if na_action not specified
-        if na_action is None:
-            na_action = self.na_action
+        na_action, status = self._validate_na_action(
+            samples, na_action, "Windows holdout analysis"
+        )
+        if status["n_na"] > 0 and na_action == "separate":
+            print(
+                "Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'"
+            )
 
-        # Get sample status and create NA mask
-        status = self.get_sample_status(samples)
+        # Create NA mask for IndexSet construction
         na_mask = None
         if status["n_na"] > 0:
             # Create boolean mask for NA samples
@@ -1064,51 +1026,8 @@ class AnalysisMixin:
                 na_mask = merged["x"].isna() | merged["y"].isna()
             na_mask = na_mask.values
 
-        # Report status
-        print(
-            f"Windows holdout analysis: {status['n_known']} samples with coordinates, {status['n_na']} without"
-        )
-        if status["n_na"] > 0:
-            print(f"NA handling mode: {na_action}")
-            if na_action == "separate":
-                print(
-                    "Note: Holdout analysis requires known locations; 'separate' behaves like 'exclude'"
-                )
-
-        # Apply NA action
-        if na_action == "fail" and status["n_na"] > 0:
-            raise ValueError(
-                f"Found {status['n_na']} samples without coordinates. "
-                f"Set na_action='separate' or 'exclude' to proceed."
-            )
-
         # Get positions and create holdout IndexSet
-        if not hasattr(self, "positions") or self.positions is None:
-            if hasattr(self, "_genotype_df"):
-                self.positions = np.array(self._genotype_df.columns, dtype=int)
-            elif self.config.get("zarr"):
-                callset = zarr.open_group(self.config["zarr"], mode="r")
-                self.positions = callset["variants/POS"][:]
-            elif self.config.get("vcf"):
-                # Re-read VCF to get positions and chromosomes
-                print("Loading SNP positions from VCF...")
-                import allel
-
-                vcf = allel.read_vcf(self.config["vcf"], fields=["POS", "CHROM"])
-                if vcf is not None and "variants/POS" in vcf:
-                    self.positions = vcf["variants/POS"]
-                    if "variants/CHROM" in vcf:
-                        self.chromosomes = vcf["variants/CHROM"]
-                    print(f"Loaded {len(self.positions)} SNP positions")
-                else:
-                    raise ValueError(
-                        f"Could not load positions from VCF: {self.config['vcf']}"
-                    )
-            else:
-                raise ValueError(
-                    "SNP positions required for windowed analysis. Use VCF, zarr input or "
-                    "genotype DataFrame with position-labeled columns."
-                )
+        self._ensure_positions()
 
         # Handle holdout_sample_ids if provided
         if holdout_sample_ids is not None:
@@ -1190,15 +1109,7 @@ class AnalysisMixin:
 
             if existing_bandwidth is None:
                 # Get sample data and locations
-                if hasattr(self, "_sample_data_df"):
-                    sample_data, locs = self.sort_samples(samples)
-                else:
-                    sample_data_path = self.config.get("sample_data")
-                    if not sample_data_path:
-                        raise ValueError(
-                            "sample_data file path must be provided in config"
-                        )
-                    sample_data, locs = self.sort_samples(samples, sample_data_path)
+                sample_data, locs = self._resolve_locations(samples)
 
                 # Get training locations (exclude holdout samples)
                 train_mask = np.ones(len(samples), dtype=bool)
@@ -1236,13 +1147,7 @@ class AnalysisMixin:
         self.index_set = index_set
 
         # Pre-normalize locations for efficiency
-        if hasattr(self, "_sample_data_df"):
-            _, locs = self.sort_samples(samples)
-        else:
-            sample_data_path = self.config.get("sample_data")
-            if not sample_data_path:
-                raise ValueError("sample_data file path must be provided in config")
-            _, locs = self.sort_samples(samples, sample_data_path)
+        _, locs = self._resolve_locations(samples)
 
         # Normalize locations once
         (
@@ -1442,17 +1347,16 @@ class AnalysisMixin:
         """
         self.samples = samples
 
-        # Use instance default if na_action not specified
+        # Resolve na_action default and validate; _validate_na_action always
+        # prints, but k-fold optionally suppresses output via verbose flag.
         if na_action is None:
             na_action = self.na_action
-
-        # Get sample status
         status = self.get_sample_status(samples)
 
-        # Report status
         if verbose:
             print(
-                f"K-fold CV: {status['n_known']} samples with coordinates, {status['n_na']} without"
+                f"K-fold CV: {status['n_known']} samples with coordinates, "
+                f"{status['n_na']} without"
             )
             if status["n_na"] > 0:
                 print(f"NA handling mode: {na_action}")
@@ -1461,7 +1365,6 @@ class AnalysisMixin:
                         "Note: K-fold CV requires known locations; 'separate' behaves like 'exclude'"
                     )
 
-        # Apply NA action
         if na_action == "fail" and status["n_na"] > 0:
             raise ValueError(
                 f"Found {status['n_na']} samples without coordinates. "
@@ -1471,13 +1374,7 @@ class AnalysisMixin:
         pred_rows = []
 
         # Get sample data and locations
-        if hasattr(self, "_sample_data_df"):
-            sample_data, locs = self.sort_samples(samples)
-        else:
-            sample_data_path = self.config.get("sample_data")
-            if not sample_data_path:
-                raise ValueError("sample_data file path must be provided in config")
-            sample_data, locs = self.sort_samples(samples, sample_data_path)
+        sample_data, locs = self._resolve_locations(samples)
 
         # Create NA mask
         na_mask = np.isnan(locs[:, 0])
