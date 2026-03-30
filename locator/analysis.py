@@ -440,21 +440,6 @@ class AnalysisMixin:
             self.filtered_genotypes if hasattr(self, "filtered_genotypes") else None
         )
 
-        # Handle prediction indices based on whether we're using tf.data pipeline
-        # if hasattr(self, "pred_indices") and self.pred_indices is not None:
-        #     n_pred = len(self.pred_indices)
-        # elif self.predgen is not None:
-        #     n_pred = self.predgen.shape[0]
-        # else:
-        #     n_pred = 0  # noqa: F841
-
-        # original_normalized_locs = np.vstack(  # noqa: F841
-        #     [
-        #         self.trainlocs,
-        #         self.testlocs,
-        #         np.full((n_pred, 2), np.nan) if n_pred > 0 else np.empty((0, 2)),
-        #     ]
-        # )
         original_index_set = self.index_set if hasattr(self, "index_set") else None
 
         # Pre-calculate KDE bandwidth if needed

@@ -141,12 +141,6 @@ def parse_args():
         help="plot training history? default: True",
     )
     parser.add_argument(
-        "--gnuplot",
-        default=False,
-        action="store_true",
-        help="print training history to terminal",
-    )
-    parser.add_argument(
         "--keras_verbose",
         default=1,
         type=int,

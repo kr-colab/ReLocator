@@ -1060,13 +1060,6 @@ def plot_sample_weights(
         samples = sample_data.copy()
     else:
         samples = pd.read_csv(sample_data, sep="\t")
-        # Load sample data if path provided
-    if isinstance(sample_weights, pd.DataFrame):
-        # weights = sample_weights.copy()  # noqa: F841
-        pass
-    else:
-        # weights = pd.read_csv(sample_weights, sep="\t")  # noqa: F841
-        pass
 
     # Merge predictions with true locations
     merged = sample_weights.merge(samples, on="sampleID")
@@ -1189,56 +1182,8 @@ class PlottingMixin:
 
     Methods
     -------
-        plot_history: Plot training and validation loss curves
         _repr_html_: Generate rich HTML representation for Jupyter notebooks
     """
-
-    def plot_history(self, history):
-        """Plot training history and prediction error.
-
-        Creates a figure with two subplots showing the validation loss and training loss
-        over epochs. This helps visualize model convergence and potential overfitting.
-
-        The plot shows:
-
-        - Left panel: Validation loss over epochs (excluding first 3)
-        - Right panel: Training loss over epochs (excluding first 3)
-
-        First 3 epochs are excluded as they often have very high initial losses
-        that would compress the scale of the plot.
-
-        Args:
-            history (keras.callbacks.History): History object returned by model.fit()
-                containing training metrics for each epoch
-
-        Returns
-        -------
-            None: Saves plot to {config['out']}_fitplot.pdf if config['plot_history'] is True
-
-        Note:
-            - Only creates plot if config['plot_history'] is True
-            - Uses 'agg' backend to avoid display issues on servers
-            - Creates a compact figure suitable for publication
-
-        Example:
-            Enable history plotting in config::
-
-                config = {"out": "analysis", "plot_history": True}
-                locator = Locator(config)
-                history = locator.train(genotypes, samples)
-                # Plot is automatically saved as analysis_fitplot.pdf
-        """
-        if self.config.get("plot_history", False):
-            plt.switch_backend("agg")
-            fig = plt.figure(figsize=(4, 1.5), dpi=200)
-            plt.rcParams.update({"font.size": 7})
-            ax1 = fig.add_axes([0, 0, 0.4, 1])
-            ax1.plot(history.history["val_loss"][3:], "-", color="black", lw=0.5)
-            ax1.set_xlabel("Validation Loss")
-            ax2 = fig.add_axes([0.55, 0, 0.4, 1])
-            ax2.plot(history.history["loss"][3:], "-", color="black", lw=0.5)
-            ax2.set_xlabel("Training Loss")
-            fig.savefig(self.config["out"] + "_fitplot.pdf", bbox_inches="tight")
 
     def _repr_html_(self):  # noqa: C901
         """Return HTML representation of Locator instance for Jupyter notebooks.
