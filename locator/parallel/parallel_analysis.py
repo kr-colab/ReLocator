@@ -680,8 +680,16 @@ def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
 
         print(f"Worker processing replicate {rep_idx} on GPU {gpu_id}")
 
-        genotypes = allel.GenotypeArray(data["genotypes_array"])
         locator = _create_worker_locator(data, f"rep{rep_idx}")
+
+        # Use pre-filtered allele counts if available
+        filtered = data.get("filtered_genotypes")
+        if filtered is not None:
+            genotypes = None
+        elif "genotypes_array" in data:
+            genotypes = allel.GenotypeArray(data["genotypes_array"])
+        else:
+            raise ValueError("Worker received neither filtered nor raw genotypes")
 
         # Train with holdout
         start_time = time.time()
@@ -689,6 +697,7 @@ def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
             genotypes=genotypes,
             samples=data["samples"],
             holdout_indices=holdout_indices,
+            filtered_genotypes=filtered,
         )
         train_time = time.time() - start_time
 
@@ -865,11 +874,26 @@ def parallel_holdouts(  # noqa: C901
             rep_holdout_idx = np.random.choice(known_idx, k, replace=False)
         all_holdout_indices.append(rep_holdout_idx)
 
-    # Share data via Ray object store
+    # Pre-filter genotypes once to avoid per-worker copies
+    from locator.data import filter_snps_legacy as _filter_snps
+
+    filtered_genotypes = _filter_snps(
+        genotypes,
+        min_mac=locator.config.get("min_mac", 2),
+        max_snps=locator.config.get("max_SNPs"),
+        impute=locator.config.get("impute_missing", False),
+    )
+
+    if verbose:
+        print(
+            f"Pre-filtered genotypes: {genotypes.shape[0]:,} → "
+            f"{filtered_genotypes.shape[0]:,} SNPs"
+        )
+
+    # Share only filtered array via Ray object store
     data_ref = ray.put(
         {
-            "genotypes_array": genotypes.values,
-            "genotypes_shape": genotypes.shape,
+            "filtered_genotypes": filtered_genotypes,
             "samples": samples,
             "sample_data": sample_data,
             "locs": locs,
@@ -1334,11 +1358,13 @@ def parallel_windows_holdouts(  # noqa: C901
         normalized_locs,
     ) = normalize_locs(locs)
 
-    # Share data via Ray object store
+    # Share data via Ray object store.
+    # NOTE: Windowed analysis requires the full genotype array because each
+    # window slices different SNP indices. Pre-filtering is not possible here
+    # unlike k-fold/holdout dispatchers.
     data_ref = ray.put(
         {
             "genotypes_array": genotypes.values,
-            "genotypes_shape": genotypes.shape,
             "samples": samples,
             "sample_data": sample_data,
             "config": locator.config,
@@ -1497,17 +1523,12 @@ def _create_ray_ensemble_worker(gpu_fraction: float = 1.0):
         """
         _setup_worker_env(gpu_id)
 
-        import allel
         import tensorflow as tf
 
         tf.get_logger().setLevel("ERROR")
 
         print(f"Worker training ensemble fold {fold_idx} on GPU {gpu_id}")
 
-        # Reconstruct GenotypeArray (for consistency check)
-        _ = allel.GenotypeArray(  # noqa: F841
-            data["genotypes_array"]
-        )
         filtered_genotypes = data["filtered_genotypes_array"]
 
         locator = _create_worker_locator(data, f"fold{fold_idx}")
@@ -1661,10 +1682,9 @@ def parallel_train_ensemble(  # noqa: C901
         verbose,
     )
 
-    # Share data via Ray object store
+    # Share only filtered array via Ray object store
     data_ref = ray.put(
         {
-            "genotypes_array": genotypes.values,
             "filtered_genotypes_array": filtered_genotypes,
             "samples": samples,
             "sample_data": sample_data,
