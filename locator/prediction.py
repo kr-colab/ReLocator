@@ -361,13 +361,7 @@ class PredictionMixin:
         self.samples = samples
 
         # Get sample data to identify prediction samples
-        if hasattr(self, "_sample_data_df"):
-            sample_data, locs = self.sort_samples(samples)
-        else:
-            sample_data_path = sample_data_file or self.config.get("sample_data")
-            if not sample_data_path:
-                raise ValueError("sample_data must be provided")
-            sample_data, locs = self.sort_samples(samples, sample_data_path)
+        sample_data, locs = self._resolve_locations(samples, sample_data_file)
 
         # Find samples without coordinates (to predict)
         na_mask = np.isnan(locs[:, 0]) | np.isnan(locs[:, 1])
