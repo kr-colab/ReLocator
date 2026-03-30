@@ -102,62 +102,7 @@ class DataLoaderMixin:
         ------
             ValueError: If VCF file cannot be read
         """
-        return self._load_from_vcf_allel(vcf_path)
-
-    def _load_from_vcf_cyvcf2(self, vcf_path):
-        """Load genotypes using cyvcf2 (htslib-based).
-
-        Alternative to the default scikit-allel loader. Useful when allel
-        is unavailable or for streaming access. Requires cyvcf2.
-        """
-        from cyvcf2 import VCF
-
-        print("reading VCF (cyvcf2)")
-        vcf = VCF(vcf_path)
-        samples = np.array(vcf.samples)
-        n_samples = len(samples)
-
-        chunk_size = 65536
-        gt_chunks = []
-        pos_chunks = []
-        chrom_chunks = []
-
-        gt_buf = np.empty((chunk_size, n_samples, 2), dtype=np.int8)
-        pos_buf = np.empty(chunk_size, dtype=np.int32)
-        chrom_buf = np.empty(chunk_size, dtype=object)
-        idx = 0
-
-        for variant in vcf:
-            gt_buf[idx] = variant.genotype.array()[:, :2]
-            pos_buf[idx] = variant.POS
-            chrom_buf[idx] = variant.CHROM
-            idx += 1
-            if idx == chunk_size:
-                gt_chunks.append(gt_buf.copy())
-                pos_chunks.append(pos_buf.copy())
-                chrom_chunks.append(chrom_buf.copy())
-                idx = 0
-
-        vcf.close()
-
-        if idx > 0:
-            gt_chunks.append(gt_buf[:idx].copy())
-            pos_chunks.append(pos_buf[:idx].copy())
-            chrom_chunks.append(chrom_buf[:idx].copy())
-
-        if not gt_chunks:
-            raise ValueError(f"No variants found in VCF: {vcf_path}")
-
-        genotypes = allel.GenotypeArray(np.concatenate(gt_chunks))
-        self.positions = np.concatenate(pos_chunks)
-        self.chromosomes = np.concatenate(chrom_chunks)
-
-        self._report_variant_metadata()
-        return genotypes, samples
-
-    def _load_from_vcf_allel(self, vcf_path):
-        """Load genotypes using scikit-allel."""
-        print("reading VCF (scikit-allel)")
+        print("reading VCF")
         vcf = allel.read_vcf(vcf_path, fields=["samples", "GT", "POS", "CHROM"])
         if vcf is None:
             raise ValueError(f"Could not read VCF file: {vcf_path}")
