@@ -324,7 +324,7 @@ class TestWindowAnalysis:
         x_cols = [col for col in result.columns if col.startswith("x_")]
         y_cols = [col for col in result.columns if col.startswith("y_")]
 
-        for x_col, y_col in zip(x_cols, y_cols):
+        for x_col, y_col in zip(x_cols, y_cols, strict=True):
             x_preds = result[x_col].values
             y_preds = result[y_col].values
 
