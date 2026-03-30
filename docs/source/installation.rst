@@ -53,6 +53,23 @@ This enables:
 * Ray framework for distributed computing
 * Automatic GPU load balancing
 
+Fast VCF-to-Zarr Conversion
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For large VCF files, we recommend converting to zarr format for fast loading.
+Install ``bio2zarr`` (which includes ``cyvcf2``):
+
+.. code-block:: bash
+
+   pip install locator[fast-vcf]
+
+This provides the ``vcf2zarr`` command for fast, multi-threaded VCF-to-zarr conversion:
+
+.. code-block:: bash
+
+   bcftools index -t genotypes.vcf.gz
+   vcf2zarr convert -p 8 genotypes.vcf.gz genotypes.zarr
+
 All Features
 ~~~~~~~~~~~~
 
@@ -60,7 +77,7 @@ To install Locator with all optional features:
 
 .. code-block:: bash
 
-   pip install locator[dev,docs,ray]
+   pip install locator[dev,docs,ray,fast-vcf]
 
 Installing from Source
 -----------------------

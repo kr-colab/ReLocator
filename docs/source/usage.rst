@@ -33,6 +33,10 @@ Locator supports multiple input formats for genotype data:
    genotypes, samples = locator.load_genotypes(vcf="path/to/genotypes.vcf")
    #
    # 2. From zarr (recommended for large datasets)
+   #    Supports zarr files from both bio2zarr (vcf2zarr) and scikit-allel.
+   #    For large VCFs, convert once with bio2zarr for fast subsequent loads:
+   #      bcftools index -t genotypes.vcf.gz
+   #      vcf2zarr convert -p 8 genotypes.vcf.gz genotypes.zarr
    genotypes, samples = locator.load_genotypes(zarr="path/to/genotypes.zarr")
    #
    # 3. From pandas DataFrame

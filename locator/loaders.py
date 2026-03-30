@@ -34,6 +34,9 @@ class DataLoaderMixin:
     def _load_from_zarr(self, zarr_path):
         """Load genotypes from zarr file.
 
+        Supports both scikit-allel format (calldata/GT, samples) and
+        VCF Zarr / bio2zarr format (call_genotype, sample_id).
+
         Args:
             zarr_path: Path to zarr file containing genotype data
 
@@ -45,13 +48,37 @@ class DataLoaderMixin:
         """
         print("reading zarr")
         callset = zarr.open_group(zarr_path, mode="r")
-        gt = callset["calldata/GT"]
-        genotypes = allel.GenotypeArray(gt[:])
-        samples = callset["samples"][:]
+
+        # Detect format: bio2zarr/VCF Zarr vs scikit-allel
+        if "call_genotype" in callset:
+            gt = callset["call_genotype"]
+            genotypes = allel.GenotypeArray(gt[:])
+            samples = np.array([str(x) for x in callset["sample_id"][:]])
+
+            if "variant_position" in callset:
+                self.positions = np.array(callset["variant_position"][:])
+                print(f"Loaded {len(self.positions)} SNP positions for window analysis")
+            if "variant_contig" in callset and "contig_id" in callset:
+                contig_ids = np.array([str(x) for x in callset["contig_id"][:]])
+                contig_idx = np.array(callset["variant_contig"][:])
+                self.chromosomes = contig_ids[contig_idx]
+                unique_chroms = np.unique(self.chromosomes)
+                print(
+                    f"Found {len(unique_chroms)} chromosomes: {unique_chroms[:5]}..."
+                    if len(unique_chroms) > 5
+                    else f"Found chromosomes: {unique_chroms}"
+                )
+        else:
+            gt = callset["calldata/GT"]
+            genotypes = allel.GenotypeArray(gt[:])
+            samples = callset["samples"][:]
+
         return genotypes, samples
 
     def _load_from_vcf(self, vcf_path):
-        """Load genotypes from VCF file.
+        """Load genotypes from VCF file using cyvcf2 (htslib).
+
+        Falls back to scikit-allel if cyvcf2 is not available.
 
         Args:
             vcf_path: Path to VCF file containing genotype data
@@ -66,14 +93,76 @@ class DataLoaderMixin:
         ------
             ValueError: If VCF file cannot be read
         """
-        print("reading VCF")
-        vcf = allel.read_vcf(vcf_path, fields=["GT", "POS", "CHROM"])
+        return self._load_from_vcf_allel(vcf_path)
+
+    def _load_from_vcf_cyvcf2(self, vcf_path):
+        """Load genotypes using cyvcf2 (fast, htslib-based).
+
+        Uses chunked pre-allocation to avoid per-variant list appends
+        while keeping a single pass through the VCF.
+        """
+        from cyvcf2 import VCF
+
+        print("reading VCF (cyvcf2)")
+        vcf = VCF(vcf_path)
+        samples = np.array(vcf.samples)
+        n_samples = len(samples)
+
+        chunk_size = 65536
+        gt_chunks = []
+        pos_chunks = []
+        chrom_chunks = []
+
+        gt_buf = np.empty((chunk_size, n_samples, 2), dtype=np.int8)
+        pos_buf = np.empty(chunk_size, dtype=np.int32)
+        chrom_buf = np.empty(chunk_size, dtype=object)
+        idx = 0
+
+        for variant in vcf:
+            gt_buf[idx] = variant.genotype.array()[:, :2]
+            pos_buf[idx] = variant.POS
+            chrom_buf[idx] = variant.CHROM
+            idx += 1
+            if idx == chunk_size:
+                gt_chunks.append(gt_buf.copy())
+                pos_chunks.append(pos_buf.copy())
+                chrom_chunks.append(chrom_buf.copy())
+                idx = 0
+
+        vcf.close()
+
+        # Flush remaining
+        if idx > 0:
+            gt_chunks.append(gt_buf[:idx].copy())
+            pos_chunks.append(pos_buf[:idx].copy())
+            chrom_chunks.append(chrom_buf[:idx].copy())
+
+        if not gt_chunks:
+            raise ValueError(f"No variants found in VCF: {vcf_path}")
+
+        genotypes = allel.GenotypeArray(np.concatenate(gt_chunks))
+        self.positions = np.concatenate(pos_chunks)
+        self.chromosomes = np.concatenate(chrom_chunks)
+
+        print(f"Loaded {len(self.positions)} SNP positions for window analysis")
+        unique_chroms = np.unique(self.chromosomes)
+        print(
+            f"Found {len(unique_chroms)} chromosomes: {unique_chroms[:5]}..."
+            if len(unique_chroms) > 5
+            else f"Found chromosomes: {unique_chroms}"
+        )
+
+        return genotypes, samples
+
+    def _load_from_vcf_allel(self, vcf_path):
+        """Load genotypes using scikit-allel (fallback)."""
+        print("reading VCF (scikit-allel)")
+        vcf = allel.read_vcf(vcf_path, fields=["samples", "GT", "POS", "CHROM"])
         if vcf is None:
             raise ValueError(f"Could not read VCF file: {vcf_path}")
         genotypes = allel.GenotypeArray(vcf["calldata/GT"])
         samples = vcf["samples"]
 
-        # Store positions and chromosomes for window analysis
         if "variants/POS" in vcf:
             self.positions = vcf["variants/POS"]
             print(f"Loaded {len(self.positions)} SNP positions for window analysis")
