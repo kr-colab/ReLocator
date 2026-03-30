@@ -15,6 +15,7 @@ authors = [
 
 dependencies = [
     "numpy>=1.26.0",
+    "tensorflow>=2.16",
     "h5py",
     "scikit-allel",
     "scikit-learn",
@@ -175,6 +176,7 @@ ignore = [
     "B904",
     "UP006",
     "UP007",
+    "UP035",
     "UP045",
 ]
 
