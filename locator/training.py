@@ -13,7 +13,7 @@ from .data import IndexSet, make_tf_dataset, normalize_locs
 from .data import filter_snps_legacy as filter_snps
 from .gpu_optimizer import GPUOptimizer
 from .models import create_network, loss_with_range_penalty, rasterize_species_range
-from .utils import weight_samples
+from .sample_weights import weight_samples
 
 
 class TrainingMixin:

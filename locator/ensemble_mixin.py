@@ -7,7 +7,6 @@ import pandas as pd
 from tensorflow import keras
 
 from .data import IndexSet, NormalizationParams, make_tf_dataset, normalize_locs
-from .data import filter_snps_legacy as filter_snps
 from .ensemble_model_manager import EnsembleModelManager
 from .gpu_optimizer import GPUOptimizer
 
@@ -568,15 +567,6 @@ class EnsembleMixin:
                 print(f"Saved ensemble predictions to {filename}")
 
         return result_df
-
-    def _filter_genotypes(self, genotypes):
-        """Filter genotypes using standard Locator filtering."""
-        return filter_snps(
-            genotypes,
-            min_mac=self.config.get("min_mac", 2),
-            max_snps=self.config.get("max_SNPs"),
-            impute=self.config.get("impute_missing", False),
-        )
 
     def _apply_normalization(self, locations, norm_params):
         """Apply normalization to location coordinates using provided parameters."""

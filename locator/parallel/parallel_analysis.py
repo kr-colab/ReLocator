@@ -370,33 +370,7 @@ def parallel_k_fold_holdouts(  # noqa: C901
     """
     _ensure_ray_initialized()
 
-    # Use instance default if na_action not specified
-    if na_action is None:
-        na_action = locator.na_action
-
-    # Get sample status
-    status = locator.get_sample_status(samples)
-
-    # Report status
-    if verbose:
-        print(
-            f"K-fold CV: {status['n_known']} samples with coordinates, "
-            f"{status['n_na']} without"
-        )
-        if status["n_na"] > 0:
-            print(f"NA handling mode: {na_action}")
-            if na_action == "separate":
-                print(
-                    "Note: K-fold CV requires known locations; "
-                    "'separate' behaves like 'exclude'"
-                )
-
-    # Apply NA action
-    if na_action == "fail" and status["n_na"] > 0:
-        raise ValueError(
-            f"Found {status['n_na']} samples without coordinates. "
-            f"Set na_action='separate' or 'exclude' to proceed."
-        )
+    na_action, status = locator._validate_na_action(samples, na_action, "K-fold CV")
 
     sample_data, locs = locator._resolve_locations(samples)
 
@@ -761,33 +735,9 @@ def parallel_holdouts(  # noqa: C901
     """
     _ensure_ray_initialized()
 
-    # Use instance default if na_action not specified
-    if na_action is None:
-        na_action = locator.na_action
-
-    # Get sample status
-    status = locator.get_sample_status(samples)
-
-    # Report status
-    if verbose:
-        print(
-            f"Holdout analysis: {status['n_known']} samples "
-            f"with coordinates, {status['n_na']} without"
-        )
-        if status["n_na"] > 0:
-            print(f"NA handling mode: {na_action}")
-            if na_action == "separate":
-                print(
-                    "Note: Holdout analysis requires known "
-                    "locations; 'separate' behaves like 'exclude'"
-                )
-
-    # Apply NA action
-    if na_action == "fail" and status["n_na"] > 0:
-        raise ValueError(
-            f"Found {status['n_na']} samples without coordinates. "
-            f"Set na_action='separate' or 'exclude' to proceed."
-        )
+    na_action, status = locator._validate_na_action(
+        samples, na_action, "Holdout analysis"
+    )
 
     sample_data, locs = locator._resolve_locations(samples)
 
@@ -1138,55 +1088,13 @@ def parallel_windows_holdouts(  # noqa: C901
     """
     _ensure_ray_initialized()
 
-    # Use instance default if na_action not specified
-    if na_action is None:
-        na_action = locator.na_action
-
     # Store samples and genotypes
     locator.samples = samples
     locator.genotypes = genotypes
 
-    # Get sample status and create NA mask
-    status = locator.get_sample_status(samples)
-    na_mask = None
-    if status["n_na"] > 0:
-        if isinstance(samples, pd.DataFrame):
-            na_mask = samples["x"].isna() | samples["y"].isna()
-        else:
-            if hasattr(locator, "_sample_data_df"):
-                sample_data_df = locator._sample_data_df
-            else:
-                sample_data_path = locator.config.get("sample_data")
-                if sample_data_path:
-                    sample_data_df = pd.read_csv(sample_data_path, sep="\t")
-                else:
-                    raise ValueError("No sample data available")
-            merged = pd.DataFrame({"sampleID": samples})
-            merged = merged.merge(sample_data_df, on="sampleID", how="left")
-            na_mask = merged["x"].isna() | merged["y"].isna()
-        na_mask = na_mask.values
-
-    # Report status
-    if verbose:
-        print(
-            f"Windows holdout analysis: "
-            f"{status['n_known']} samples with coordinates, "
-            f"{status['n_na']} without"
-        )
-        if status["n_na"] > 0:
-            print(f"NA handling mode: {na_action}")
-            if na_action == "separate":
-                print(
-                    "Note: Holdout analysis requires known "
-                    "locations; 'separate' behaves like 'exclude'"
-                )
-
-    # Apply NA action
-    if na_action == "fail" and status["n_na"] > 0:
-        raise ValueError(
-            f"Found {status['n_na']} samples without coordinates. "
-            f"Set na_action='separate' or 'exclude' to proceed."
-        )
+    na_action, status = locator._validate_na_action(
+        samples, na_action, "Windows holdout analysis"
+    )
 
     # Get positions
     if not hasattr(locator, "positions") or locator.positions is None:
@@ -1222,6 +1130,13 @@ def parallel_windows_holdouts(  # noqa: C901
                 "Use VCF, zarr input or genotype DataFrame "
                 "with position-labeled columns."
             )
+
+    sample_data, locs = locator._resolve_locations(samples)
+
+    # Derive NA mask from resolved locations
+    na_mask = np.isnan(locs[:, 0])
+    if not na_mask.any():
+        na_mask = None
 
     # Handle holdout_sample_ids if provided
     if holdout_sample_ids is not None:
@@ -1287,8 +1202,6 @@ def parallel_windows_holdouts(  # noqa: C901
         min_snps_per_window=locator.config.get("min_snps_per_window", 1),
         verbose=verbose,
     )
-
-    sample_data, locs = locator._resolve_locations(samples)
 
     # Pre-calculate KDE bandwidth if needed
     bw_train_mask = np.ones(len(samples), dtype=bool)

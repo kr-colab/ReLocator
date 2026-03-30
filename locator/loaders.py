@@ -1,5 +1,7 @@
 """Data loading functionality for locator"""
 
+import warnings
+
 import allel
 import numpy as np
 import pandas as pd
@@ -238,3 +240,109 @@ class DataLoaderMixin:
                 "No genotype data provided. Either initialize with genotype_data DataFrame "
                 "or provide vcf/zarr/matrix path."
             )
+
+    def sort_samples(self, samples=None, sample_data_file=None, reorder=True):  # noqa: C901
+        """Sort samples and match with location data.
+
+        Matches samples with their location data and ensures consistent ordering
+        between genotype and location data.
+
+        Args:
+            samples (numpy.ndarray): Array of sample IDs from the genotype data
+            sample_data_file (str, optional): Override path to tab-delimited file with
+                columns 'sampleID', 'x', 'y'. If not provided, uses stored sample data.
+            reorder (bool): If True, automatically reorder metadata to match genotype order.
+                If False, raise error on order mismatch (default: True)
+
+        Returns
+        -------
+            tuple: (sample_data DataFrame, locs array of shape (n_samples, 2))
+        """
+        if samples is None:
+            raise ValueError("samples must be provided")
+
+        if hasattr(self, "_sample_data_df"):
+            sample_data = self._sample_data_df.copy()
+        else:
+            sample_data_path = sample_data_file or self.config.get("sample_data")
+            if not sample_data_path:
+                raise ValueError("sample_data must be provided in config or as argument")
+            sample_data = pd.read_csv(sample_data_path, sep="\t")
+
+        if "sampleID" not in sample_data.columns:
+            raise ValueError("sample_data must contain 'sampleID' column")
+
+        sample_data["sampleID"] = sample_data["sampleID"].astype(str)
+        samples_str = [str(s) for s in samples]
+
+        if len(sample_data) != len(samples):
+            if reorder:
+                print(
+                    f"Sample count mismatch: {len(samples)} in genotypes, "
+                    f"{len(sample_data)} in metadata"
+                )
+            else:
+                raise ValueError(
+                    f"Sample count mismatch: genotypes has {len(samples)} samples "
+                    f"but metadata has {len(sample_data)}. "
+                    f"Set reorder=True to handle this automatically."
+                )
+
+        min_samples = min(len(sample_data), len(samples))
+        order_matches = len(sample_data) == len(samples) and all(
+            sample_data["sampleID"].iloc[x] == samples_str[x] for x in range(min_samples)
+        )
+
+        if not order_matches:
+            if not reorder:
+                raise ValueError(
+                    "Sample ordering mismatch. Set reorder=True to "
+                    "automatically reorder metadata to match genotype order."
+                )
+
+            sample_order_df = pd.DataFrame(
+                {"sampleID": samples_str, "geno_order": range(len(samples_str))}
+            )
+            reordered_data = sample_order_df.merge(
+                sample_data, on="sampleID", how="left"
+            )
+
+            missing_in_meta = reordered_data[["x", "y"]].isna().any(axis=1).sum()
+            if missing_in_meta > 0:
+                missing_ids = reordered_data[reordered_data["x"].isna()][
+                    "sampleID"
+                ].tolist()
+                warnings.warn(
+                    f"{missing_in_meta} samples in genotypes have no metadata. "
+                    f"First 10 missing: {missing_ids[:10]}"
+                )
+                if missing_in_meta == len(reordered_data):
+                    raise ValueError(
+                        "No samples from genotypes found in metadata! "
+                        "Check that sample IDs match between files."
+                    )
+
+            samples_set = set(samples_str)
+            extra_in_meta = sample_data[~sample_data["sampleID"].isin(samples_set)]
+            if len(extra_in_meta) > 0:
+                warnings.warn(
+                    f"{len(extra_in_meta)} samples in metadata are not in genotypes. "
+                    f"First 10 extra: {extra_in_meta['sampleID'].tolist()[:10]}"
+                )
+
+            sample_data = reordered_data.sort_values("geno_order").drop(
+                "geno_order", axis=1
+            )
+
+            print("Reordered metadata to match genotype sample order.")
+            print(f"Total samples in genotypes: {len(samples)}")
+            print(f"Samples with coordinates: {len(samples) - missing_in_meta}")
+            if missing_in_meta > 0:
+                print(f"Samples without coordinates (NA): {missing_in_meta}")
+                print(
+                    f"Note: K-fold CV will only use the "
+                    f"{len(samples) - missing_in_meta} samples with known locations"
+                )
+
+        locs = np.array(sample_data[["x", "y"]])
+        return sample_data, locs
