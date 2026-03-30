@@ -171,10 +171,11 @@ def parse_args():
     )
     parser.add_argument("--keep_weights", default=False, action="store_true")
     parser.add_argument(
-        "--verbose",
+        "--no_verbose",
+        dest="verbose",
         default=True,
-        action="store_true",
-        help="Print prediction metrics",
+        action="store_false",
+        help="Suppress prediction metrics",
     )
     parser.add_argument(
         "--disable_gpu",
