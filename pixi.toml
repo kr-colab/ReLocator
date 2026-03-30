@@ -91,7 +91,7 @@ minimal = ["cpu"]
 # --- Tasks -------------------------------------------------------------------
 
 [tasks]
-test = { cmd = "pytest tests/ -v -m 'not slow and not gpu'" }
+test = { cmd = "pytest tests/ -v -m 'not slow and not gpu' -n auto --dist loadfile" }
 test-all = { cmd = "pytest tests/ -v" }
 lint = { cmd = "ruff check locator/ tests/" }
 format = { cmd = "ruff format locator/ tests/" }
