@@ -37,22 +37,10 @@ class EnsembleMixin:
                 - 'fold_indices': Legacy format dict for backward compatibility
                 - 'sample_status': Sample status information
         """
-        # Use instance default if na_action not specified
-        if na_action is None:
-            na_action = self.na_action
-
-        # Get sample data and locations
-        sample_data, locs = self.sort_samples(samples)
-
-        # Get sample status
-        status = self.get_sample_status(samples, sample_data)
-
-        # Apply NA action
-        if na_action == "fail" and status["n_na"] > 0:
-            raise ValueError(
-                f"Found {status['n_na']} samples without coordinates. "
-                f"Set na_action='separate' or 'exclude' to proceed."
-            )
+        na_action, status = self._validate_na_action(
+            samples, na_action, "Ensemble k-fold creation"
+        )
+        sample_data, locs = self._resolve_locations(samples)
 
         # Prepare indices for k-fold splitting
         n_samples = len(samples)
@@ -191,7 +179,7 @@ class EnsembleMixin:
             self.config["augmentation"] = augment_config
 
         # Get locations once
-        _, locs = self.sort_samples(samples)
+        _, locs = self._resolve_locations(samples)
 
         # Train each fold
         for fold_idx in range(k):
