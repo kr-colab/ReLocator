@@ -76,6 +76,7 @@ install via ``pip install locator[fast-vcf]``.
    vcf2zarr convert -p 8 genotypes.vcf.gz genotypes.zarr
 
 Locator supports zarr files from both ``bio2zarr`` and ``scikit-allel``.
+See :doc:`cli` for usage with windowed analysis.
 
 Installing from Source
 -----------------------

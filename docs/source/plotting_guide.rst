@@ -134,8 +134,8 @@ The display includes:
 * Sample weighting information
 * Holdout sample lists
 
-Next Steps
-----------
+See Also
+--------
 
-* See :doc:`api` for complete function documentation
-* Review :doc:`usage` for analysis workflows
+* :doc:`usage` — Python API and analysis workflows
+* :doc:`api` — Complete function documentation

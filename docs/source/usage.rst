@@ -33,10 +33,7 @@ Locator supports multiple input formats for genotype data:
    genotypes, samples = locator.load_genotypes(vcf="path/to/genotypes.vcf")
    #
    # 2. From zarr (recommended for large datasets)
-   #    Supports zarr files from both bio2zarr (vcf2zarr) and scikit-allel.
-   #    For large VCFs, convert once with bio2zarr for fast subsequent loads:
-   #      bcftools index -t genotypes.vcf.gz
-   #      vcf2zarr convert -p 8 genotypes.vcf.gz genotypes.zarr
+   #    See :doc:`cli` for VCF-to-Zarr conversion instructions.
    genotypes, samples = locator.load_genotypes(zarr="path/to/genotypes.zarr")
    #
    # 3. From pandas DataFrame
@@ -82,42 +79,19 @@ Evaluate model performance by holding out samples:
 Ensemble Models
 ---------------
 
-Use k-fold cross-validation to train ensemble models for improved predictions:
+Train ensemble models using k-fold cross-validation for improved predictions
+with uncertainty estimates:
 
 .. code-block:: python
 
-   # Train 5-fold ensemble
-   ensemble_result = locator.train_ensemble(
-       genotypes=genotypes,
-       samples=samples,
-       k=5,  # Number of folds
-       save_fold_models=True,
-       verbose=True,
-   )
-
-   # Get ensemble predictions with uncertainty
+   # Train 5-fold ensemble and predict with uncertainty
+   locator.train_ensemble(genotypes=genotypes, samples=samples, k=5)
    predictions = locator.predict_ensemble(
-       genotypes=genotypes,
-       samples=samples,
-       return_std=True,  # Include prediction uncertainty
+       genotypes=genotypes, samples=samples, return_std=True,
    )
 
-For parallel ensemble training across multiple GPUs:
-
-.. code-block:: python
-
-   from locator.parallel import parallel_train_ensemble
-
-   # Train across 4 GPUs
-   result = parallel_train_ensemble(
-       locator=locator,
-       genotypes=genotypes,
-       samples=samples,
-       k=5,
-       gpu_ids=[0, 1, 2, 3],
-   )
-
-See :doc:`ensemble_guide` for comprehensive ensemble documentation.
+See :doc:`ensemble_guide` for comprehensive ensemble documentation including
+parallel multi-GPU training.
 
 Windowed Analysis
 -----------------
@@ -251,109 +225,17 @@ Enable data augmentation during training:
 Handling Missing Coordinates
 ----------------------------
 
-Locator provides consistent handling of samples without geographic coordinates
-through the ``na_action`` parameter:
-
-.. code-block:: python
-
-   # Configure NA handling behavior
-   config = {
-       "out": "na_handling_example",
-       "na_action": "separate",  # Options: 'separate', 'exclude', 'fail'
-   }
-
-   locator = Locator(config)
-
-Available NA Actions
-~~~~~~~~~~~~~~~~~~~~
-
-**'separate' (default)**
-   Train on samples with known coordinates, predict on samples without
-   coordinates. This is the default behavior that allows you to predict
-   locations for new samples.
-
-**'exclude'**
-   Only use samples with known coordinates. Samples without coordinates are
-   filtered out before training or analysis.
-
-**'fail'**
-   Raise an error if any samples lack coordinates. Use this to ensure all
-   samples have location data.
-
-Checking Data Quality
-~~~~~~~~~~~~~~~~~~~~~
-
-Use the ``check_data()`` method to understand your dataset:
-
-.. code-block:: python
-
-   # Check data before analysis
-   locator.check_data(genotypes, samples, verbose=True)
-
-   # Output example:
-   # ===== Data Summary =====
-   # Total samples: 231
-   # Samples with coordinates: 211
-   # Samples without coordinates: 20
-   # Total SNPs: 1000
-   #
-   # Current NA handling mode: separate
-   # - Will train on samples with known locations
-   # - Can predict on samples without locations
-
-Method-Level Control
-~~~~~~~~~~~~~~~~~~~~
-
-Override the instance-level NA handling for specific methods:
-
-.. code-block:: python
-
-   # Instance configured with 'separate'
-   locator = Locator({"na_action": "separate"})
-
-   # Override for a specific analysis
-   locator.run_bootstraps(
-       genotypes=genotypes,
-       samples=samples,
-       na_action="exclude",  # Only use samples with coordinates
-   )
-
-Important Notes on Holdout Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Holdout-based methods require known coordinates for evaluation:
-
-.. code-block:: python
-
-   # These methods need coordinates to evaluate predictions
-   locator.run_holdouts(genotypes, samples)  # 'separate' behaves like 'exclude'
-   locator.run_k_fold_holdouts(genotypes, samples)  # Only uses samples with coords
-
-   # Non-holdout methods can predict on NA samples with 'separate' mode
-   locator.run_jacknife(genotypes, samples)  # Can predict NA samples
-   locator.run_bootstraps(genotypes, samples)  # Can predict NA samples
+Locator provides three modes for handling samples with missing coordinates:
+``separate`` (default), ``exclude``, and ``fail``. See :doc:`na_handling_guide`
+for full details and per-method behavior.
 
 Multi-GPU Parallel Analysis
 ---------------------------
 
-For large-scale analyses with multiple GPUs, install the ``[ray]`` extra and
-use Locator's parallel implementations (Ray is included in pixi's default
-environment, or install with ``pip install locator[ray]``):
-
-.. code-block:: python
-
-   from locator.parallel import parallel_k_fold_holdouts
-
-   # Run k-fold CV across 4 GPUs
-   predictions = parallel_k_fold_holdouts(
-       locator, genotypes, samples,
-       k=10,
-       gpu_ids=[0, 1, 2, 3],
-       return_df=True,
-   )
-
-See :doc:`parallel_analysis_guide` for comprehensive documentation on
-multi-GPU analysis.
+For large-scale analyses with multiple GPUs, Locator provides Ray-based
+parallel implementations of its analysis methods. See
+:doc:`parallel_analysis_guide` for comprehensive documentation on multi-GPU
+analysis.
 
 Next Steps
 ----------
