@@ -258,12 +258,21 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
 
         print(f"Worker processing fold {fold_idx} on GPU {gpu_id}")
 
-        genotypes = allel.GenotypeArray(data["genotypes_array"])
         locator = _create_worker_locator(data, f"fold{fold_idx}")
 
         # Get fold's IndexSet
         index_set = data["fold_index_sets"][fold_idx]
         holdout_indices = index_set.test
+
+        # Use pre-filtered allele counts if available, avoiding the
+        # expensive per-worker copy of the full genotype array.
+        filtered = data.get("filtered_genotypes")
+        if filtered is not None:
+            genotypes = None
+        elif "genotypes_array" in data:
+            genotypes = allel.GenotypeArray(data["genotypes_array"])
+        else:
+            raise ValueError("Worker received neither filtered nor raw genotypes")
 
         # Train with holdout
         start_time = time.time()
@@ -271,6 +280,7 @@ def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
             genotypes=genotypes,
             samples=data["samples"],
             holdout_indices=holdout_indices,
+            filtered_genotypes=filtered,
         )
         train_time = time.time() - start_time
 
@@ -440,11 +450,29 @@ def parallel_k_fold_holdouts(  # noqa: C901
         verbose,
     )
 
-    # Share data via Ray object store (zero-copy for numpy arrays)
+    # Pre-filter genotypes once so workers don't each copy the full array.
+    # This reduces per-worker memory from O(n_variants * n_samples) to
+    # O(max_SNPs * n_samples).
+    from locator.data import filter_snps_legacy as _filter_snps
+
+    filtered_genotypes = _filter_snps(
+        genotypes,
+        min_mac=locator.config.get("min_mac", 2),
+        max_snps=locator.config.get("max_SNPs"),
+        impute=locator.config.get("impute_missing", False),
+    )
+
+    if verbose:
+        print(
+            f"Pre-filtered genotypes: {genotypes.shape[0]:,} → "
+            f"{filtered_genotypes.shape[0]:,} SNPs"
+        )
+
+    # Share data via Ray object store (zero-copy for numpy arrays).
+    # Only the small filtered array is shared, not the full genotypes.
     data_ref = ray.put(
         {
-            "genotypes_array": genotypes.values,
-            "genotypes_shape": genotypes.shape,
+            "filtered_genotypes": filtered_genotypes,
             "samples": samples,
             "sample_data": sample_data,
             "locs": locs,

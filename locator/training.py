@@ -439,18 +439,24 @@ class TrainingMixin:
 
     def train_holdout(  # noqa: C901
         self,
-        genotypes,
-        samples,
+        genotypes=None,
+        samples=None,
         k=10,
         holdout_indices=None,
+        filtered_genotypes=None,
     ):
         """Train the model while holding out samples with known locations.
 
         Args:
-            genotypes: Array of genotype data
+            genotypes: Array of genotype data. Required unless
+                filtered_genotypes is provided.
             samples: Sample IDs corresponding to genotypes
             k: Number of samples to hold out (ignored if holdout_indices provided)
             holdout_indices: Optional specific indices of samples to hold out
+            filtered_genotypes: Pre-filtered allele count array. If provided,
+                skips internal filter_snps call and avoids loading the full
+                genotype array. Used by parallel dispatch to share one
+                filtered copy across all workers.
 
         Returns
         -------
@@ -485,13 +491,18 @@ class TrainingMixin:
                 )
             holdout_idx = np.random.choice(known_idx, k, replace=False)
 
-        # Filter SNPs once
-        self.filtered_genotypes = filter_snps(
-            genotypes,
-            min_mac=self.config.get("min_mac", 2),
-            max_snps=self.config.get("max_SNPs"),
-            impute=self.config.get("impute_missing", False),
-        )
+        # Filter SNPs (skip if pre-filtered data provided)
+        if filtered_genotypes is not None:
+            self.filtered_genotypes = filtered_genotypes
+        elif genotypes is not None:
+            self.filtered_genotypes = filter_snps(
+                genotypes,
+                min_mac=self.config.get("min_mac", 2),
+                max_snps=self.config.get("max_SNPs"),
+                impute=self.config.get("impute_missing", False),
+            )
+        else:
+            raise ValueError("Either genotypes or filtered_genotypes must be provided")
 
         # Get available samples for training (exclude holdout and NA samples)
         available_indices = np.setdiff1d(known_idx, holdout_idx)
