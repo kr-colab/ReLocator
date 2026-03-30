@@ -187,3 +187,9 @@ Train ensemble models across multiple GPUs:
         samples=samples,
         return_std=True  # Include uncertainty estimates
     )
+
+See Also
+--------
+
+* :doc:`ensemble_guide` — Ensemble training and prediction
+* :doc:`usage` — Standard (non-parallel) analysis methods

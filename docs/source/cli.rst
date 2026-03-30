@@ -70,3 +70,9 @@ Last, a quicker and probably worse estimate of uncertainty can also be generated
 
     mkdir out/jacknife
     locator --vcf data/test_genotypes.vcf.gz --sample_data data/test_sample_data.txt --out out/jacknife/test --jacknife --nboots 20
+
+See Also
+--------
+
+* :doc:`usage` — Python API guide
+* :doc:`parallel_analysis_guide` — Multi-GPU parallel analysis
