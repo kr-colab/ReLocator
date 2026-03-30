@@ -229,19 +229,7 @@ class TrainingMixin:
                 f"Set na_action='separate' or 'exclude' to proceed."
             )
 
-        # Get sorted sample data and locations
-        if hasattr(self, "_sample_data_df"):
-            # Use stored DataFrame
-            sample_data, locs = self.sort_samples(samples)
-        else:
-            # Use file path
-            sample_data_path = sample_data_file or self.config.get("sample_data")
-            if not isinstance(sample_data_path, str):
-                raise ValueError(
-                    "sample_data file path must be provided in config or as argument "
-                    "when not using DataFrame input"
-                )
-            sample_data, locs = self.sort_samples(samples, sample_data_file)
+        sample_data, locs = self._resolve_locations(samples, sample_data_file)
 
         # Apply 'exclude' mode if needed
         if na_action == "exclude" and status["n_na"] > 0:
@@ -256,12 +244,7 @@ class TrainingMixin:
 
         # Filter SNPs if not using pre-processed data
         if train_gen is None:
-            self.filtered_genotypes = filter_snps(
-                genotypes,
-                min_mac=self.config.get("min_mac", 2),
-                max_snps=self.config.get("max_SNPs"),
-                impute=self.config.get("impute_missing", False),
-            )
+            self._filter_genotypes(genotypes)
 
             # Split data using IndexSet approach (no arrays created)
             (
@@ -307,21 +290,12 @@ class TrainingMixin:
             # Store prediction indices
             self.pred_indices = pred
 
-            # Report split sizes if verbose_splits is enabled
-            if self.config.get("verbose_splits", False):
-                print("\nData split summary:")
-                print(
-                    f"  Training samples: {len(train)} ({len(train) / len(samples) * 100:.1f}%)"
-                )
-                print(
-                    f"  Validation samples: {len(test)} ({len(test) / len(samples) * 100:.1f}%)"
-                )
-                if len(pred) > 0:
-                    print(
-                        f"  Prediction samples (no coords): {len(pred)} ({len(pred) / len(samples) * 100:.1f}%)"
-                    )
-                print(f"  Total samples: {len(samples)}")
-                print(f"  Total SNPs: {self.filtered_genotypes.shape[0]}")
+            splits = {"Training": train, "Validation": test}
+            if len(pred) > 0:
+                splits["Prediction"] = pred
+            self._report_split_summary(
+                splits, len(samples), self.filtered_genotypes.shape[0]
+            )
         else:
             # Use pre-processed data (for bootstrapping)
             self.traingen = train_gen
@@ -374,67 +348,8 @@ class TrainingMixin:
             return None
 
         callbacks = self._create_callbacks(boot=boot)
-
-        # Determine batch size using helper method
-        if self.traingen is not None:
-            dataset_size = self.traingen.shape[0]
-        else:
-            # Using efficient pipeline
-            dataset_size = (
-                len(self.index_set.train)
-                if hasattr(self, "index_set") and self.index_set
-                else len(trainlocs)
-            )
-
-        batch_size = self._determine_batch_size(dataset_size)
-
-        # Prepare sample weights if available
-        sample_weights_array = None
-        if self.sample_weights is not None:
-            sample_weights_array = self.sample_weights["sample_weights"]
-
-        # Always use tf.data pipeline
-        # Create training dataset
-        train_dataset = make_tf_dataset(
-            genotypes=self.filtered_genotypes,
-            coordinates=normalized_locs,
-            index_set=self.index_set,
-            split="train",
-            batch_size=batch_size,
-            sample_weights=sample_weights_array,
-            training=True,
-            cache=True,
-            site_order=site_order,  # Pass site_order for bootstrap resampling
-        )
-
-        # Create validation dataset
-        val_dataset = make_tf_dataset(
-            genotypes=self.filtered_genotypes,
-            coordinates=normalized_locs,
-            index_set=self.index_set,
-            split="test",
-            batch_size=batch_size,
-            training=False,
-            cache=True,
-            site_order=site_order,  # Pass site_order for bootstrap resampling
-        )
-
-        # Train the model
-        self.history = self.model.fit(
-            train_dataset,
-            epochs=self.config.get("max_epochs", 5000),
-            verbose=self.config.get("keras_verbose", 1),
-            validation_data=val_dataset,
-            callbacks=callbacks,
-        )
-
-        # Save training history
-        hist_df = pd.DataFrame(self.history.history)
-        hist_df.to_csv(f"{self.config['out']}_history.txt", sep="\t", index=False)
-
-        # Save model metadata including normalization parameters
-        self._save_model_metadata(boot=boot)
-
+        self._build_datasets_and_fit(normalized_locs, callbacks, site_order=site_order)
+        self._save_training_artifacts(boot=boot)
         return self.history
 
     def train_holdout(  # noqa: C901
@@ -465,14 +380,7 @@ class TrainingMixin:
         # Store samples
         self.samples = samples
 
-        # Get sample data and locations
-        if hasattr(self, "_sample_data_df"):
-            _, locs = self.sort_samples(samples)
-        else:
-            sample_data_path = self.config.get("sample_data")
-            if not sample_data_path:
-                raise ValueError("sample_data file path must be provided in config")
-            _, locs = self.sort_samples(samples, sample_data_path)
+        _, locs = self._resolve_locations(samples)
 
         # Get indices of samples with known locations
         known_idx = np.where(~np.isnan(locs[:, 0]))[0]
@@ -491,18 +399,7 @@ class TrainingMixin:
                 )
             holdout_idx = np.random.choice(known_idx, k, replace=False)
 
-        # Filter SNPs (skip if pre-filtered data provided)
-        if filtered_genotypes is not None:
-            self.filtered_genotypes = filtered_genotypes
-        elif genotypes is not None:
-            self.filtered_genotypes = filter_snps(
-                genotypes,
-                min_mac=self.config.get("min_mac", 2),
-                max_snps=self.config.get("max_SNPs"),
-                impute=self.config.get("impute_missing", False),
-            )
-        else:
-            raise ValueError("Either genotypes or filtered_genotypes must be provided")
+        self._filter_genotypes(genotypes, filtered_genotypes)
 
         # Get available samples for training (exclude holdout and NA samples)
         available_indices = np.setdiff1d(known_idx, holdout_idx)
@@ -536,28 +433,17 @@ class TrainingMixin:
             locs, samples, train_indices, test_indices
         )
 
-        # Store holdout data for prediction
-        self.holdout_idx = holdout_idx
-        # Use a view with F-order to avoid copy during transpose
-        self.holdout_gen = np.asarray(
-            self.filtered_genotypes[:, holdout_idx].T, order="C"
-        )
-        self.holdout_locs = normalized_locs[holdout_idx]
+        self._store_holdout_state(holdout_idx, normalized_locs)
 
-        # Report split sizes if verbose_splits is enabled
-        if self.config.get("verbose_splits", False):
-            print("\nHoldout split summary:")
-            print(
-                f"  Training samples: {len(train_indices)} ({len(train_indices) / len(samples) * 100:.1f}%)"
-            )
-            print(
-                f"  Validation samples: {len(test_indices)} ({len(test_indices) / len(samples) * 100:.1f}%)"
-            )
-            print(
-                f"  Holdout samples: {len(holdout_idx)} ({len(holdout_idx) / len(samples) * 100:.1f}%)"
-            )
-            print(f"  Total samples: {len(samples)}")
-            print(f"  Total SNPs: {self.filtered_genotypes.shape[0]}")
+        self._report_split_summary(
+            {
+                "Training": train_indices,
+                "Validation": test_indices,
+                "Holdout": holdout_idx,
+            },
+            len(samples),
+            self.filtered_genotypes.shape[0],
+        )
 
         # Handle sample weights if enabled
         self._calculate_sample_weights(train_indices)
@@ -590,63 +476,8 @@ class TrainingMixin:
         else:
             callbacks = self._create_callbacks()
 
-        # Determine batch size
-        batch_size = self._determine_batch_size(len(train_indices))
-
-        # Always use tf.data pipeline with IndexSet
-        train_dataset = make_tf_dataset(
-            genotypes=self.filtered_genotypes,
-            coordinates=normalized_locs,
-            index_set=self.index_set,
-            split="train",
-            batch_size=batch_size,
-            sample_weights=(
-                self.sample_weights["sample_weights"] if self.sample_weights else None
-            ),
-            training=True,
-            cache=True,
-        )
-
-        validation_dataset = make_tf_dataset(
-            genotypes=self.filtered_genotypes,
-            coordinates=normalized_locs,
-            index_set=self.index_set,
-            split="test",
-            batch_size=batch_size,
-            training=False,
-            cache=True,
-        )
-
-        # Train model
-        self.history = self.model.fit(
-            train_dataset,
-            epochs=self.config.get("max_epochs", 5000),
-            verbose=self.config.get("keras_verbose", 0),
-            validation_data=validation_dataset,
-            callbacks=callbacks,
-        )
-
-        # Check if we should save fold models
-        should_save = self.config.get("save_fold_models", True)
-
-        if should_save:
-            # Save training history
-            hist_df = pd.DataFrame(self.history.history)
-            hist_df.to_csv(f"{self.config['out']}_history.txt", sep="\t", index=False)
-
-            # If we skipped intermediate saves, save the final model now
-            if self.config.get("holdout_no_intermediate_saves", False):
-                filepath = f"{self.config['out']}.weights.h5"
-                self.model.save_weights(filepath)
-                print(f"Saved final model weights to {filepath}")
-
-            # Save model metadata
-            self._save_model_metadata()
-        else:
-            # For k-fold without saving, just print a message
-            if self.config.get("keras_verbose", 0) > 0:
-                print("Skipping model save for fold (save_fold_models=False)")
-
+        self._build_datasets_and_fit(normalized_locs, callbacks, keras_verbose=0)
+        self._save_training_artifacts(save=self.config.get("save_fold_models", True))
         return self.history
 
     def _save_model_metadata(self, boot=0):
@@ -799,14 +630,8 @@ class TrainingMixin:
         self.samples = samples
         self.index_set = index_set
 
-        # Filter window SNPs
         window_genotypes = genotypes[window_snp_indices, :, :]
-        self.filtered_genotypes = filter_snps(
-            window_genotypes,
-            min_mac=self.config.get("min_mac", 2),
-            max_snps=self.config.get("max_SNPs"),
-            impute=self.config.get("impute_missing", False),
-        )
+        self._filter_genotypes(window_genotypes)
 
         # Store filtered data shape
         n_snps_filtered = self.filtered_genotypes.shape[0]
@@ -820,14 +645,9 @@ class TrainingMixin:
         # Create callbacks
         callbacks = self._create_callbacks()
 
-        # Determine batch size
-        batch_size = self._determine_batch_size(len(index_set.train))
-
         # Store necessary data for prediction
         # In window analysis, 'test' split contains the holdout samples
-        self.holdout_idx = index_set.get_split("test")
-        self.holdout_gen = np.transpose(self.filtered_genotypes[:, self.holdout_idx])
-        self.holdout_locs = normalized_locs[self.holdout_idx]
+        self._store_holdout_state(index_set.get_split("test"), normalized_locs)
 
         # For window analysis, we need to split the train indices into train/val
         train_indices = index_set.get_split("train")
@@ -849,39 +669,7 @@ class TrainingMixin:
             na_mask=index_set.na_mask,
         )
 
-        # Always use tf.data pipeline with IndexSet
-        train_dataset = make_tf_dataset(
-            genotypes=self.filtered_genotypes,
-            coordinates=normalized_locs,
-            index_set=self.index_set,
-            split="train",
-            batch_size=batch_size,
-            sample_weights=(
-                self.sample_weights["sample_weights"] if self.sample_weights else None
-            ),
-            training=True,
-            cache=True,
-        )
-
-        validation_dataset = make_tf_dataset(
-            genotypes=self.filtered_genotypes,
-            coordinates=normalized_locs,
-            index_set=self.index_set,
-            split="test",
-            batch_size=batch_size,
-            training=False,
-            cache=True,
-        )
-
-        # Train model (reduced verbosity for window analysis)
-        self.history = self.model.fit(
-            train_dataset,
-            epochs=self.config.get("max_epochs", 5000),
-            verbose=0,  # Quiet for window analysis
-            validation_data=validation_dataset,
-            callbacks=callbacks,
-        )
-
+        self._build_datasets_and_fit(normalized_locs, callbacks, keras_verbose=0)
         return self.history
 
     def _calculate_sample_weights(self, train_indices, train_locs=None):
@@ -942,6 +730,172 @@ class TrainingMixin:
             batch_size = self.config["gpu_batch_size"]
 
         return batch_size
+
+    # ------------------------------------------------------------------
+    # Shared helpers used by train(), train_holdout(), and train_window()
+    # ------------------------------------------------------------------
+
+    def _resolve_locations(self, samples, sample_data_file=None):
+        """Load sample metadata and return locations array.
+
+        Args:
+            samples: Array of sample IDs
+            sample_data_file: Optional path override for sample data file
+
+        Returns
+        -------
+            tuple: (sample_data DataFrame, locs array of shape (n_samples, 2))
+        """
+        if hasattr(self, "_sample_data_df"):
+            return self.sort_samples(samples)
+
+        sample_data_path = sample_data_file or self.config.get("sample_data")
+        if not isinstance(sample_data_path, str):
+            raise ValueError(
+                "sample_data file path must be provided in config or as argument "
+                "when not using DataFrame input"
+            )
+        return self.sort_samples(samples, sample_data_path)
+
+    def _filter_genotypes(self, genotypes, filtered_genotypes=None):
+        """Filter SNPs and store result as self.filtered_genotypes.
+
+        Args:
+            genotypes: Raw GenotypeArray or window slice
+            filtered_genotypes: Pre-filtered allele counts (skips filtering)
+
+        Returns
+        -------
+            np.ndarray: Filtered allele count array
+        """
+        if filtered_genotypes is not None:
+            self.filtered_genotypes = filtered_genotypes
+        elif genotypes is not None:
+            self.filtered_genotypes = filter_snps(
+                genotypes,
+                min_mac=self.config.get("min_mac", 2),
+                max_snps=self.config.get("max_SNPs"),
+                impute=self.config.get("impute_missing", False),
+            )
+        else:
+            raise ValueError("Either genotypes or filtered_genotypes must be provided")
+        return self.filtered_genotypes
+
+    def _store_holdout_state(self, holdout_idx, normalized_locs):
+        """Store holdout data for use by predict_holdout().
+
+        Sets self.holdout_idx, self.holdout_gen, self.holdout_locs.
+
+        Args:
+            holdout_idx: Array of held-out sample indices
+            normalized_locs: Full normalized location array
+        """
+        self.holdout_idx = holdout_idx
+        self.holdout_gen = np.asarray(
+            self.filtered_genotypes[:, holdout_idx].T, order="C"
+        )
+        self.holdout_locs = normalized_locs[holdout_idx]
+
+    def _build_datasets_and_fit(
+        self,
+        normalized_locs,
+        callbacks,
+        site_order=None,
+        keras_verbose=None,
+    ):
+        """Build tf.data pipelines and train the model.
+
+        Requires self.filtered_genotypes, self.index_set, self.model,
+        and self.sample_weights to be set before calling.
+
+        Args:
+            normalized_locs: Full normalized location array
+            callbacks: List of Keras callbacks
+            site_order: Optional SNP reordering for bootstrap
+            keras_verbose: Verbosity for model.fit (default: from config)
+
+        Returns
+        -------
+            keras.callbacks.History
+        """
+        batch_size = self._determine_batch_size(len(self.index_set.train))
+
+        if keras_verbose is None:
+            keras_verbose = self.config.get("keras_verbose", 1)
+
+        train_dataset = make_tf_dataset(
+            genotypes=self.filtered_genotypes,
+            coordinates=normalized_locs,
+            index_set=self.index_set,
+            split="train",
+            batch_size=batch_size,
+            sample_weights=(
+                self.sample_weights["sample_weights"] if self.sample_weights else None
+            ),
+            training=True,
+            cache=True,
+            site_order=site_order,
+        )
+
+        val_dataset = make_tf_dataset(
+            genotypes=self.filtered_genotypes,
+            coordinates=normalized_locs,
+            index_set=self.index_set,
+            split="test",
+            batch_size=batch_size,
+            training=False,
+            cache=True,
+            site_order=site_order,
+        )
+
+        history = self.model.fit(
+            train_dataset,
+            epochs=self.config.get("max_epochs", 5000),
+            validation_data=val_dataset,
+            callbacks=callbacks,
+            verbose=keras_verbose,
+        )
+        self.history = history
+        return history
+
+    def _save_training_artifacts(self, boot=0, save=True):
+        """Save training history and model metadata to disk.
+
+        Args:
+            boot: Bootstrap replicate number
+            save: Whether to actually save (False skips)
+        """
+        if not save or not hasattr(self, "history"):
+            return
+
+        hist_df = pd.DataFrame(self.history.history)
+        hist_df.to_csv(
+            f"{self.config['out']}_boot{boot}_history.txt"
+            if self.config.get("bootstrap", False)
+            else f"{self.config['out']}_history.txt",
+            index=False,
+        )
+        self._save_model_metadata(boot=boot)
+
+    def _report_split_summary(self, split_dict, n_total, n_snps):
+        """Print data split summary if verbose_splits is enabled.
+
+        Args:
+            split_dict: Dict mapping label to index array,
+                e.g. {"Training": train_idx, "Validation": val_idx}
+            n_total: Total number of samples
+            n_snps: Number of SNPs after filtering
+        """
+        if not self.config.get("verbose_splits", False):
+            return
+
+        print("\nSplit summary:")
+        for label, indices in split_dict.items():
+            n = len(indices)
+            pct = n / n_total * 100
+            print(f"  {label} samples: {n} ({pct:.1f}%)")
+        print(f"  Total samples: {n_total}")
+        print(f"  Total SNPs: {n_snps}")
 
     def _normalize_and_store_locations(self, locs, samples, train_indices, test_indices):
         """Normalize locations based on training data and store for each split.
