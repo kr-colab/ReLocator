@@ -9,53 +9,24 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
     - uses: actions/checkout@v6
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v6
+    - uses: prefix-dev/setup-pixi@v0.8.1
       with:
-        python-version: ${{ matrix.python-version }}
+        environments: test
 
-    - name: Cache pip packages
-      uses: actions/cache@v5
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/pyproject.toml') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-${{ matrix.python-version }}-
-          ${{ runner.os }}-pip-
-
-    - name: Install system dependencies
+    - name: Show environment info
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libproj-dev proj-data proj-bin libgeos-dev
+        pixi run -e test python -c "import tensorflow as tf; print(f'TensorFlow {tf.__version__}')"
 
-    - name: Install package and dependencies
-      env:
-        CUDA_VISIBLE_DEVICES: "-1"
-      run: |
-        python -m pip install --upgrade pip
-        pip install wheel
-        pip install -e ".[dev]"
-
-    - name: Show installed packages
-      run: |
-        pip list
-        python -c "import tensorflow as tf; print(f'TensorFlow version: {tf.__version__}')"
-        python -c "import tensorflow as tf; print(f'GPU available: {tf.config.list_physical_devices(\"GPU\")}')"
-
-    - name: Run tests with pytest
+    - name: Run tests
       env:
         CUDA_VISIBLE_DEVICES: "-1"
         TF_CPP_MIN_LOG_LEVEL: "2"
       run: |
-        pytest -v -n auto --cov=locator --cov-report=xml --cov-report=term-missing
+        pixi run -e test pytest tests/ -v -n auto --cov=locator --cov-report=xml --cov-report=term-missing
 
     - name: Upload coverage reports
       uses: codecov/codecov-action@v6
@@ -72,20 +43,12 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    - name: Set up Python
-      uses: actions/setup-python@v6
+    - uses: prefix-dev/setup-pixi@v0.8.1
       with:
-        python-version: "3.11"
+        environments: test
 
-    - name: Install Ruff
-      run: |
-        python -m pip install --upgrade pip
-        pip install ruff==0.14.9
+    - name: Check linting
+      run: pixi run -e test ruff check locator/ tests/ scripts/ example/
 
-    - name: Check linting with Ruff
-      run: |
-        ruff check locator/ tests/ scripts/ example/
-
-    - name: Check formatting with Ruff
-      run: |
-        ruff format --check locator/ tests/ scripts/ example/
+    - name: Check formatting
+      run: pixi run -e test ruff format --check locator/ tests/ scripts/ example/
