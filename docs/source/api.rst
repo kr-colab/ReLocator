@@ -126,10 +126,6 @@ GPU Optimizer Module
 .. autoclass:: GPUOptimizer
    :members:
 
-.. autoclass:: GradientAccumulator
-   :members:
-
-.. autofunction:: create_optimized_training_config
 
 Internal Modules (Implementation Details)
 -----------------------------------------
