@@ -54,7 +54,7 @@ class TestVerbosityControl:
         assert "Split summary:" in captured.out
         assert "Training samples:" in captured.out
         assert "Validation samples:" in captured.out
-        assert "Prediction samples (no coords):" in captured.out
+        assert "Prediction samples:" in captured.out
         assert "Total samples:" in captured.out
         assert "Total SNPs:" in captured.out
 

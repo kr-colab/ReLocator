@@ -292,7 +292,7 @@ class TrainingMixin:
 
             splits = {"Training": train, "Validation": test}
             if len(pred) > 0:
-                splits["Prediction (no coords)"] = pred
+                splits["Prediction"] = pred
             self._report_split_summary(
                 splits, len(samples), self.filtered_genotypes.shape[0]
             )
