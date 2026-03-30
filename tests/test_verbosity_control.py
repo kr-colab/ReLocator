@@ -51,7 +51,7 @@ class TestVerbosityControl:
         captured = capsys.readouterr()
 
         # Check for expected output
-        assert "Data split summary:" in captured.out
+        assert "Split summary:" in captured.out
         assert "Training samples:" in captured.out
         assert "Validation samples:" in captured.out
         assert "Prediction samples (no coords):" in captured.out
@@ -84,7 +84,7 @@ class TestVerbosityControl:
         captured = capsys.readouterr()
 
         # Check for expected output
-        assert "Holdout split summary:" in captured.out
+        assert "Split summary:" in captured.out
         assert "Training samples:" in captured.out
         assert "Validation samples:" in captured.out
         assert "Holdout samples:" in captured.out
@@ -111,7 +111,7 @@ class TestVerbosityControl:
         captured = capsys.readouterr()
 
         # Should NOT contain split summary
-        assert "Data split summary:" not in captured.out
+        assert "Split summary:" not in captured.out
         assert (
             "Training samples:" not in captured.out or "Training data:" in captured.out
         )  # Allow for other training messages
@@ -201,7 +201,7 @@ class TestVerbosityControl:
         captured = capsys.readouterr()
 
         # Should see holdout split info
-        assert "Holdout split summary:" in captured.out
+        assert "Split summary:" in captured.out
         assert "Holdout samples: 5" in captured.out
 
         # With fixed batch size and CPU, no batch optimization messages
