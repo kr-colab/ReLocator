@@ -66,7 +66,9 @@ class TestParallelEnsemble:
             locator = Locator(config)
 
             # Mock Ray to avoid actual parallel execution in tests
-            with patch("locator.parallel.parallel_analysis.ray") as mock_ray:
+            with patch("locator.parallel.ensemble.ray") as mock_ray, patch(
+                "locator.parallel._helpers.ray", mock_ray
+            ):
                 # Mock Ray initialization check
                 mock_ray.is_initialized.return_value = False
                 mock_ray.init.return_value = None
@@ -108,7 +110,7 @@ class TestParallelEnsemble:
 
                 # Mock the worker creation
                 with patch(
-                    "locator.parallel.parallel_analysis._create_ray_ensemble_worker"
+                    "locator.parallel.ensemble._create_ray_ensemble_worker"
                 ) as mock_worker:
                     mock_worker.return_value.remote.return_value = mock_future
 
@@ -166,7 +168,9 @@ class TestParallelEnsemble:
             # For parallel, we'll mock to return similar structure
             locator_par = Locator(config.copy())
 
-            with patch("locator.parallel.parallel_analysis.ray") as mock_ray:
+            with patch("locator.parallel.ensemble.ray") as mock_ray, patch(
+                "locator.parallel._helpers.ray", mock_ray
+            ):
                 mock_ray.is_initialized.return_value = False
 
                 # Use sequential results to create parallel mock results
@@ -203,7 +207,7 @@ class TestParallelEnsemble:
                 from locator.parallel import parallel_train_ensemble
 
                 with patch(
-                    "locator.parallel.parallel_analysis._create_ray_ensemble_worker"
+                    "locator.parallel.ensemble._create_ray_ensemble_worker"
                 ) as mock_worker:
                     mock_future = MagicMock()
                     mock_worker.return_value.remote.return_value = mock_future
@@ -243,7 +247,9 @@ class TestParallelEnsemble:
         locator.na_action = "separate"
 
         # Mock Ray
-        with patch("locator.parallel.parallel_analysis.ray") as mock_ray:
+        with patch("locator.parallel.ensemble.ray") as mock_ray, patch(
+            "locator.parallel._helpers.ray", mock_ray
+        ):
             mock_ray.is_initialized.return_value = False
 
             # Create minimal mock results
@@ -276,7 +282,7 @@ class TestParallelEnsemble:
             from locator.parallel import parallel_train_ensemble
 
             with patch(
-                "locator.parallel.parallel_analysis._create_ray_ensemble_worker"
+                "locator.parallel.ensemble._create_ray_ensemble_worker"
             ) as mock_worker:
                 mock_future = MagicMock()
                 mock_worker.return_value.remote.return_value = mock_future
@@ -320,7 +326,9 @@ class TestParallelEnsemble:
             mock_future = MagicMock()
             return mock_future
 
-        with patch("locator.parallel.parallel_analysis.ray") as mock_ray:
+        with patch("locator.parallel.ensemble.ray") as mock_ray, patch(
+            "locator.parallel._helpers.ray", mock_ray
+        ):
             mock_ray.is_initialized.return_value = False
 
             # Create mock results
@@ -353,7 +361,7 @@ class TestParallelEnsemble:
             from locator.parallel import parallel_train_ensemble
 
             with patch(
-                "locator.parallel.parallel_analysis._create_ray_ensemble_worker"
+                "locator.parallel.ensemble._create_ray_ensemble_worker"
             ) as mock_worker:
                 mock_worker.return_value.remote.side_effect = track_gpu_assignment
 
@@ -398,7 +406,9 @@ class TestParallelEnsemble:
             locator = Locator(config)
 
             # Mock Ray and model creation
-            with patch("locator.parallel.parallel_analysis.ray") as mock_ray:
+            with patch("locator.parallel.ensemble.ray") as mock_ray, patch(
+                "locator.parallel._helpers.ray", mock_ray
+            ):
                 mock_ray.is_initialized.return_value = False
 
                 # Create mock results
@@ -431,7 +441,7 @@ class TestParallelEnsemble:
                 from locator.parallel import parallel_train_ensemble
 
                 with patch(
-                    "locator.parallel.parallel_analysis._create_ray_ensemble_worker"
+                    "locator.parallel.ensemble._create_ray_ensemble_worker"
                 ) as mock_worker:
                     mock_future = MagicMock()
                     mock_worker.return_value.remote.return_value = mock_future
@@ -443,7 +453,7 @@ class TestParallelEnsemble:
 
                         # Mock os.path.exists so fake weight files pass the check
                         with patch(
-                            "locator.parallel.parallel_analysis.os.path.exists",
+                            "locator.parallel.ensemble.os.path.exists",
                             return_value=True,
                         ):
                             # Mock EnsembleModelManager
