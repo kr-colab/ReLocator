@@ -92,39 +92,6 @@ def _create_worker_locator(data, suffix):
     return locator
 
 
-def _prefilter_genotypes(genotypes, config, verbose=True):
-    """Filter genotypes once in the dispatcher so workers share a small array.
-
-    Parameters
-    ----------
-    genotypes : allel.GenotypeArray
-        Full genotype array.
-    config : dict
-        Locator config dict (needs min_mac, max_SNPs, impute_missing).
-    verbose : bool
-        Print filtering summary.
-
-    Returns
-    -------
-    np.ndarray
-        Filtered allele count array (n_snps_filtered, n_samples).
-    """
-    from locator.data import filter_snps_legacy
-
-    filtered = filter_snps_legacy(
-        genotypes,
-        min_mac=config.get("min_mac", 2),
-        max_snps=config.get("max_SNPs"),
-        impute=config.get("impute_missing", False),
-    )
-    if verbose:
-        print(
-            f"Pre-filtered genotypes: {genotypes.shape[0]:,} → "
-            f"{filtered.shape[0]:,} SNPs"
-        )
-    return filtered
-
-
 def _ensure_ray_initialized():
     """Initialize Ray if not already running."""
     if not ray.is_initialized():
@@ -431,15 +398,7 @@ def parallel_k_fold_holdouts(  # noqa: C901
             f"Set na_action='separate' or 'exclude' to proceed."
         )
 
-    # Get sample data and locations
-    # CRITICAL: Use the same method as non-parallel version
-    if hasattr(locator, "_sample_data_df"):
-        sample_data, locs = locator.sort_samples(samples)
-    else:
-        sample_data_path = locator.config.get("sample_data")
-        if not sample_data_path:
-            raise ValueError("sample_data file path must be provided in config")
-        sample_data, locs = locator.sort_samples(samples, sample_data_path)
+    sample_data, locs = locator._resolve_locations(samples)
 
     # Create NA mask
     na_mask = np.isnan(locs[:, 0])
@@ -484,9 +443,13 @@ def parallel_k_fold_holdouts(  # noqa: C901
     )
 
     # Pre-filter once so workers share a small array instead of the full genotypes
-    filtered_genotypes = _prefilter_genotypes(genotypes, locator.config, verbose)
+    filtered_genotypes = locator._filter_genotypes(genotypes)
+    if verbose:
+        print(
+            f"Pre-filtered genotypes: {genotypes.shape[0]:,} → "
+            f"{filtered_genotypes.shape[0]:,} SNPs"
+        )
 
-    # Share data via Ray object store.
     data_ref = ray.put(
         {
             "filtered_genotypes": filtered_genotypes,
@@ -826,16 +789,9 @@ def parallel_holdouts(  # noqa: C901
             f"Set na_action='separate' or 'exclude' to proceed."
         )
 
-    # Get sample data and locations
-    if hasattr(locator, "_sample_data_df"):
-        sample_data, locs = locator.sort_samples(samples)
-    else:
-        sample_data_path = locator.config.get("sample_data")
-        if not sample_data_path:
-            raise ValueError("sample_data file path must be provided in config")
-        sample_data, locs = locator.sort_samples(samples, sample_data_path)
+    sample_data, locs = locator._resolve_locations(samples)
 
-    # Get indices of samples with known locations (optimized)
+    # Get indices of samples with known locations
     known_mask = ~np.isnan(locs[:, 0])
     known_idx = np.where(known_mask)[0]
 
@@ -892,9 +848,13 @@ def parallel_holdouts(  # noqa: C901
         all_holdout_indices.append(rep_holdout_idx)
 
     # Pre-filter once so workers share a small array instead of the full genotypes
-    filtered_genotypes = _prefilter_genotypes(genotypes, locator.config, verbose)
+    filtered_genotypes = locator._filter_genotypes(genotypes)
+    if verbose:
+        print(
+            f"Pre-filtered genotypes: {genotypes.shape[0]:,} → "
+            f"{filtered_genotypes.shape[0]:,} SNPs"
+        )
 
-    # Share data via Ray object store
     data_ref = ray.put(
         {
             "filtered_genotypes": filtered_genotypes,
@@ -1328,15 +1288,7 @@ def parallel_windows_holdouts(  # noqa: C901
         verbose=verbose,
     )
 
-    # Get sample data and locations (single call, used for both
-    # bandwidth calculation and location normalization)
-    if hasattr(locator, "_sample_data_df"):
-        sample_data, locs = locator.sort_samples(samples)
-    else:
-        sample_data_path = locator.config.get("sample_data")
-        if not sample_data_path:
-            raise ValueError("sample_data file path must be provided in config")
-        sample_data, locs = locator.sort_samples(samples, sample_data_path)
+    sample_data, locs = locator._resolve_locations(samples)
 
     # Pre-calculate KDE bandwidth if needed
     bw_train_mask = np.ones(len(samples), dtype=bool)
@@ -1659,8 +1611,7 @@ def parallel_train_ensemble(  # noqa: C901
     # Filter SNPs once before training
     filtered_genotypes = locator._filter_genotypes(genotypes)
 
-    # Get locations once
-    _, locs = locator.sort_samples(samples)
+    _, locs = locator._resolve_locations(samples)
 
     # Configure augmentation if requested
     augment_config = None
