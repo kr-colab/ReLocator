@@ -58,7 +58,7 @@ jobs:
         pytest -v -n auto --cov=locator --cov-report=xml --cov-report=term-missing
 
     - name: Upload coverage reports
-      uses: codecov/codecov-action@v5
+      uses: codecov/codecov-action@v6
       with:
         file: ./coverage.xml
         flags: unittests
