@@ -313,10 +313,10 @@ class TestParallelEnsemble:
         # Track GPU assignments
         gpu_assignments = []
 
-        def track_gpu_assignment(fold_idx, gpu_id, data_file):
+        def track_gpu_assignment(fold_idx, gpu_id, data):
             gpu_assignments.append((fold_idx, gpu_id))
-            # data_file parameter is required by interface but not used here
-            _ = data_file
+            # data parameter is required by interface but not used here
+            _ = data
             mock_future = MagicMock()
             return mock_future
 

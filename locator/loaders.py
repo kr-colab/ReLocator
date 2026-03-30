@@ -18,10 +18,8 @@ def _counts_to_genotype_array(gmat):
     -------
         allel.GenotypeArray of shape (n_snps, n_samples, 2)
     """
-    # Build haplotype arrays: h1 = min(count, 1), h2 = max(count - 1, 0)
     h1 = np.minimum(gmat, 1).astype(np.int8)
     h2 = np.clip(gmat - 1, 0, 1).astype(np.int8)
-    # Interleave h1 and h2 rows: [h1_sample0, h2_sample0, h1_sample1, h2_sample1, ...]
     hmat = np.empty((gmat.shape[0] * 2, gmat.shape[1]), dtype=np.int8)
     hmat[0::2] = h1
     hmat[1::2] = h2
@@ -31,8 +29,22 @@ def _counts_to_genotype_array(gmat):
 class DataLoaderMixin:
     """Mixin class providing data loading functionality for Locator."""
 
+    def _report_variant_metadata(self):
+        """Print summary of loaded positions and chromosomes."""
+        if self.positions is not None:
+            print(f"Loaded {len(self.positions)} SNP positions for window analysis")
+        if self.chromosomes is not None:
+            unique_chroms = np.unique(self.chromosomes)
+            if len(unique_chroms) > 5:
+                print(f"Found {len(unique_chroms)} chromosomes: {unique_chroms[:5]}...")
+            else:
+                print(f"Found chromosomes: {unique_chroms}")
+
     def _load_from_zarr(self, zarr_path):
         """Load genotypes from zarr file.
+
+        Supports both scikit-allel format (calldata/GT, samples) and
+        VCF Zarr / bio2zarr format (call_genotype, sample_id).
 
         Args:
             zarr_path: Path to zarr file containing genotype data
@@ -45,9 +57,33 @@ class DataLoaderMixin:
         """
         print("reading zarr")
         callset = zarr.open_group(zarr_path, mode="r")
-        gt = callset["calldata/GT"]
-        genotypes = allel.GenotypeArray(gt[:])
-        samples = callset["samples"][:]
+
+        if "call_genotype" in callset:
+            # bio2zarr / VCF Zarr format
+            genotypes = allel.GenotypeArray(callset["call_genotype"][:])
+            samples = np.array([str(x) for x in callset["sample_id"][:]])
+            if "variant_position" in callset:
+                self.positions = np.array(callset["variant_position"][:])
+            if "variant_contig" in callset and "contig_id" in callset:
+                contig_ids = np.array([str(x) for x in callset["contig_id"][:]])
+                contig_idx = np.array(callset["variant_contig"][:])
+                self.chromosomes = contig_ids[contig_idx]
+        elif "calldata/GT" in callset:
+            # scikit-allel format
+            genotypes = allel.GenotypeArray(callset["calldata/GT"][:])
+            samples = callset["samples"][:]
+            if "variants/POS" in callset:
+                self.positions = callset["variants/POS"][:]
+            if "variants/CHROM" in callset:
+                self.chromosomes = callset["variants/CHROM"][:]
+        else:
+            raise ValueError(
+                f"Unrecognized zarr format in {zarr_path}. "
+                f"Expected 'call_genotype' (bio2zarr) or 'calldata/GT' "
+                f"(scikit-allel)."
+            )
+
+        self._report_variant_metadata()
         return genotypes, samples
 
     def _load_from_vcf(self, vcf_path):
@@ -67,26 +103,18 @@ class DataLoaderMixin:
             ValueError: If VCF file cannot be read
         """
         print("reading VCF")
-        vcf = allel.read_vcf(vcf_path, fields=["GT", "POS", "CHROM"])
+        vcf = allel.read_vcf(vcf_path, fields=["samples", "GT", "POS", "CHROM"])
         if vcf is None:
             raise ValueError(f"Could not read VCF file: {vcf_path}")
         genotypes = allel.GenotypeArray(vcf["calldata/GT"])
         samples = vcf["samples"]
 
-        # Store positions and chromosomes for window analysis
         if "variants/POS" in vcf:
             self.positions = vcf["variants/POS"]
-            print(f"Loaded {len(self.positions)} SNP positions for window analysis")
-
         if "variants/CHROM" in vcf:
             self.chromosomes = vcf["variants/CHROM"]
-            unique_chroms = np.unique(self.chromosomes)
-            print(
-                f"Found {len(unique_chroms)} chromosomes: {unique_chroms[:5]}..."
-                if len(unique_chroms) > 5
-                else f"Found chromosomes: {unique_chroms}"
-            )
 
+        self._report_variant_metadata()
         return genotypes, samples
 
     def _load_from_matrix(self, matrix_path):
@@ -120,7 +148,7 @@ class DataLoaderMixin:
         This method can load genotype data from:
         1. A stored DataFrame provided during initialization
         2. A VCF file
-        3. A zarr file
+        3. A zarr file (scikit-allel or bio2zarr format)
         4. A tab-delimited matrix file
 
         For windowed analysis, SNP positions must be available either from:
@@ -174,9 +202,7 @@ class DataLoaderMixin:
         if hasattr(self, "_genotype_df"):
             print("using stored genotype DataFrame")
             geno_df = self._genotype_df
-            # Convert samples to Python's native str type
             samples = np.array([str(x) for x in geno_df.index], dtype=object)
-            # Store positions for windowed analysis if not already set
             if self.positions is None:
                 try:
                     self.positions = geno_df.columns.astype(float).values
@@ -185,32 +211,25 @@ class DataLoaderMixin:
                         "Column names must be convertible to integers (SNP positions)"
                     )
 
-            # Convert DataFrame values to genotype array format
-            # Shape needs to be (n_sites, n_samples, 2) for compatibility
             genotypes = np.zeros((geno_df.shape[1], geno_df.shape[0], 2), dtype=int)
 
-            # Convert each genotype count to allele counts
-            # e.g., 0 -> [0,0], 1 -> [1,0], 2 -> [1,1]
             for i, count in enumerate([0, 1, 2]):
                 mask = count == geno_df.values.T
                 if count == 0:
-                    continue  # already zeros
+                    continue
                 elif count == 1:
                     genotypes[mask, 0] = 1
-                else:  # count == 2
+                else:
                     genotypes[mask] = 1
 
             return allel.GenotypeArray(genotypes), samples
 
-        # Load from zarr
         elif zarr is not None:
             return self._load_from_zarr(zarr)
 
-        # Load from VCF
         elif vcf is not None:
             return self._load_from_vcf(vcf)
 
-        # Load from matrix
         elif matrix is not None:
             return self._load_from_matrix(matrix)
 

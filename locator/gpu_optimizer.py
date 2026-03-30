@@ -147,6 +147,7 @@ class GPUOptimizer:
         tf.keras.backend.clear_session()
 
         # Round to nearest power of 2 for efficiency
+        optimal_batch_size = max(optimal_batch_size, 1)
         optimal_batch_size = 2 ** int(np.log2(optimal_batch_size))
 
         # Final check against dataset size

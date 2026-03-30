@@ -23,7 +23,7 @@ setup(
         "scipy",
         "tqdm",
         "pandas",
-        "zarr<3.0.0",
+        "zarr",
         "seaborn",
         "plotly",
         # geospatial
@@ -55,6 +55,9 @@ setup(
         "ray": [
             "ray[train]>=2.9.0",  # Ray Train for distributed training
             "ray[data]>=2.9.0",  # Ray Data for data processing
+        ],
+        "fast-vcf": [
+            "bio2zarr[vcf]",  # Fast VCF-to-Zarr conversion (includes cyvcf2)
         ],
     },
     entry_points={

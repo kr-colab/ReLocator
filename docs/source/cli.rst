@@ -26,13 +26,22 @@ Uncertainty and Windowed Analysis
 
 Generating multiple predictions by fitting separate models to windows across the genome allows estimates of uncertainty and intragenomic variation for an individual-level prediction. Using the ``--windows`` option will generate separate predictions for nonoverlapping windows of size ``--window_size`` (default 500,000bp).
 
-This option requires zarr input for fast chunked array access. We provide a wrapper function for scikit-allel's ``vcf_to_zarr()`` function in a script that is installed with the package called ``vcf_to_zarr``.
-
-Convert the test data to zarr format and run a windowed analysis with:
+This option requires zarr input for fast chunked array access. For large VCFs, we recommend converting to zarr format first using ``bio2zarr`` (installed via ``pip install locator[fast-vcf]``):
 
 .. code-block:: bash
 
+    # Recommended: bio2zarr (fast, multi-threaded, uses htslib)
+    # VCFs must be indexed first
+    bcftools index -t data/test_genotypes.vcf.gz
+    vcf2zarr convert -p 8 data/test_genotypes.vcf.gz data/test_genotypes.zarr
+
+    # Alternative: scikit-allel wrapper (slower, no additional dependencies)
     vcf_to_zarr --vcf data/test_genotypes.vcf.gz --zarr data/test_genotypes.zarr
+
+Locator supports zarr files produced by either tool. Once converted, run a windowed analysis with:
+
+.. code-block:: bash
+
     mkdir out/test_windows/
     locator --zarr data/test_genotypes.zarr --sample_data data/test_sample_data.txt --out out/test_windows/ --windows --window_size 250000
 
