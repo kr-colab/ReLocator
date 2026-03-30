@@ -113,9 +113,9 @@ Data Classes
 .. autoclass:: NormalizationParams
    :members:
 
-Utils Module
-------------
-.. module:: locator.utils
+Sample Weights Module
+---------------------
+.. module:: locator.sample_weights
 
 .. autofunction:: weight_samples
 
