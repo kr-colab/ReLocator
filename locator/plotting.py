@@ -453,9 +453,11 @@ def plot_error_summary(  # noqa: C901
     # Calculate errors
     if use_geodesic:
         merged["error"] = merged.apply(
-            lambda row: geodesic(
-                (row["y_true"], row["x_true"]), (row["y_pred"], row["x_pred"])
-            ).kilometers,
+            lambda row: (
+                geodesic(
+                    (row["y_true"], row["x_true"]), (row["y_pred"], row["x_pred"])
+                ).kilometers
+            ),
             axis=1,
         )
         error_units = "km"
@@ -689,9 +691,11 @@ def plot_interactive_error_map(
     # Calculate errors
     if use_geodesic:
         merged["error"] = merged.apply(
-            lambda row: geodesic(
-                (row["y_true"], row["x_true"]), (row["y_pred"], row["x_pred"])
-            ).kilometers,
+            lambda row: (
+                geodesic(
+                    (row["y_true"], row["x_true"]), (row["y_pred"], row["x_pred"])
+                ).kilometers
+            ),
             axis=1,
         )
         error_units = "km"
@@ -777,10 +781,12 @@ def plot_interactive_error_map(
 
     # Add scatter plot of true locations colored by error
     hover_text = merged.apply(
-        lambda row: f"Sample: {row['sampleID']}<br>"
-        f"Error: {row['error']:.2f} {error_units}<br>"
-        f"True: ({row['x_true']:.2f}, {row['y_true']:.2f})<br>"
-        f"Predicted: ({row['x_pred']:.2f}, {row['y_pred']:.2f})",
+        lambda row: (
+            f"Sample: {row['sampleID']}<br>"
+            f"Error: {row['error']:.2f} {error_units}<br>"
+            f"True: ({row['x_true']:.2f}, {row['y_true']:.2f})<br>"
+            f"Predicted: ({row['x_pred']:.2f}, {row['y_pred']:.2f})"
+        ),
         axis=1,
     )
 

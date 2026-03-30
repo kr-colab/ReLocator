@@ -66,8 +66,9 @@ class TestParallelEnsemble:
             locator = Locator(config)
 
             # Mock Ray to avoid actual parallel execution in tests
-            with patch("locator.parallel.ensemble.ray") as mock_ray, patch(
-                "locator.parallel._helpers.ray", mock_ray
+            with (
+                patch("locator.parallel.ensemble.ray") as mock_ray,
+                patch("locator.parallel._helpers.ray", mock_ray),
             ):
                 # Mock Ray initialization check
                 mock_ray.is_initialized.return_value = False
@@ -168,8 +169,9 @@ class TestParallelEnsemble:
             # For parallel, we'll mock to return similar structure
             locator_par = Locator(config.copy())
 
-            with patch("locator.parallel.ensemble.ray") as mock_ray, patch(
-                "locator.parallel._helpers.ray", mock_ray
+            with (
+                patch("locator.parallel.ensemble.ray") as mock_ray,
+                patch("locator.parallel._helpers.ray", mock_ray),
             ):
                 mock_ray.is_initialized.return_value = False
 
@@ -247,8 +249,9 @@ class TestParallelEnsemble:
         locator.na_action = "separate"
 
         # Mock Ray
-        with patch("locator.parallel.ensemble.ray") as mock_ray, patch(
-            "locator.parallel._helpers.ray", mock_ray
+        with (
+            patch("locator.parallel.ensemble.ray") as mock_ray,
+            patch("locator.parallel._helpers.ray", mock_ray),
         ):
             mock_ray.is_initialized.return_value = False
 
@@ -326,8 +329,9 @@ class TestParallelEnsemble:
             mock_future = MagicMock()
             return mock_future
 
-        with patch("locator.parallel.ensemble.ray") as mock_ray, patch(
-            "locator.parallel._helpers.ray", mock_ray
+        with (
+            patch("locator.parallel.ensemble.ray") as mock_ray,
+            patch("locator.parallel._helpers.ray", mock_ray),
         ):
             mock_ray.is_initialized.return_value = False
 
@@ -406,8 +410,9 @@ class TestParallelEnsemble:
             locator = Locator(config)
 
             # Mock Ray and model creation
-            with patch("locator.parallel.ensemble.ray") as mock_ray, patch(
-                "locator.parallel._helpers.ray", mock_ray
+            with (
+                patch("locator.parallel.ensemble.ray") as mock_ray,
+                patch("locator.parallel._helpers.ray", mock_ray),
             ):
                 mock_ray.is_initialized.return_value = False
 
