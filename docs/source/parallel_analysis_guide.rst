@@ -19,15 +19,12 @@ runs, the standard (non-parallel) analysis methods are simpler.
 Installation
 ------------
 
-The parallel analysis features require Ray as an additional dependency:
+The parallel analysis features require Ray. With pixi, Ray is included in
+the default environment. With pip:
 
 .. code-block:: bash
 
-    # Install with parallel support
     pip install locator[ray]
-
-    # Or install Ray separately
-    pip install ray>=2.0.0
 
 Quick Start
 -----------

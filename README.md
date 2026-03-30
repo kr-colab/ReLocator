@@ -14,15 +14,25 @@ Full documentation is available at **[https://relocator.readthedocs.io/en/latest
 
 ## Quick Install
 
-The easiest way to install `relocator` is to download the github repo and run the setup script. It's usually a good idea to do this in a new conda environment:
+### With pixi (recommended)
+
+[Pixi](https://pixi.sh) manages all dependencies including TensorFlow and CUDA:
 
 ```bash
-conda create --name locator
-conda activate locator
-git clone https://github.com/kr-colab/relocator.git
-cd locator
-pip install .
+git clone https://github.com/kr-colab/ReLocator.git
+cd ReLocator
+pixi install              # GPU environment (default)
+pixi install -e cpu       # CPU-only environment
+pixi run test             # run tests
 ```
+
+### With pip
+
+```bash
+pip install locator
+```
+
+Note: when using pip, you must manage TensorFlow and CUDA installation separately.
 
 ## License
 

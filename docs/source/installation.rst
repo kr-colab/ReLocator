@@ -4,110 +4,103 @@ Installation
 Requirements
 -------------
 
-Locator requires Python 3.8 or higher. All dependencies are installed
-automatically when you install the package with pip.
+Locator requires Python 3.10 or higher and TensorFlow 2.16+.
 
-Basic Installation
--------------------
+Installing with pixi (recommended)
+------------------------------------
 
-The simplest way to install Locator is using pip:
+`Pixi <https://pixi.sh>`_ manages all dependencies including TensorFlow, CUDA,
+and the geospatial stack. This is the recommended approach:
+
+.. code-block:: bash
+
+   git clone https://github.com/kr-colab/ReLocator.git
+   cd ReLocator
+   pixi install              # GPU environment (default)
+
+This installs TensorFlow with CUDA support, Ray for multi-GPU parallelism,
+bio2zarr for fast VCF conversion, and all development tools.
+
+Available environments:
+
+.. code-block:: bash
+
+   pixi install              # GPU + ray + fast-vcf + dev (default)
+   pixi install -e cpu       # CPU + ray + fast-vcf + dev
+   pixi install -e test      # CPU + dev (minimal for testing)
+   pixi install -e docs      # CPU + sphinx
+   pixi install -e minimal   # CPU only, no extras
+
+Running tasks:
+
+.. code-block:: bash
+
+   pixi run test             # run tests
+   pixi run lint             # check linting
+   pixi run format           # auto-format code
+   pixi run docs             # build documentation
+
+Installing with pip
+--------------------
+
+Locator can also be installed with pip. Note that you must manage TensorFlow
+and CUDA installation separately when using pip.
 
 .. code-block:: bash
 
    pip install locator
 
-Development Installation
--------------------------
-
-For development, you may want to install additional dependencies for testing and documentation:
+For development:
 
 .. code-block:: bash
 
-   pip install locator[dev,docs]
+   pip install locator[dev,docs,ray,fast-vcf]
 
-This will install:
+Optional pip extras:
 
-* pytest for testing
-* ruff for linting and formatting
-* sphinx and related packages for documentation
-
-For detailed API documentation useful during development, see :doc:`api`.
-
-Optional Features
------------------
-
-Locator provides optional features that require additional dependencies:
-
-Parallel Analysis
-~~~~~~~~~~~~~~~~~
-
-For multi-GPU parallel analysis using Ray:
-
-.. code-block:: bash
-
-   pip install locator[ray]
-
-This enables:
-
-* :doc:`parallel_analysis_guide` - Multi-GPU k-fold CV, holdouts, and windowed analysis
-* Ray framework for distributed computing
-* Automatic GPU load balancing
+* ``locator[dev]`` — pytest, ruff, pre-commit
+* ``locator[docs]`` — sphinx and related packages
+* ``locator[ray]`` — Ray for multi-GPU parallel analysis
+* ``locator[fast-vcf]`` — bio2zarr + cyvcf2 for fast VCF-to-Zarr conversion
 
 Fast VCF-to-Zarr Conversion
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For large VCF files, we recommend converting to zarr format for fast loading.
-Install ``bio2zarr`` (which includes ``cyvcf2``):
-
-.. code-block:: bash
-
-   pip install locator[fast-vcf]
-
-This provides the ``vcf2zarr`` command for fast, multi-threaded VCF-to-zarr conversion:
+With pixi, ``bio2zarr`` is included in the default environment. With pip,
+install via ``pip install locator[fast-vcf]``.
 
 .. code-block:: bash
 
    bcftools index -t genotypes.vcf.gz
    vcf2zarr convert -p 8 genotypes.vcf.gz genotypes.zarr
 
-All Features
-~~~~~~~~~~~~
-
-To install Locator with all optional features:
-
-.. code-block:: bash
-
-   pip install locator[dev,docs,ray,fast-vcf]
+Locator supports zarr files from both ``bio2zarr`` and ``scikit-allel``.
 
 Installing from Source
 -----------------------
 
-To install from source:
+.. code-block:: bash
 
-1. Clone the repository:
+   git clone https://github.com/kr-colab/ReLocator.git
+   cd ReLocator
 
-   .. code-block:: bash
+   # With pixi (recommended)
+   pixi install
 
-      git clone https://github.com/yourusername/locator.git
-      cd locator
-
-2. Install in development mode:
-
-   .. code-block:: bash
-
-      pip install -e .
+   # Or with pip
+   pip install -e ".[dev]"
 
 Verifying Installation
 -----------------------
 
-To verify your installation, run:
+.. code-block:: bash
 
-.. code-block:: python
+   # With pixi
+   pixi run python -c "from locator import Locator; print('OK')"
 
-   import locator
-   print(locator.__version__)
-
-You should see the version number printed without any errors.
+   # Or directly
+   python -c "from locator import Locator; print('OK')"
 
 Next Steps
 ----------
