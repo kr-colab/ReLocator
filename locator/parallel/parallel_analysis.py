@@ -92,6 +92,39 @@ def _create_worker_locator(data, suffix):
     return locator
 
 
+def _prefilter_genotypes(genotypes, config, verbose=True):
+    """Filter genotypes once in the dispatcher so workers share a small array.
+
+    Parameters
+    ----------
+    genotypes : allel.GenotypeArray
+        Full genotype array.
+    config : dict
+        Locator config dict (needs min_mac, max_SNPs, impute_missing).
+    verbose : bool
+        Print filtering summary.
+
+    Returns
+    -------
+    np.ndarray
+        Filtered allele count array (n_snps_filtered, n_samples).
+    """
+    from locator.data import filter_snps_legacy
+
+    filtered = filter_snps_legacy(
+        genotypes,
+        min_mac=config.get("min_mac", 2),
+        max_snps=config.get("max_SNPs"),
+        impute=config.get("impute_missing", False),
+    )
+    if verbose:
+        print(
+            f"Pre-filtered genotypes: {genotypes.shape[0]:,} → "
+            f"{filtered.shape[0]:,} SNPs"
+        )
+    return filtered
+
+
 def _ensure_ray_initialized():
     """Initialize Ray if not already running."""
     if not ray.is_initialized():
@@ -450,26 +483,10 @@ def parallel_k_fold_holdouts(  # noqa: C901
         verbose,
     )
 
-    # Pre-filter genotypes once so workers don't each copy the full array.
-    # This reduces per-worker memory from O(n_variants * n_samples) to
-    # O(max_SNPs * n_samples).
-    from locator.data import filter_snps_legacy as _filter_snps
+    # Pre-filter once so workers share a small array instead of the full genotypes
+    filtered_genotypes = _prefilter_genotypes(genotypes, locator.config, verbose)
 
-    filtered_genotypes = _filter_snps(
-        genotypes,
-        min_mac=locator.config.get("min_mac", 2),
-        max_snps=locator.config.get("max_SNPs"),
-        impute=locator.config.get("impute_missing", False),
-    )
-
-    if verbose:
-        print(
-            f"Pre-filtered genotypes: {genotypes.shape[0]:,} → "
-            f"{filtered_genotypes.shape[0]:,} SNPs"
-        )
-
-    # Share data via Ray object store (zero-copy for numpy arrays).
-    # Only the small filtered array is shared, not the full genotypes.
+    # Share data via Ray object store.
     data_ref = ray.put(
         {
             "filtered_genotypes": filtered_genotypes,
@@ -874,23 +891,10 @@ def parallel_holdouts(  # noqa: C901
             rep_holdout_idx = np.random.choice(known_idx, k, replace=False)
         all_holdout_indices.append(rep_holdout_idx)
 
-    # Pre-filter genotypes once to avoid per-worker copies
-    from locator.data import filter_snps_legacy as _filter_snps
+    # Pre-filter once so workers share a small array instead of the full genotypes
+    filtered_genotypes = _prefilter_genotypes(genotypes, locator.config, verbose)
 
-    filtered_genotypes = _filter_snps(
-        genotypes,
-        min_mac=locator.config.get("min_mac", 2),
-        max_snps=locator.config.get("max_SNPs"),
-        impute=locator.config.get("impute_missing", False),
-    )
-
-    if verbose:
-        print(
-            f"Pre-filtered genotypes: {genotypes.shape[0]:,} → "
-            f"{filtered_genotypes.shape[0]:,} SNPs"
-        )
-
-    # Share only filtered array via Ray object store
+    # Share data via Ray object store
     data_ref = ray.put(
         {
             "filtered_genotypes": filtered_genotypes,
@@ -1529,7 +1533,7 @@ def _create_ray_ensemble_worker(gpu_fraction: float = 1.0):
 
         print(f"Worker training ensemble fold {fold_idx} on GPU {gpu_id}")
 
-        filtered_genotypes = data["filtered_genotypes_array"]
+        filtered_genotypes = data["filtered_genotypes"]
 
         locator = _create_worker_locator(data, f"fold{fold_idx}")
 
@@ -1685,7 +1689,7 @@ def parallel_train_ensemble(  # noqa: C901
     # Share only filtered array via Ray object store
     data_ref = ray.put(
         {
-            "filtered_genotypes_array": filtered_genotypes,
+            "filtered_genotypes": filtered_genotypes,
             "samples": samples,
             "sample_data": sample_data,
             "locs": locs,
