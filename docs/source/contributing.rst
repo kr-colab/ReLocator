@@ -7,30 +7,29 @@ you get started with development.
 Development Setup
 -----------------
 
-1. **Clone the repository and create a conda environment:**
+1. **Clone the repository and install with pixi:**
 
    .. code-block:: bash
 
-      git clone https://github.com/kr-colab/relocator.git
-      cd relocator
-      conda create -n relocator python=3.12
-      conda activate relocator
+      git clone https://github.com/kr-colab/ReLocator.git
+      cd ReLocator
+      pixi install          # GPU environment (default)
+      pixi install -e cpu   # or CPU-only
 
-2. **Install in development mode:**
+   This installs Locator in editable mode along with TensorFlow, CUDA,
+   and all development dependencies (pytest, ruff, pre-commit, etc.).
+
+   Alternatively, with pip (you must manage TF/CUDA separately):
 
    .. code-block:: bash
 
       pip install -e ".[dev]"
 
-   This installs Locator in editable mode along with all development
-   dependencies including ``pytest``, ``ruff``, ``pre-commit``, and
-   ``codespell``.
-
-3. **Set up pre-commit hooks:**
+2. **Set up pre-commit hooks:**
 
    .. code-block:: bash
 
-      pre-commit install
+      pixi run pre-commit install
 
 Code Style
 ----------
@@ -55,20 +54,19 @@ the tools manually:
 Testing
 -------
 
-Run the test suite with pytest:
+Run the test suite:
 
 .. code-block:: bash
 
-   # Run all tests
-   pytest
+   # Via pixi
+   pixi run test
+
+   # Or directly
+   pytest tests/ -v -m "not slow and not gpu"
 
    # Run a specific test file or test
    pytest tests/test_core.py
    pytest tests/test_core.py::test_name -v
-
-   # Skip slow or GPU tests
-   pytest -m "not slow"
-   pytest -m "not gpu"
 
    # Force CPU-only
    CUDA_VISIBLE_DEVICES=-1 pytest

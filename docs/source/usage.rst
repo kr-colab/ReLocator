@@ -337,11 +337,8 @@ Multi-GPU Parallel Analysis
 ---------------------------
 
 For large-scale analyses with multiple GPUs, install the ``[ray]`` extra and
-use Locator's parallel implementations:
-
-.. code-block:: bash
-
-   pip install locator[ray]
+use Locator's parallel implementations (Ray is included in pixi's default
+environment, or install with ``pip install locator[ray]``):
 
 .. code-block:: python
 
