@@ -14,7 +14,7 @@ authors = [
 ]
 
 dependencies = [
-    "numpy>=1.26.0",
+    "numpy>=1.26.4",
     "tensorflow>=2.16",
     "h5py",
     "scikit-allel",
