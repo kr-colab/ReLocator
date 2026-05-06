@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from tensorflow import keras
 
-from .data import IndexSet, make_tf_dataset, normalize_locs
+from .data import IndexSet, is_dosage_matrix, make_tf_dataset, normalize_locs
 from .data import filter_snps_legacy as filter_snps
 from .gpu_optimizer import GPUOptimizer
 from .models import create_network, loss_with_range_penalty, rasterize_species_range
@@ -760,26 +760,59 @@ class TrainingMixin:
     def _filter_genotypes(self, genotypes, filtered_genotypes=None):
         """Filter SNPs and store result as self.filtered_genotypes.
 
+        Two genotype input dialects are accepted:
+
+        - ``allel.GenotypeArray`` (n_sites, n_samples, ploidy): the original
+          path; biallelic check + MAC + max_snps + optional imputation via
+          ``filter_snps``.
+        - 2D float ``np.ndarray`` (n_sites, n_samples): continuous dosage
+          (e.g., GL-derived expected dosage). Biallelic check is skipped (not
+          meaningful for continuous values); MAC and max_snps filters are
+          applied directly on the dosage matrix.
+
         Args:
-            genotypes: Raw GenotypeArray or window slice
+            genotypes: Raw GenotypeArray, 2D float ndarray, or window slice
             filtered_genotypes: Pre-filtered allele counts (skips filtering)
 
         Returns
         -------
-            np.ndarray: Filtered allele count array
+            np.ndarray: Filtered allele count / dosage array, shape (n_sites, n_samples)
         """
         if filtered_genotypes is not None:
             self.filtered_genotypes = filtered_genotypes
         elif genotypes is not None:
-            self.filtered_genotypes = filter_snps(
-                genotypes,
-                min_mac=self.config.get("min_mac", 2),
-                max_snps=self.config.get("max_SNPs"),
-                impute=self.config.get("impute_missing", False),
-            )
+            if is_dosage_matrix(genotypes):
+                self.filtered_genotypes = self._filter_dosage_matrix(genotypes)
+            else:
+                self.filtered_genotypes = filter_snps(
+                    genotypes,
+                    min_mac=self.config.get("min_mac", 2),
+                    max_snps=self.config.get("max_SNPs"),
+                    impute=self.config.get("impute_missing", False),
+                )
         else:
             raise ValueError("Either genotypes or filtered_genotypes must be provided")
         return self.filtered_genotypes
+
+    def _filter_dosage_matrix(self, dosage):
+        """MAC and max_snps filters for continuous dosage input.
+
+        Mean dosage at a site is in [0, 2]; minor-allele frequency is
+        ``min(mean, 2 - mean) / 2``, and the implied minor-allele count is
+        ``MAF * 2 * n_samples``. Sites below ``min_mac`` are dropped. Imputation
+        is assumed to have happened upstream (gl_to_locator.py site-mean fill).
+        """
+        n_sites, n_samples = dosage.shape
+        mean_dosage = dosage.mean(axis=1)
+        minor_freq = np.minimum(mean_dosage, 2.0 - mean_dosage) / 2.0
+        implied_mac = minor_freq * 2.0 * n_samples
+        mask = implied_mac >= float(self.config.get("min_mac", 2))
+        dosage = dosage[mask, :]
+        max_snps = self.config.get("max_SNPs")
+        if max_snps is not None and max_snps < dosage.shape[0]:
+            idx = np.random.choice(dosage.shape[0], max_snps, replace=False)
+            dosage = dosage[np.sort(idx), :]
+        return np.ascontiguousarray(dosage, dtype=np.float32)
 
     def _store_holdout_state(self, holdout_idx, normalized_locs):
         """Store holdout data for use by predict_holdout().

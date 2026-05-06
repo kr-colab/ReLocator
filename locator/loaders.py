@@ -122,21 +122,42 @@ class DataLoaderMixin:
     def _load_from_matrix(self, matrix_path):
         """Load genotypes from matrix file.
 
+        Two input dialects are accepted, distinguished by dtype:
+
+        - **Hard-call dosage** (integer 0/1/2): routed through
+          ``_counts_to_genotype_array`` and returned as an ``allel.GenotypeArray``
+          of shape ``(n_sites, n_samples, 2)``. Original behavior.
+        - **Continuous dosage** (float column with values in [0, 2], e.g.
+          expected dosage from GL-based callers): the matrix is returned
+          directly as a 2D ``np.ndarray`` of shape ``(n_sites, n_samples)``
+          with no allel.GenotypeArray round trip. Downstream
+          ``_filter_genotypes`` in training.py recognizes this branch and
+          applies MAC/max_snps filters on the continuous values directly,
+          skipping biallelic checks (which are not meaningful for continuous
+          dosage). NaN values are silently dropped at the MAC filter —
+          callers should impute upstream (gl_to_locator.py site-mean fill
+          handles this for ANGSD beagle inputs).
+
         Args:
             matrix_path: Path to tab-delimited matrix file containing genotype data.
                 File should have a header row with 'sampleID' as first column,
-                followed by variant columns. Each row contains genotype counts (0,1,2)
-                for one sample.
+                followed by variant columns.
 
         Returns
         -------
-            tuple: (genotypes, samples) where:
-                - genotypes is an allel.GenotypeArray containing genetic data
-                - samples is a numpy array of sample IDs
+            tuple: (genotypes, samples)
         """
         gmat = pd.read_csv(matrix_path, sep="\t")
         samples = np.array(gmat["sampleID"])
         gmat = gmat.drop(labels="sampleID", axis=1)
+
+        if np.issubdtype(gmat.values.dtype, np.floating):
+            # Continuous dosage path. Shape becomes (n_sites, n_samples) to
+            # match the downstream ``ac`` representation produced by
+            # ``filter_snps`` for the integer path.
+            dosage = np.asarray(gmat.values, dtype=np.float32).T
+            return dosage, samples
+
         if not np.all(np.isin(gmat, [0, 1, 2])):
             raise ValueError("Genotype values must be 0, 1, or 2")
         gmat = np.array(gmat, dtype="int8")

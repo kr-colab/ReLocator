@@ -6,6 +6,7 @@ from .filters import (
     filter_snps,
     filter_snps_legacy,
     impute_missing,
+    is_dosage_matrix,
     normalize_locs,
     normalize_locs_params,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "filter_snps",
     "filter_snps_legacy",
     "impute_missing",
+    "is_dosage_matrix",
     "normalize_locs",
     "normalize_locs_params",
     "IndexSet",

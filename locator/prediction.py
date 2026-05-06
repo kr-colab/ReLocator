@@ -7,6 +7,8 @@ import h5py
 import numpy as np
 import pandas as pd
 
+from .data import is_dosage_matrix
+
 
 class PredictionMixin:
     """Mixin class providing prediction functionality for Locator."""
@@ -123,10 +125,11 @@ class PredictionMixin:
 
             # Filter genotypes using the same parameters as training
             if hasattr(self, "filtered_genotypes"):
-                # Use stored filtered genotypes if available
                 filtered_genotypes = self.filtered_genotypes
+            elif is_dosage_matrix(genotypes):
+                filtered_genotypes = self._filter_dosage_matrix(genotypes)
             else:
-                # Apply filtering to the provided genotypes
+                from .data import filter_snps_legacy as filter_snps
                 filtered_genotypes = filter_snps(
                     genotypes,
                     min_mac=self.config.get("min_mac", 2),
@@ -375,25 +378,21 @@ class PredictionMixin:
                 else np.array([])
             )
 
-        # Apply preprocessing using saved parameters
         if metadata and "preprocessing" in metadata:
-            from .data import filter_snps_legacy as filter_snps
-
-            filtered_genotypes = filter_snps(
-                genotypes,
-                min_mac=metadata["preprocessing"]["min_mac"],
-                max_snps=metadata["preprocessing"]["max_SNPs"],
-                impute=metadata["preprocessing"]["impute_missing"],
-            )
+            min_mac = metadata["preprocessing"]["min_mac"]
+            max_snps = metadata["preprocessing"]["max_SNPs"]
+            impute = metadata["preprocessing"]["impute_missing"]
         else:
-            # Use current config if no metadata
-            from .data import filter_snps_legacy as filter_snps
+            min_mac = self.config.get("min_mac", 2)
+            max_snps = self.config.get("max_SNPs")
+            impute = self.config.get("impute_missing", False)
 
+        if is_dosage_matrix(genotypes):
+            filtered_genotypes = self._filter_dosage_matrix(genotypes)
+        else:
+            from .data import filter_snps_legacy as filter_snps
             filtered_genotypes = filter_snps(
-                genotypes,
-                min_mac=self.config.get("min_mac", 2),
-                max_snps=self.config.get("max_SNPs"),
-                impute=self.config.get("impute_missing", False),
+                genotypes, min_mac=min_mac, max_snps=max_snps, impute=impute,
             )
 
         # Prepare prediction genotypes

@@ -130,6 +130,21 @@ def impute_missing(genotypes) -> np.ndarray:
     return ac
 
 
+def is_dosage_matrix(genotypes) -> bool:
+    """Detect a continuous-dosage matrix vs an allel.GenotypeArray.
+
+    GL-derived inputs flow through `_load_from_matrix` as 2D float ndarrays
+    of shape (n_sites, n_samples); hard-call inputs are allel.GenotypeArray
+    of shape (n_sites, n_samples, ploidy). Downstream filtering, training,
+    and prediction code dispatches on this distinction.
+    """
+    return (
+        isinstance(genotypes, np.ndarray)
+        and genotypes.ndim == 2
+        and np.issubdtype(genotypes.dtype, np.floating)
+    )
+
+
 def filter_snps(
     genotypes,
     min_mac: int = 1,
