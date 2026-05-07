@@ -5,7 +5,7 @@ gl_to_locator.py
 Convert ANGSD -doGlf 2 beagle.gz output to a feature matrix compatible with
 ReLocator's --geno tab-delimited input.
 
-See CLAUDE.md for full option descriptions, usage examples, and known limitations.
+Run with --help for full option descriptions and usage examples.
 
 Two output modes are supported via --gl_mode:
 

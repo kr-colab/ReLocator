@@ -3,6 +3,7 @@
 from .filters import (
     FilterStats,
     NormalizationParams,
+    filter_dosage_matrix,
     filter_snps,
     filter_snps_legacy,
     impute_missing,
@@ -17,6 +18,7 @@ from .windows import generate_genomic_windows
 __all__ = [
     "FilterStats",
     "NormalizationParams",
+    "filter_dosage_matrix",
     "filter_snps",
     "filter_snps_legacy",
     "impute_missing",

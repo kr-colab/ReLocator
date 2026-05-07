@@ -156,6 +156,12 @@ class DataLoaderMixin:
             # match the downstream ``ac`` representation produced by
             # ``filter_snps`` for the integer path.
             dosage = np.asarray(gmat.values, dtype=np.float32).T
+            if not ((dosage >= 0.0) & (dosage <= 2.0)).all():
+                raise ValueError(
+                    "Continuous-dosage matrix has values outside [0, 2]; "
+                    "expected expected-dosage encoding (e.g. from "
+                    "scripts/gl_to_locator.py)."
+                )
             return dosage, samples
 
         if not np.all(np.isin(gmat, [0, 1, 2])):

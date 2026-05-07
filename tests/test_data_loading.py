@@ -151,51 +151,43 @@ def test_filter_genotypes_continuous_dosage_path():
     assert not np.array_equal(out, np.round(out))
 
 
-def test_prediction_filter_dispatch_for_continuous_dosage():
-    """Verify prediction-path filter routing works on a 2D float ndarray.
+def test_filter_dosage_matrix_skips_legacy_path():
+    """Filter free-function handles continuous dosage without invoking ``filter_snps_legacy``.
 
-    Without the dispatch, ``filter_snps_legacy`` calls ``.count_alleles()`` —
-    which only exists on ``allel.GenotypeArray`` — and raises AttributeError
-    on a continuous-dosage ndarray. This test exercises the same code path
-    used by ``predict_from_weights`` after a GL-trained model is reloaded.
+    ``filter_snps_legacy`` calls ``.count_alleles()`` — which only exists on
+    ``allel.GenotypeArray`` — and raises AttributeError on a continuous-dosage
+    ndarray. This test confirms that ``filter_dosage_matrix`` (the free function
+    used by both training- and prediction-path dispatch in ``locator/data/filters.py``)
+    handles this case directly, and that the legacy filter would in fact fail
+    if it were dispatched here.
     """
+    from locator.data import filter_dosage_matrix, filter_snps_legacy
+
     n_sites, n_samples = 80, 30
     rng = np.random.default_rng(0)
     dosage = rng.beta(2.0, 2.0, size=(n_sites, n_samples)).astype(np.float32) * 2.0
 
-    sample_df = pd.DataFrame(
-        {
-            "sampleID": [f"s{i}" for i in range(n_samples)],
-            "x": np.linspace(0.0, 50.0, n_samples),
-            "y": np.linspace(0.0, 50.0, n_samples),
-        }
-    )
-    locator = Locator(config={"sample_data": sample_df, "min_mac": 2})
-
-    # Mirror the prediction-path dispatch logic. If routing is incorrect, the
-    # call to filter_snps_legacy on a float ndarray would raise AttributeError
-    # on .count_alleles() — which is what this test guards against.
-    is_dosage_matrix = (
-        isinstance(dosage, np.ndarray)
-        and dosage.ndim == 2
-        and np.issubdtype(dosage.dtype, np.floating)
-    )
-    assert is_dosage_matrix, "test setup: dosage must be 2D float ndarray"
-
-    # Direct check that the dosage helper handles this without invoking
-    # filter_snps_legacy at all.
-    out = locator._filter_dosage_matrix(dosage)
+    out = filter_dosage_matrix(dosage, min_mac=2, max_snps=None)
     assert isinstance(out, np.ndarray)
     assert out.dtype == np.float32
     assert out.ndim == 2
     assert out.shape[1] == n_samples
 
-    # Sanity: the legacy filter should NOT be called on a float ndarray; if it
+    # Sanity: the legacy filter must NOT be called on a float ndarray; if it
     # were, this would raise AttributeError on .count_alleles().
-    from locator.data import filter_snps_legacy
-
     with pytest.raises(AttributeError, match="count_alleles"):
         filter_snps_legacy(dosage, min_mac=2, max_snps=None, impute=False)
+
+
+def test_filter_dosage_matrix_rejects_nan():
+    """NaN in dosage must raise rather than silently masking out every site."""
+    from locator.data import filter_dosage_matrix
+
+    dosage = np.array(
+        [[0.5, 1.0, 1.5], [np.nan, 0.7, 0.9]], dtype=np.float32
+    )
+    with pytest.raises(ValueError, match="NaN"):
+        filter_dosage_matrix(dosage, min_mac=1)
 
 
 def test_load_genotypes_invalid_values():

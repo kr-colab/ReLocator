@@ -7,7 +7,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from .data import is_dosage_matrix
+from .data import filter_dosage_matrix, is_dosage_matrix
 
 
 class PredictionMixin:
@@ -127,7 +127,11 @@ class PredictionMixin:
             if hasattr(self, "filtered_genotypes"):
                 filtered_genotypes = self.filtered_genotypes
             elif is_dosage_matrix(genotypes):
-                filtered_genotypes = self._filter_dosage_matrix(genotypes)
+                filtered_genotypes = filter_dosage_matrix(
+                    genotypes,
+                    min_mac=self.config.get("min_mac", 2),
+                    max_snps=self.config.get("max_SNPs"),
+                )
             else:
                 from .data import filter_snps_legacy as filter_snps
                 filtered_genotypes = filter_snps(
@@ -388,7 +392,11 @@ class PredictionMixin:
             impute = self.config.get("impute_missing", False)
 
         if is_dosage_matrix(genotypes):
-            filtered_genotypes = self._filter_dosage_matrix(genotypes)
+            filtered_genotypes = filter_dosage_matrix(
+                genotypes,
+                min_mac=min_mac,
+                max_snps=max_snps,
+            )
         else:
             from .data import filter_snps_legacy as filter_snps
             filtered_genotypes = filter_snps(

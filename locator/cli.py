@@ -19,8 +19,8 @@ def parse_args():
         help="tab-delimited matrix of genotype dosage with first column "
         "named 'sampleID'. Accepts both hard-call dosage (integers 0/1/2) "
         "and continuous expected dosage from genotype-likelihood pipelines "
-        "(floats in [0, 2]). See docs/genotype_likelihoods.md for the GL "
-        "workflow. E.g., "
+        "(floats in [0, 2]). For the GL preprocessing workflow, see "
+        "`scripts/gl_to_locator.py --help`. E.g., "
         "sampleID\\tsite1\\tsite2\\t... "
         "msp1\\t0\\t1\\t... "
         "msp2\\t2\\t0\\t...",
