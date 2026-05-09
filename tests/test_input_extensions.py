@@ -27,6 +27,7 @@ def run_script(script, *args):
 # GL converter
 # ---------------------------------------------------------------------------
 
+
 def write_synthetic_beagle(path, n_sites=20, n_samples=4, seed=0):
     """Write a small valid beagle.gz with random GL triplets that sum to 1."""
     rng = np.random.default_rng(seed)
@@ -64,8 +65,16 @@ def test_gl_to_locator_dosage(tmp_path):
 
     res = run_script(
         "gl_to_locator.py",
-        "--beagle", beagle, "--bam_list", bam_list, "--out", out,
-        "--min_maf", "0.0", "--max_missing_frac", "1.0",
+        "--beagle",
+        beagle,
+        "--bam_list",
+        bam_list,
+        "--out",
+        out,
+        "--min_maf",
+        "0.0",
+        "--max_missing_frac",
+        "1.0",
     )
     assert res.returncode == 0, res.stderr
 
@@ -91,9 +100,18 @@ def test_gl_to_locator_full_gl(tmp_path):
 
     res = run_script(
         "gl_to_locator.py",
-        "--beagle", beagle, "--bam_list", bam_list, "--out", out,
-        "--gl_mode", "full_gl",
-        "--min_maf", "0.0", "--max_missing_frac", "1.0",
+        "--beagle",
+        beagle,
+        "--bam_list",
+        bam_list,
+        "--out",
+        out,
+        "--gl_mode",
+        "full_gl",
+        "--min_maf",
+        "0.0",
+        "--max_missing_frac",
+        "1.0",
     )
     assert res.returncode == 0, res.stderr
 
@@ -119,8 +137,16 @@ def test_gl_to_locator_dimension_mismatch_errors(tmp_path):
 
     res = run_script(
         "gl_to_locator.py",
-        "--beagle", beagle, "--bam_list", bam_list, "--out", out,
-        "--min_maf", "0.0", "--max_missing_frac", "1.0",
+        "--beagle",
+        beagle,
+        "--bam_list",
+        bam_list,
+        "--out",
+        out,
+        "--min_maf",
+        "0.0",
+        "--max_missing_frac",
+        "1.0",
     )
     assert res.returncode != 0
     assert "expected" in res.stderr.lower() or "expected" in res.stdout.lower()

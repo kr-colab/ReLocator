@@ -183,9 +183,7 @@ def test_filter_dosage_matrix_rejects_nan():
     """NaN in dosage must raise rather than silently masking out every site."""
     from locator.data import filter_dosage_matrix
 
-    dosage = np.array(
-        [[0.5, 1.0, 1.5], [np.nan, 0.7, 0.9]], dtype=np.float32
-    )
+    dosage = np.array([[0.5, 1.0, 1.5], [np.nan, 0.7, 0.9]], dtype=np.float32)
     with pytest.raises(ValueError, match="NaN"):
         filter_dosage_matrix(dosage, min_mac=1)
 

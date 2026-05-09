@@ -134,6 +134,7 @@ class PredictionMixin:
                 )
             else:
                 from .data import filter_snps_legacy as filter_snps
+
                 filtered_genotypes = filter_snps(
                     genotypes,
                     min_mac=self.config.get("min_mac", 2),
@@ -399,8 +400,12 @@ class PredictionMixin:
             )
         else:
             from .data import filter_snps_legacy as filter_snps
+
             filtered_genotypes = filter_snps(
-                genotypes, min_mac=min_mac, max_snps=max_snps, impute=impute,
+                genotypes,
+                min_mac=min_mac,
+                max_snps=max_snps,
+                impute=impute,
             )
 
         # Prepare prediction genotypes

@@ -146,9 +146,7 @@ def load_beagle(beagle_path):
     try:
         gl_flat = np.array(rows, dtype=np.float32)
     except ValueError as e:
-        raise ValueError(
-            f"Failed to parse beagle GL values as float32. Error: {e}"
-        )
+        raise ValueError(f"Failed to parse beagle GL values as float32. Error: {e}")
 
     print(f"  Loaded {len(markers)} sites", flush=True)
     return markers, gl_flat
@@ -242,15 +240,13 @@ def cross_check_sample_ids(derived_ids, sample_data_path):
     if in_derived_not_sd:
         print(
             f"WARNING: {len(in_derived_not_sd)} sample IDs derived from BAM list "
-            f"are NOT in sample_data.txt:\n  "
-            + "\n  ".join(sorted(in_derived_not_sd)),
+            f"are NOT in sample_data.txt:\n  " + "\n  ".join(sorted(in_derived_not_sd)),
             file=sys.stderr,
         )
     if in_sd_not_derived:
         print(
             f"WARNING: {len(in_sd_not_derived)} sample IDs in sample_data.txt "
-            f"are NOT in BAM list:\n  "
-            + "\n  ".join(sorted(in_sd_not_derived)),
+            f"are NOT in BAM list:\n  " + "\n  ".join(sorted(in_sd_not_derived)),
             file=sys.stderr,
         )
     if not in_derived_not_sd and not in_sd_not_derived:
