@@ -9,7 +9,13 @@ import numpy as np
 import pandas as pd
 from tensorflow import keras
 
-from .data import IndexSet, make_tf_dataset, normalize_locs
+from .data import (
+    IndexSet,
+    filter_dosage_matrix,
+    is_dosage_matrix,
+    make_tf_dataset,
+    normalize_locs,
+)
 from .data import filter_snps_legacy as filter_snps
 from .gpu_optimizer import GPUOptimizer
 from .models import create_network, loss_with_range_penalty, rasterize_species_range
@@ -760,23 +766,40 @@ class TrainingMixin:
     def _filter_genotypes(self, genotypes, filtered_genotypes=None):
         """Filter SNPs and store result as self.filtered_genotypes.
 
+        Two genotype input dialects are accepted:
+
+        - ``allel.GenotypeArray`` (n_sites, n_samples, ploidy): the original
+          path; biallelic check + MAC + max_snps + optional imputation via
+          ``filter_snps``.
+        - 2D float ``np.ndarray`` (n_sites, n_samples): continuous dosage
+          (e.g., GL-derived expected dosage). Biallelic check is skipped (not
+          meaningful for continuous values); MAC and max_snps filters are
+          applied directly on the dosage matrix.
+
         Args:
-            genotypes: Raw GenotypeArray or window slice
+            genotypes: Raw GenotypeArray, 2D float ndarray, or window slice
             filtered_genotypes: Pre-filtered allele counts (skips filtering)
 
         Returns
         -------
-            np.ndarray: Filtered allele count array
+            np.ndarray: Filtered allele count / dosage array, shape (n_sites, n_samples)
         """
         if filtered_genotypes is not None:
             self.filtered_genotypes = filtered_genotypes
         elif genotypes is not None:
-            self.filtered_genotypes = filter_snps(
-                genotypes,
-                min_mac=self.config.get("min_mac", 2),
-                max_snps=self.config.get("max_SNPs"),
-                impute=self.config.get("impute_missing", False),
-            )
+            if is_dosage_matrix(genotypes):
+                self.filtered_genotypes = filter_dosage_matrix(
+                    genotypes,
+                    min_mac=self.config.get("min_mac", 2),
+                    max_snps=self.config.get("max_SNPs"),
+                )
+            else:
+                self.filtered_genotypes = filter_snps(
+                    genotypes,
+                    min_mac=self.config.get("min_mac", 2),
+                    max_snps=self.config.get("max_SNPs"),
+                    impute=self.config.get("impute_missing", False),
+                )
         else:
             raise ValueError("Either genotypes or filtered_genotypes must be provided")
         return self.filtered_genotypes

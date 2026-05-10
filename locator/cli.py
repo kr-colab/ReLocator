@@ -16,13 +16,14 @@ def parse_args():
     parser.add_argument("--zarr", help="zarr file of SNPs for all samples.")
     parser.add_argument(
         "--matrix",
-        help="tab-delimited matrix of minor allele counts with \
-            first column named 'sampleID'.\
-                                     E.g., \
-                                     \
-                                     sampleID\tsite1\tsite2\t...\n \
-                                     msp1\t0\t1\t...\n \
-                                     msp2\t2\t0\t...\n ",
+        help="tab-delimited matrix of genotype dosage with first column "
+        "named 'sampleID'. Accepts both hard-call dosage (integers 0/1/2) "
+        "and continuous expected dosage from genotype-likelihood pipelines "
+        "(floats in [0, 2]). For the GL preprocessing workflow, see "
+        "`scripts/gl_to_locator.py --help`. E.g., "
+        "sampleID\\tsite1\\tsite2\\t... "
+        "msp1\\t0\\t1\\t... "
+        "msp2\\t2\\t0\\t...",
     )
     parser.add_argument(
         "--sample_data",

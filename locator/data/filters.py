@@ -130,6 +130,63 @@ def impute_missing(genotypes) -> np.ndarray:
     return ac
 
 
+def is_dosage_matrix(genotypes) -> bool:
+    """Detect a continuous-dosage matrix vs an allel.GenotypeArray.
+
+    GL-derived inputs flow through `_load_from_matrix` as 2D float ndarrays
+    of shape (n_sites, n_samples); hard-call inputs are allel.GenotypeArray
+    of shape (n_sites, n_samples, ploidy). Downstream filtering, training,
+    and prediction code dispatches on this distinction.
+    """
+    return (
+        isinstance(genotypes, np.ndarray)
+        and genotypes.ndim == 2
+        and np.issubdtype(genotypes.dtype, np.floating)
+    )
+
+
+def filter_dosage_matrix(
+    dosage: np.ndarray,
+    min_mac: int = 2,
+    max_snps: Optional[int] = None,
+) -> np.ndarray:
+    """MAC and max_snps filters for continuous dosage input.
+
+    Mean dosage at a site is in [0, 2]; minor-allele frequency is
+    ``min(mean, 2 - mean) / 2``, and the implied minor-allele count is
+    ``MAF * 2 * n_samples``. Sites below ``min_mac`` are dropped.
+
+    Imputation must happen upstream: NaN values raise ``ValueError`` rather
+    than silently dropping every site (a NaN mean propagates through the MAC
+    comparison and would otherwise mask all sites out).
+
+    Args:
+        dosage: ``(n_sites, n_samples)`` float ndarray with values in [0, 2].
+        min_mac: Minimum implied minor-allele count for a site to be kept.
+        max_snps: Optional cap on retained sites (random subset).
+
+    Returns
+    -------
+        Contiguous float32 ndarray of filtered sites.
+    """
+    if np.isnan(dosage).any():
+        raise ValueError(
+            "dosage matrix contains NaN values; impute upstream "
+            "(e.g. via gl_to_locator.py site-mean fill) before passing "
+            "to ReLocator."
+        )
+    n_sites, n_samples = dosage.shape
+    mean_dosage = dosage.mean(axis=1)
+    minor_freq = np.minimum(mean_dosage, 2.0 - mean_dosage) / 2.0
+    implied_mac = minor_freq * 2.0 * n_samples
+    mask = implied_mac >= float(min_mac)
+    dosage = dosage[mask, :]
+    if max_snps is not None and max_snps < dosage.shape[0]:
+        idx = np.random.choice(dosage.shape[0], max_snps, replace=False)
+        dosage = dosage[np.sort(idx), :]
+    return np.ascontiguousarray(dosage, dtype=np.float32)
+
+
 def filter_snps(
     genotypes,
     min_mac: int = 1,

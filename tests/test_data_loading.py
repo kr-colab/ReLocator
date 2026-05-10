@@ -86,6 +86,108 @@ def test_load_genotypes_from_matrix_file():
         os.unlink(matrix_file)
 
 
+def test_load_genotypes_from_matrix_file_continuous_dosage():
+    """Test loading a float-dosage matrix bypasses the GenotypeArray round trip."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        f.write("sampleID\t1001\t2005\t3010\n")
+        f.write("sample1\t0.10\t0.95\t1.85\n")
+        f.write("sample2\t1.40\t1.95\t0.05\n")
+        f.write("sample3\t1.99\t0.00\t1.05\n")
+        matrix_file = f.name
+
+    try:
+        sample_df = pd.DataFrame(
+            {
+                "sampleID": ["sample1", "sample2", "sample3"],
+                "x": [10.0, 20.0, 30.0],
+                "y": [5.0, 15.0, 25.0],
+            }
+        )
+        config = {"sample_data": sample_df}
+        locator = Locator(config=config)
+
+        genotypes, samples = locator.load_genotypes(matrix=matrix_file)
+
+        # Continuous dosage path returns a float ndarray of shape
+        # (n_sites, n_samples) — the same layout that filter_snps emits for
+        # the integer path.
+        assert isinstance(genotypes, np.ndarray)
+        assert genotypes.dtype == np.float32
+        assert genotypes.shape == (3, 3)  # 3 SNPs, 3 samples
+        # Sample 1's site 1001 dosage should be 0.10 (continuous, not rounded).
+        np.testing.assert_allclose(genotypes[0, 0], 0.10, atol=1e-5)
+        np.testing.assert_array_equal(
+            samples, np.array(["sample1", "sample2", "sample3"])
+        )
+
+    finally:
+        os.unlink(matrix_file)
+
+
+def test_filter_genotypes_continuous_dosage_path():
+    """Test that _filter_genotypes routes a 2D float ndarray to the dosage filter."""
+    n_sites, n_samples = 50, 20
+    rng = np.random.default_rng(0)
+    # Continuous dosage matrix in [0, 2]; bias toward intermediate to avoid
+    # near-monomorphic columns being filtered out by min_mac.
+    dosage = rng.beta(2.0, 2.0, size=(n_sites, n_samples)).astype(np.float32) * 2.0
+
+    sample_df = pd.DataFrame(
+        {
+            "sampleID": [f"s{i}" for i in range(n_samples)],
+            "x": np.linspace(0.0, 50.0, n_samples),
+            "y": np.linspace(0.0, 50.0, n_samples),
+        }
+    )
+    locator = Locator(config={"sample_data": sample_df, "min_mac": 2})
+    out = locator._filter_genotypes(dosage)
+
+    # Shape preserved (no biallelic filtering for continuous dosage); output is
+    # contiguous float32 ready to feed the network.
+    assert isinstance(out, np.ndarray)
+    assert out.dtype == np.float32
+    assert out.shape[1] == n_samples
+    # Values must remain continuous (not rounded back to 0/1/2).
+    assert not np.array_equal(out, np.round(out))
+
+
+def test_filter_dosage_matrix_skips_legacy_path():
+    """Filter free-function handles continuous dosage without invoking ``filter_snps_legacy``.
+
+    ``filter_snps_legacy`` calls ``.count_alleles()`` — which only exists on
+    ``allel.GenotypeArray`` — and raises AttributeError on a continuous-dosage
+    ndarray. This test confirms that ``filter_dosage_matrix`` (the free function
+    used by both training- and prediction-path dispatch in ``locator/data/filters.py``)
+    handles this case directly, and that the legacy filter would in fact fail
+    if it were dispatched here.
+    """
+    from locator.data import filter_dosage_matrix, filter_snps_legacy
+
+    n_sites, n_samples = 80, 30
+    rng = np.random.default_rng(0)
+    dosage = rng.beta(2.0, 2.0, size=(n_sites, n_samples)).astype(np.float32) * 2.0
+
+    out = filter_dosage_matrix(dosage, min_mac=2, max_snps=None)
+    assert isinstance(out, np.ndarray)
+    assert out.dtype == np.float32
+    assert out.ndim == 2
+    assert out.shape[1] == n_samples
+
+    # Sanity: the legacy filter must NOT be called on a float ndarray; if it
+    # were, this would raise AttributeError on .count_alleles().
+    with pytest.raises(AttributeError, match="count_alleles"):
+        filter_snps_legacy(dosage, min_mac=2, max_snps=None, impute=False)
+
+
+def test_filter_dosage_matrix_rejects_nan():
+    """NaN in dosage must raise rather than silently masking out every site."""
+    from locator.data import filter_dosage_matrix
+
+    dosage = np.array([[0.5, 1.0, 1.5], [np.nan, 0.7, 0.9]], dtype=np.float32)
+    with pytest.raises(ValueError, match="NaN"):
+        filter_dosage_matrix(dosage, min_mac=1)
+
+
 def test_load_genotypes_invalid_values():
     """Test that invalid genotype values raise an error."""
     # Create genotype data with invalid values
