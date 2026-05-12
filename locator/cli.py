@@ -26,6 +26,15 @@ def parse_args():
         "msp2\\t2\\t0\\t...",
     )
     parser.add_argument(
+        "--microsat",
+        help="tab-delimited microsatellite genotype table with 'sampleID' "
+        "as the first column and one column per locus (pair format, "
+        "e.g. '12,14'), or two consecutive columns per locus (two-column "
+        "format). Loaded natively into Locator as a multi-allelic dosage "
+        "matrix; missing genotypes are imputed to per-allele site mean. "
+        "No preprocessing script is required.",
+    )
+    parser.add_argument(
         "--sample_data",
         help="tab-delimited text file with columns\
                          'sampleID \t x \t y'.\
@@ -210,7 +219,7 @@ def main():  # noqa: C901
 
     # Load and sort data
     genotypes, samples = loc.load_genotypes(
-        vcf=args.vcf, zarr=args.zarr, matrix=args.matrix
+        vcf=args.vcf, zarr=args.zarr, matrix=args.matrix, microsat=args.microsat
     )
     sample_data, locs = loc.sort_samples(samples, args.sample_data)
 
