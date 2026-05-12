@@ -172,8 +172,8 @@ def filter_dosage_matrix(
     if np.isnan(dosage).any():
         raise ValueError(
             "dosage matrix contains NaN values; impute upstream "
-            "(e.g. via gl_to_locator.py site-mean fill) before passing "
-            "to ReLocator."
+            "before passing to ReLocator. For GL inputs, use the native "
+            "loader (load_genotypes(gl=..., bam_list=...))."
         )
     n_sites, n_samples = dosage.shape
     mean_dosage = dosage.mean(axis=1)

@@ -138,8 +138,9 @@ class DataLoaderMixin:
           applies MAC/max_snps filters on the continuous values directly,
           skipping biallelic checks (which are not meaningful for continuous
           dosage). NaN values are silently dropped at the MAC filter —
-          callers should impute upstream (gl_to_locator.py site-mean fill
-          handles this for ANGSD beagle inputs).
+          callers should impute upstream. For GL inputs, use the native
+          loader (`load_genotypes(gl=..., bam_list=...)`) which performs
+          site-mean imputation inside the loader.
 
         Args:
             matrix_path: Path to tab-delimited matrix file containing genotype data.
@@ -162,8 +163,7 @@ class DataLoaderMixin:
             if not ((dosage >= 0.0) & (dosage <= 2.0)).all():
                 raise ValueError(
                     "Continuous-dosage matrix has values outside [0, 2]; "
-                    "expected expected-dosage encoding (e.g. from "
-                    "scripts/gl_to_locator.py)."
+                    "expected expected-dosage encoding."
                 )
             return dosage, samples
 
@@ -257,8 +257,8 @@ class DataLoaderMixin:
           the dosage scalar collapses. Missing samples are imputed with the
           per-site mean GL triplet.
 
-        Filter thresholds mirror ``scripts/gl_to_locator.py`` defaults and
-        are not currently surfaced as CLI flags.
+        Filter thresholds match those documented in the native GL loader
+        and are not currently surfaced as CLI flags.
         """
         if gl_mode not in ("dosage", "full_gl"):
             raise ValueError(f"gl_mode must be 'dosage' or 'full_gl', got {gl_mode!r}")

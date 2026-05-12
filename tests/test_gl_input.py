@@ -1,7 +1,6 @@
 """Tests for DataLoaderMixin._load_from_gl and the load_genotypes plumbing.
 
-The native GL loader replaces the previous gl_to_locator.py preprocessing
-step. Tests exercise the public surface via Locator(...).load_genotypes(gl=...).
+Tests exercise the native GL loader public surface via Locator(...).load_genotypes(gl=...).
 """
 
 from __future__ import annotations
