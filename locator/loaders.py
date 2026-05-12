@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 import zarr
 
+from locator import _microsat as _ms
+
 
 def _counts_to_genotype_array(gmat):
     """Convert a genotype count matrix (0/1/2) to an allel.GenotypeArray.
@@ -171,7 +173,59 @@ class DataLoaderMixin:
         genotypes = _counts_to_genotype_array(gmat)
         return genotypes, samples
 
-    def load_genotypes(self, vcf=None, zarr=None, matrix=None):  # noqa: C901
+    def _load_from_microsat(self, microsat_path):
+        """Load microsatellite genotypes as a multi-allelic dosage matrix.
+
+        The input is a tab-delimited file with a 'sampleID' column and one
+        column per locus (pair format: ``"12,14"``) or two consecutive
+        columns per locus (two-column format). Each unique allele at each
+        locus becomes its own column with values 0/1/2 (one-hot allele
+        counts encoding the diploid genotype). Missing genotypes are
+        imputed to the per-allele site mean.
+
+        Returns the (n_sites, n_samples) float dosage representation used
+        by the continuous-dosage path in ``_filter_genotypes`` (same shape
+        and dtype as the float branch of ``_load_from_matrix``).
+        """
+        df = pd.read_csv(microsat_path, sep="\t", dtype=str)
+        if "sampleID" not in df.columns:
+            raise ValueError(
+                f"Microsat input {microsat_path} must have a 'sampleID' column."
+            )
+        if df["sampleID"].duplicated().any():
+            dups = df.loc[df["sampleID"].duplicated(), "sampleID"].unique().tolist()
+            raise ValueError(
+                f"Duplicate sampleIDs in microsat input: {dups}. "
+                f"Each sample must appear once."
+            )
+
+        fmt = _ms.detect_format(df)
+        if fmt == "two_column":
+            df = _ms.convert_two_column_to_pair(df)
+
+        df = df.set_index("sampleID")
+        loci = list(df.columns)
+
+        catalog = _ms.build_allele_catalog(
+            df, loci, min_allele_freq=0.01, max_locus_missing=1.0
+        )
+        active_loci = [locus for locus in loci if catalog[locus]]
+        if not active_loci:
+            raise ValueError(
+                f"No loci have any alleles after MAF filtering "
+                f"({len(loci)} loci checked); check the input for "
+                f"per-locus missingness or raise min_allele_freq."
+            )
+
+        matrix, _col_names = _ms.encode_dosage_block(df, active_loci, catalog)
+        # encode_dosage_block returns (n_samples, K). The continuous-dosage
+        # contract is (n_sites, n_samples), matching _load_from_matrix's
+        # float branch.
+        dosage = matrix.T.astype(np.float32, copy=False)
+        samples = np.array(df.index, dtype=object)
+        return dosage, samples
+
+    def load_genotypes(self, vcf=None, zarr=None, matrix=None, microsat=None):  # noqa: C901
         """Load genotype data from various input sources.
 
         This method can load genotype data from:
@@ -179,6 +233,7 @@ class DataLoaderMixin:
         2. A VCF file
         3. A zarr file (scikit-allel or bio2zarr format)
         4. A tab-delimited matrix file
+        5. A tab-delimited microsatellite genotype table
 
         For windowed analysis, SNP positions must be available either from:
         - Column names in the genotype DataFrame
@@ -189,11 +244,14 @@ class DataLoaderMixin:
             vcf (str, optional): Path to VCF format genotype data
             zarr (str, optional): Path to zarr format genotype data
             matrix (str, optional): Path to tab-delimited matrix file
+            microsat (str, optional): Path to tab-delimited microsatellite genotype table
 
         Returns
         -------
             tuple: (genotypes, samples) where:
                 - genotypes is an allel.GenotypeArray of shape (n_sites, n_samples, 2)
+                  for VCF/zarr/integer-matrix inputs, or a float32 ndarray of shape
+                  (n_sites, n_samples) for continuous-dosage (matrix float / microsat) inputs
                 - samples is a numpy array of sample IDs
 
         Examples
@@ -214,6 +272,9 @@ class DataLoaderMixin:
 
             >>> # Using matrix file
             >>> genotypes, samples = locator.load_genotypes(matrix="path/to/geno.txt")
+
+            >>> # Using microsatellite genotypes
+            >>> genotypes, samples = locator.load_genotypes(microsat="path/to/microsats.tsv")
 
         Raises
         ------
@@ -262,10 +323,13 @@ class DataLoaderMixin:
         elif matrix is not None:
             return self._load_from_matrix(matrix)
 
+        elif microsat is not None:
+            return self._load_from_microsat(microsat)
+
         else:
             raise ValueError(
                 "No genotype data provided. Either initialize with genotype_data DataFrame "
-                "or provide vcf/zarr/matrix path."
+                "or provide vcf/zarr/matrix/microsat path."
             )
 
     def sort_samples(self, samples=None, sample_data_file=None, reorder=True):  # noqa: C901
