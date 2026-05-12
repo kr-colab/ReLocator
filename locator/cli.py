@@ -35,6 +35,12 @@ def parse_args():
         "No preprocessing script is required.",
     )
     parser.add_argument(
+        "--microsat_maf",
+        default=0.01,
+        type=float,
+        help="Drop microsat alleles below this per-locus frequency. default: 0.01",
+    )
+    parser.add_argument(
         "--sample_data",
         help="tab-delimited text file with columns\
                          'sampleID \t x \t y'.\
@@ -219,7 +225,11 @@ def main():  # noqa: C901
 
     # Load and sort data
     genotypes, samples = loc.load_genotypes(
-        vcf=args.vcf, zarr=args.zarr, matrix=args.matrix, microsat=args.microsat
+        vcf=args.vcf,
+        zarr=args.zarr,
+        matrix=args.matrix,
+        microsat=args.microsat,
+        microsat_min_allele_freq=args.microsat_maf,
     )
     sample_data, locs = loc.sort_samples(samples, args.sample_data)
 

@@ -44,9 +44,7 @@ def test_catalog_keeps_all_alleles_above_maf():
             {"sampleID": "s4", "L1": "10,11"},
         ]
     )
-    catalog = ms.build_allele_catalog(
-        df, ["L1"], min_allele_freq=0.0, max_locus_missing=1.0
-    )
+    catalog = ms.build_allele_catalog(df, ["L1"], min_allele_freq=0.0)
     assert catalog["L1"] == [10, 11, 12]
 
 
@@ -54,9 +52,7 @@ def test_catalog_drops_rare_alleles():
     rows = [{"sampleID": f"s{i}", "L1": "10,11"} for i in range(99)]
     rows.append({"sampleID": "s99", "L1": "10,99"})
     df = _df_pairs(rows)
-    catalog = ms.build_allele_catalog(
-        df, ["L1"], min_allele_freq=0.05, max_locus_missing=1.0
-    )
+    catalog = ms.build_allele_catalog(df, ["L1"], min_allele_freq=0.05)
     assert 99 not in catalog["L1"]
     assert 10 in catalog["L1"] and 11 in catalog["L1"]
 
@@ -75,6 +71,19 @@ def test_dosage_block_basic():
     np.testing.assert_array_equal(
         matrix, np.array([[1, 1], [2, 0], [0, 2]], dtype=np.float32)
     )
+
+
+def test_dosage_block_ignores_alleles_not_in_catalog():
+    """A sample carrying a MAF-dropped allele still gets valid dosages on its
+    retained alleles; the dropped allele simply has no column at all."""
+    rows = [{"sampleID": f"s{i}", "L1": "10,11"} for i in range(99)]
+    rows.append({"sampleID": "s99", "L1": "10,99"})
+    df = _df_pairs(rows)
+    catalog = ms.build_allele_catalog(df, ["L1"], min_allele_freq=0.05)
+    assert catalog["L1"] == [10, 11]
+    matrix, col_names = ms.encode_dosage_block(df, ["L1"], catalog)
+    assert col_names == ["dosage_L1_10", "dosage_L1_11"]
+    np.testing.assert_array_equal(matrix[-1], np.array([1.0, 0.0], dtype=np.float32))
 
 
 def test_dosage_block_imputes_missing_with_site_mean():

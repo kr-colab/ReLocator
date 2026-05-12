@@ -173,7 +173,7 @@ class DataLoaderMixin:
         genotypes = _counts_to_genotype_array(gmat)
         return genotypes, samples
 
-    def _load_from_microsat(self, microsat_path):
+    def _load_from_microsat(self, microsat_path, min_allele_freq=0.01):
         """Load microsatellite genotypes as a multi-allelic dosage matrix.
 
         The input is a tab-delimited file with a 'sampleID' column and one
@@ -182,6 +182,11 @@ class DataLoaderMixin:
         locus becomes its own column with values 0/1/2 (one-hot allele
         counts encoding the diploid genotype). Missing genotypes are
         imputed to the per-allele site mean.
+
+        Args:
+            microsat_path: Path to the tab-delimited microsat genotype table.
+            min_allele_freq: Drop alleles below this per-locus frequency.
+                Default 0.01.
 
         Returns the (n_sites, n_samples) float dosage representation used
         by the continuous-dosage path in ``_filter_genotypes`` (same shape
@@ -206,15 +211,19 @@ class DataLoaderMixin:
         df = df.set_index("sampleID")
         loci = list(df.columns)
 
-        catalog = _ms.build_allele_catalog(
-            df, loci, min_allele_freq=0.01, max_locus_missing=1.0
-        )
+        catalog = _ms.build_allele_catalog(df, loci, min_allele_freq=min_allele_freq)
         active_loci = [locus for locus in loci if catalog[locus]]
+        n_dropped = len(loci) - len(active_loci)
+        if n_dropped:
+            print(
+                f"Dropped {n_dropped} fully-missing locus/loci "
+                f"({len(active_loci)}/{len(loci)} retained)."
+            )
         if not active_loci:
             raise ValueError(
                 f"No loci have any alleles after MAF filtering "
                 f"({len(loci)} loci checked); check the input for "
-                f"per-locus missingness or raise min_allele_freq."
+                f"per-locus missingness or lower min_allele_freq."
             )
 
         matrix, _col_names = _ms.encode_dosage_block(df, active_loci, catalog)
@@ -225,7 +234,14 @@ class DataLoaderMixin:
         samples = np.array(df.index, dtype=object)
         return dosage, samples
 
-    def load_genotypes(self, vcf=None, zarr=None, matrix=None, microsat=None):  # noqa: C901
+    def load_genotypes(
+        self,
+        vcf=None,
+        zarr=None,
+        matrix=None,
+        microsat=None,
+        microsat_min_allele_freq=0.01,
+    ):  # noqa: C901
         """Load genotype data from various input sources.
 
         This method can load genotype data from:
@@ -245,6 +261,8 @@ class DataLoaderMixin:
             zarr (str, optional): Path to zarr format genotype data
             matrix (str, optional): Path to tab-delimited matrix file
             microsat (str, optional): Path to tab-delimited microsatellite genotype table
+            microsat_min_allele_freq (float, optional): Drop microsat alleles below
+                this per-locus frequency. Default 0.01.
 
         Returns
         -------
@@ -324,7 +342,9 @@ class DataLoaderMixin:
             return self._load_from_matrix(matrix)
 
         elif microsat is not None:
-            return self._load_from_microsat(microsat)
+            return self._load_from_microsat(
+                microsat, min_allele_freq=microsat_min_allele_freq
+            )
 
         else:
             raise ValueError(

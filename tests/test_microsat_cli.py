@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _write_pair_tsv(path: Path) -> None:
     rows = [
@@ -28,6 +30,7 @@ def _write_sample_data(path: Path, ids: list[str]) -> None:
     path.write_text("\n".join("\t".join(r) for r in rows) + "\n")
 
 
+@pytest.mark.slow
 def test_cli_microsat_runs_end_to_end(tmp_path: Path):
     if shutil.which("locator") is None:
         cmd_prefix = [sys.executable, "-m", "locator.cli"]

@@ -24,7 +24,11 @@ genotypes, samples = loc.load_genotypes(microsat="data/microsats.tsv")
 Tab-delimited, one row per sample. First column is `sampleID`. Two layouts
 are auto-detected:
 
-**Pair format** — one column per locus, alleles separated by `,` `/` `|` or space:
+**Pair format** — one column per locus, alleles separated by `,` `/` or `|`.
+Space-separated cells (`"10 11"`) parse correctly once a file is recognised
+as pair format, but they are *not* auto-detected as pair format because CSV
+whitespace would create ambiguity; if every cell is space-separated, convert
+to one of the supported separators or fall into the two-column layout below.
 
 ```
 sampleID    L1      L2
@@ -51,8 +55,11 @@ a one-hot count encoding the diploid genotype. A locus with three alleles
 {10, 11, 12} expands to three columns; a sample with genotype `10,12`
 gets dosages `[1, 0, 1]` across those columns.
 
-Rare alleles are dropped at frequency < 1% (currently fixed; configurable
-via the script-mode entry was removed when the loader went native).
+Rare alleles are dropped below a per-locus frequency threshold (default
+1%). Override via `--microsat_maf <float>` on the CLI or
+`load_genotypes(microsat=..., microsat_min_allele_freq=<float>)` from the
+API. Loci with no parseable genotypes in any sample are dropped before
+encoding (a one-line message reports how many).
 
 ## Missing data
 

@@ -7,7 +7,6 @@ The public entry points are `loc.load_genotypes(microsat=...)` and the
 
 from __future__ import annotations
 
-import sys
 from collections import defaultdict
 from typing import Literal
 
@@ -47,40 +46,26 @@ def build_allele_catalog(
     df: pd.DataFrame,
     loci: list[str],
     min_allele_freq: float,
-    max_locus_missing: float,
 ) -> dict[str, list[int]]:
     """For each locus, return the sorted list of alleles passing MAF.
 
-    Per-locus missing rate is reported on stderr; loci above
-    ``max_locus_missing`` get a warning but the alleles are still returned
-    (caller decides whether to drop the locus).
+    Fully-missing loci (no parseable genotypes in any sample) map to an
+    empty list; the caller is responsible for dropping those before
+    encoding.
     """
-    n_samples = len(df)
     catalog: dict[str, list[int]] = {}
 
     for locus in loci:
         allele_counts: dict[int, int] = defaultdict(int)
         total_alleles = 0
-        n_missing = 0
 
         for val in df[locus]:
             a1, a2 = parse_genotype(val)
             if a1 is None:
-                n_missing += 1
-            else:
-                allele_counts[a1] += 1
-                allele_counts[a2] += 1
-                total_alleles += 2
-
-        missing_frac = n_missing / n_samples if n_samples > 0 else 0.0
-
-        if missing_frac > max_locus_missing:
-            print(
-                f"  WARNING: locus {locus} missing rate {100 * missing_frac:.1f}% "
-                f"({n_missing}/{n_samples}); the locus will be included — consider "
-                f"dropping it manually if needed.",
-                file=sys.stderr,
-            )
+                continue
+            allele_counts[a1] += 1
+            allele_counts[a2] += 1
+            total_alleles += 2
 
         if total_alleles == 0:
             catalog[locus] = []
@@ -126,6 +111,10 @@ def encode_dosage_block(
     matrix = np.zeros((n_samples, n_features), dtype=np.float32)
     missing = np.zeros((n_samples, len(active_loci)), dtype=bool)
 
+    # Double-loop with per-cell df.loc + parse_genotype is fine for typical
+    # microsat panels (n_loci * n_samples in the thousands). For larger
+    # panels, vectorize via df.itertuples() / df.values and a single parse
+    # pass shared with build_allele_catalog.
     for i, sid in enumerate(df.index):
         for li, locus in enumerate(active_loci):
             if not catalog[locus]:
