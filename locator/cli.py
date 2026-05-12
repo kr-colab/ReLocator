@@ -41,6 +41,28 @@ def parse_args():
         help="Drop microsat alleles below this per-locus frequency. default: 0.01",
     )
     parser.add_argument(
+        "--gl",
+        help="ANGSD beagle.gz file (from -doGlf 2) containing genotype "
+        "likelihoods. Loaded natively into Locator as expected dosage or "
+        "as full GL triplets (see --gl_mode). Requires --bam_list to derive "
+        "sample IDs in the same order they appear in the beagle columns.",
+    )
+    parser.add_argument(
+        "--bam_list",
+        help="BAM file list used in the ANGSD run (one path per line). "
+        "Sample IDs are derived from Path(bam).stem and must appear in the "
+        "same order as the beagle GL columns. Required when --gl is set.",
+    )
+    parser.add_argument(
+        "--gl_mode",
+        choices=("dosage", "full_gl"),
+        default="dosage",
+        help="GL encoding mode. 'dosage' (default) uses expected dosage "
+        "E[geno] = P(AB) + 2*P(BB); 'full_gl' uses three rows per site "
+        "(AA / AB / BB) preserving genotype uncertainty. Ignored unless "
+        "--gl is set.",
+    )
+    parser.add_argument(
         "--sample_data",
         help="tab-delimited text file with columns\
                          'sampleID \t x \t y'.\
@@ -230,6 +252,9 @@ def main():  # noqa: C901
         matrix=args.matrix,
         microsat=args.microsat,
         microsat_min_allele_freq=args.microsat_maf,
+        gl=args.gl,
+        bam_list=args.bam_list,
+        gl_mode=args.gl_mode,
     )
     sample_data, locs = loc.sort_samples(samples, args.sample_data)
 
