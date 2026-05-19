@@ -188,7 +188,9 @@ class GPUOptimizer:
                             )
                         ],
                     )
-            except RuntimeError as e:
+            except (RuntimeError, ValueError) as e:
+                # Both can fire when GPU is already configured — e.g. a Ray
+                # actor that installed a memory cap before Locator init runs.
                 warnings.warn(f"GPU memory configuration failed: {e}")
 
     @staticmethod

@@ -269,17 +269,24 @@ def _spawn(actor_cls, gpu_ids, gpu_fraction, data_ref, gpu_mem_mb):
     """
     if not gpu_ids:
         gpu_assignments = [-1]
-        gpu_fraction = 0.0
+        effective_fraction = 0.0
     else:
         workers_per_gpu = max(1, int(round(1.0 / gpu_fraction)))
+        # Quantise the per-actor reservation so workers_per_gpu of them fit
+        # *exactly* in one GPU. Passing the caller's gpu_fraction verbatim
+        # (e.g. 0.34 × 3 = 1.02 per GPU) over-subscribes Ray's resource
+        # accounting and leaves the last actor unschedulable, hanging the
+        # pool's ``ready()`` barrier indefinitely. Actors are persistent
+        # (unlike tasks), so unschedulable actors never get a turn.
+        effective_fraction = 1.0 / workers_per_gpu
         gpu_assignments = [
             gpu_ids[i % len(gpu_ids)] for i in range(len(gpu_ids) * workers_per_gpu)
         ]
 
     actors = [
-        actor_cls.options(num_gpus=gpu_fraction).remote(
+        actor_cls.options(num_gpus=effective_fraction).remote(
             gpu_id=gpu_id,
-            gpu_fraction=gpu_fraction,
+            gpu_fraction=effective_fraction,
             data_ref=data_ref,
             gpu_mem_mb=gpu_mem_mb,
         )

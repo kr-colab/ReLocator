@@ -47,12 +47,6 @@ def setup_gpu(gpu_number=None):
             # Use first GPU by default
             tf.config.set_visible_devices(gpus[0], "GPU")
             print(f"Using GPU 0: {gpus[0].name}")
-
-        # Enable memory growth for all visible GPUs
-        for gpu in tf.config.get_visible_devices("GPU"):
-            tf.config.experimental.set_memory_growth(gpu, True)
-
-        return True
     except RuntimeError as e:
         print(f"GPU configuration error: {e}")
         print("Falling back to CPU.")
@@ -61,6 +55,18 @@ def setup_gpu(gpu_number=None):
         print(f"GPU selection error: {e}")
         print("Falling back to CPU.")
         return False
+
+    # Memory growth is best-effort. When a Ray actor has already installed
+    # a hard memory cap via ``set_logical_device_configuration`` before
+    # Locator init runs, this call raises ValueError — that's fine, the
+    # GPU is still usable under the existing cap.
+    for gpu in tf.config.get_visible_devices("GPU"):
+        try:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        except (RuntimeError, ValueError):
+            pass
+
+    return True
 
 
 class Locator(
