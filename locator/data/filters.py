@@ -5,8 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+import allel
 import numpy as np
 from tqdm import tqdm
+
+from ._numba_kernels import HAVE_NUMBA, count_ref_alt_diploid
 
 
 @dataclass
@@ -106,22 +109,32 @@ def normalize_locs_params(
     return params, unnormedlocs, normedlocs
 
 
-def impute_missing(genotypes) -> np.ndarray:
+def impute_missing(genotypes, alt_counts: Optional[np.ndarray] = None) -> np.ndarray:
     """Replace missing data with binomial draws from allele frequency.
 
     Args:
         genotypes: GenotypeArray with missing data
+        alt_counts: Optional precomputed per-site alt allele counts of shape
+            ``(n_sites,)``. When provided, the internal ``count_alleles()``
+            call is skipped — used by ``filter_snps`` to reuse counts from
+            its numba kernel.
 
     Returns
     -------
         Allele counts array with imputed values
     """
     print("imputing missing data")
-    dc = genotypes.count_alleles()[:, 1]
+    if alt_counts is None:
+        alt_counts = genotypes.count_alleles()[:, 1]
     ac = genotypes.to_allele_counts()[:, :, 1]
     missingness = genotypes.is_missing()
-    ninds = np.array([np.sum(x) for x in ~missingness])
-    af = np.array([dc[x] / (2 * ninds[x]) for x in range(len(ninds))])
+    # Denominator is the true non-missing allele count per site, not
+    # 2x the number of (partly-called) non-missing samples — a half-missing
+    # diploid call like (-1, 1) contributes one allele, not two, so the
+    # latter overcounts and can yield AF > 1 (or NaN at a fully missing site).
+    n_called_alleles = (np.asarray(genotypes.values) >= 0).sum(axis=(1, 2))
+    af = np.zeros(len(alt_counts), dtype=np.float64)
+    np.divide(alt_counts, n_called_alleles, out=af, where=n_called_alleles > 0)
 
     for i in tqdm(range(np.shape(ac)[0])):
         for j in range(np.shape(ac)[1]):
@@ -217,36 +230,52 @@ def filter_snps(
     n_mac_filtered = 0
     n_random_subset = 0
 
-    # Count alleles once and reuse
-    allele_counts = genotypes.count_alleles()
-
-    # Filter for biallelic sites
-    biallel = allele_counts.is_biallelic()
-    n_biallelic_filtered = n_snps_original - np.sum(biallel)
-
-    # Combine biallelic and MAC filters if needed
-    if min_mac > 1:
-        # Get derived allele counts from already computed allele_counts
-        derived_counts = allele_counts[biallel, 1]
-        mac_filter = derived_counts >= min_mac
-        n_mac_filtered = len(mac_filter) - np.sum(mac_filter)
-        # Combine filters
-        combined_filter = np.zeros(n_snps_original, dtype=bool)
-        combined_filter[biallel] = mac_filter
-        genotypes = genotypes[combined_filter, :, :]
+    # For diploid data use the parallel numba kernel — scikit-allel's
+    # count_alleles is single-threaded Cython and dominates wall time on
+    # WGS-scale inputs. Both branches produce a full-length ``biallel``
+    # mask and a full-length ``alt_counts`` array so downstream filter and
+    # impute logic is shared.
+    if (
+        HAVE_NUMBA
+        and isinstance(genotypes, allel.GenotypeArray)
+        and genotypes.ploidy == 2
+    ):
+        ref_counts, alt_counts, has_higher = count_ref_alt_diploid(
+            np.asarray(genotypes.values)
+        )
+        biallel = (ref_counts > 0) & (alt_counts > 0) & ~has_higher
     else:
-        genotypes = genotypes[biallel, :, :]
+        allele_counts = genotypes.count_alleles()
+        biallel = np.asarray(allele_counts.is_biallelic())
+        # max_allele can be 0 for an all-monomorphic input; in that case
+        # `biallel` is uniformly False and the alt count is just zeros.
+        if allele_counts.shape[1] > 1:
+            alt_counts = np.asarray(allele_counts[:, 1])
+        else:
+            alt_counts = np.zeros(n_snps_original, dtype=np.int32)
 
-    # Impute or convert to allele counts
+    n_biallelic_filtered = n_snps_original - np.sum(biallel)
+    if min_mac > 1:
+        combined_filter = biallel & (alt_counts >= min_mac)
+        n_mac_filtered = np.sum(biallel) - np.sum(combined_filter)
+    else:
+        combined_filter = biallel
+
+    passing_idx = np.where(combined_filter)[0]
+
+    # Subsample passing indices before materializing allele counts so
+    # to_allele_counts/impute only runs on the chosen subset.
+    if max_snps is not None and max_snps < len(passing_idx):
+        n_random_subset = len(passing_idx) - max_snps
+        sel = np.random.choice(len(passing_idx), max_snps, replace=False)
+        passing_idx = np.sort(passing_idx[sel])
+
+    genotypes = genotypes[passing_idx, :, :]
+
     if impute:
-        ac = impute_missing(genotypes)
+        ac = impute_missing(genotypes, alt_counts=alt_counts[passing_idx])
     else:
         ac = genotypes.to_allele_counts()[:, :, 1]
-
-    # Random subset if requested
-    if max_snps is not None and max_snps < ac.shape[0]:
-        n_random_subset = ac.shape[0] - max_snps
-        ac = ac[np.random.choice(range(ac.shape[0]), max_snps, replace=False), :]
 
     # Create stats
     stats = FilterStats(
