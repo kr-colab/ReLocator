@@ -655,12 +655,12 @@ class TrainingMixin:
         # In window analysis, 'test' split contains the holdout samples
         self._store_holdout_state(index_set.get_split("test"), normalized_locs)
 
-        # For window analysis, we need to split the train indices into train/val
-        train_indices = index_set.get_split("train")
+        # For window analysis, we need to split the train indices into train/val.
+        # IndexSet arrays shipped via Ray are read-only; copy before shuffling.
+        train_indices = np.array(index_set.get_split("train"), copy=True)
         train_split = self.config.get("train_split", 0.9)
         n_train = int(len(train_indices) * train_split)
 
-        # Shuffle and split
         np.random.shuffle(train_indices)
         actual_train = train_indices[:n_train]
         actual_val = train_indices[n_train:]

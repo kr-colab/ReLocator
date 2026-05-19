@@ -197,10 +197,10 @@ def parallel_k_fold_holdouts(  # noqa: C901
 
     completed = 0
     for result in pool.map_unordered(
-        lambda actor, args: actor.run_fold.remote(args[0], args[1]),
+        lambda actor, args: actor.run_holdout.remote(args[0], args[1]),
         fold_args,
     ):
-        _append_fold_to_csv(output_path, result["fold"], result["rows"])
+        _append_fold_to_csv(output_path, result["idx"], result["rows"])
         completed += 1
         if pbar is not None:
             pbar.update(1)
