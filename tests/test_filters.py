@@ -216,6 +216,37 @@ class TestImputation:
         assert (imputed >= 0).all()
         assert (imputed <= 2).all()  # diploid, so max is 2
 
+    def test_impute_handles_half_and_fully_missing(self):
+        """Imputation must not produce NaN AF or AF>1 on edge cases.
+
+        - Half-missing calls (-1, x) overcount in a naive ninds denominator.
+        - A fully-missing site yields divide-by-zero in the AF formula.
+        Either case previously crashed np.random.binomial.
+        """
+        # Site 0: half-missing calls. Naive (alt / 2*ninds) = 3 / (2*3) = 0.5 OK
+        # Site 1: mostly half-missing alt calls. alt=3, ninds=3, naive=3/6=0.5 OK
+        # Site 2: pure alt half-missing. alt=4, ninds=4, naive=4/8=0.5 OK
+        # Site 3: mix of (1,1) and (-1, 1). alt=5, ninds=3, naive=5/6>0.83 OK
+        # Site 4: severe — all (1, 1) and one (-1, -1). alt=8, ninds=4,
+        #         naive=8/8=1.0 (boundary). Add (1, -1) to push naive past 1.
+        # Site 5: fully missing — should impute to 0 (AF=0) silently.
+        genotype_data = np.array(
+            [
+                [[-1, 1], [-1, 1], [-1, 1], [-1, 0], [-1, 0]],
+                [[-1, 1], [-1, 1], [-1, 1], [-1, 0], [0, 1]],
+                [[-1, 1], [-1, 1], [-1, 1], [-1, 1], [0, 1]],
+                [[1, 1], [1, 1], [-1, 1], [-1, 1], [0, 0]],
+                [[1, 1], [1, 1], [1, 1], [1, -1], [-1, -1]],
+                [[-1, -1], [-1, -1], [-1, -1], [-1, -1], [-1, -1]],
+            ],
+            dtype=np.int8,
+        )
+        genotypes = allel.GenotypeArray(genotype_data)
+        imputed = impute_missing(genotypes)
+        assert imputed.shape == (6, 5)
+        assert np.isfinite(imputed).all()
+        assert (imputed >= 0).all() and (imputed <= 2).all()
+
 
 def test_imports_backward_compatible():
     """Test that functions can be imported from main locator package."""
