@@ -1,109 +1,101 @@
-"""Holdout replicate parallel methods."""
+"""Holdout-replicate parallel methods.
 
+A holdout replicate is just a k-fold-style train_holdout call with a chosen
+set of held-out indices; the work is the same as one fold of k-fold CV. This
+module dispatches replicates across the same ``FoldWorker`` actor pool used
+by ``locator.parallel.kfold`` and aggregates predictions into the wide-format
+DataFrame ``[sampleID, x_rep0, y_rep0, x_rep1, y_rep1, ...]`` that the
+existing API contract requires.
+
+Per-replicate predictions are streamed to a long-format checkpoint CSV
+(``{out}_holdouts_chunks.csv``) as each replicate completes; the wide-format
+output is pivoted from that file at the end. ``resume=True`` (default) skips
+replicates already present in the checkpoint.
+"""
+
+from __future__ import annotations
+
+import os
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
 import ray
+from ray.util import ActorPool
 
+from ._actor import DEFAULT_GPU_MEM_MB, make_fold_workers
 from ._helpers import (
-    _collect_ray_results,
-    _create_worker_locator,
     _ensure_ray_initialized,
     _precalculate_bandwidth,
     _restore_bandwidth,
-    _setup_worker_env,
 )
 
 
-def _create_ray_holdout_worker(gpu_fraction: float = 1.0):
-    """
-    Factory function to create a Ray worker for holdout analysis.
+def _holdout_chunk_path(locator) -> str:
+    return f"{locator.config['out']}_holdouts_chunks.csv"
 
-    Args:
-        gpu_fraction: Fraction of GPU to allocate per worker
 
-    Returns
-    -------
-        Ray remote function configured with specified GPU fraction
-    """
+def _holdout_output_path(locator) -> str:
+    return f"{locator.config['out']}_holdouts_predlocs.csv"
 
-    @ray.remote(num_gpus=gpu_fraction)
-    def _ray_holdout_worker(
-        rep_idx: int,
-        gpu_id: int,
-        data: dict,
-        holdout_indices: np.ndarray,
-    ) -> Dict[str, Any]:
-        """
-        Ray worker function that runs a single holdout replicate on a specific GPU.
 
-        Args:
-            rep_idx: Replicate index
-            gpu_id: GPU ID to use
-            data: Shared data dict (resolved from Ray object store)
-            holdout_indices: Indices to hold out for this replicate
+def _resume_completed_reps(chunk_path: str) -> set[int]:
+    if not os.path.exists(chunk_path):
+        return set()
+    try:
+        existing = pd.read_csv(chunk_path)
+    except (pd.errors.EmptyDataError, FileNotFoundError):
+        return set()
+    if existing.empty or "rep" not in existing.columns:
+        return set()
+    return set(existing["rep"].astype(int).tolist())
 
-        Returns
-        -------
-            Dictionary with predictions and metadata
-        """
-        _setup_worker_env(gpu_id)
 
-        import allel
-        import tensorflow as tf
+def _append_rep_to_chunks(chunk_path: str, rep: int, rows: list) -> None:
+    write_header = not os.path.exists(chunk_path) or os.path.getsize(chunk_path) == 0
+    with open(chunk_path, "a") as f:
+        if write_header:
+            f.write("sampleID,x_pred,y_pred,rep\n")
+        for r in rows:
+            f.write(f"{r['sampleID']},{r['x_pred']},{r['y_pred']},{rep}\n")
 
-        tf.get_logger().setLevel("ERROR")
 
-        print(f"Worker processing replicate {rep_idx} on GPU {gpu_id}")
+def _resolve_holdout_indices(
+    holdout_indices,
+    holdout_sample_ids,
+    samples,
+    known_idx,
+    k,
+    n_reps,
+):
+    """Materialise per-replicate holdout index arrays from the various input forms."""
+    if holdout_sample_ids is not None:
+        samples_list = samples.tolist() if hasattr(samples, "tolist") else list(samples)
+        if isinstance(holdout_sample_ids[0], str):
+            try:
+                fixed = [samples_list.index(sid) for sid in holdout_sample_ids]
+            except ValueError:
+                missing = [sid for sid in holdout_sample_ids if sid not in samples_list]
+                raise ValueError(f"Sample IDs not found in samples list: {missing}")
+            return [fixed for _ in range(n_reps)], len(holdout_sample_ids)
+        all_indices = []
+        for rep_ids in holdout_sample_ids:
+            try:
+                rep_indices = [samples_list.index(sid) for sid in rep_ids]
+            except ValueError:
+                missing = [sid for sid in rep_ids if sid not in samples_list]
+                raise ValueError(f"Sample IDs not found in samples list: {missing}")
+            all_indices.append(rep_indices)
+        return all_indices, k
 
-        locator = _create_worker_locator(data, f"rep{rep_idx}")
-
-        # Use pre-filtered allele counts if available
-        filtered = data.get("filtered_genotypes")
-        if filtered is not None:
-            genotypes = None
-        elif "genotypes_array" in data:
-            genotypes = allel.GenotypeArray(data["genotypes_array"])
+    all_indices = []
+    for rep in range(n_reps):
+        if holdout_indices is not None and rep < len(holdout_indices):
+            all_indices.append(list(holdout_indices[rep]))
         else:
-            raise ValueError("Worker received neither filtered nor raw genotypes")
-
-        # Train with holdout
-        start_time = time.time()
-        history = locator.train_holdout(
-            genotypes=genotypes,
-            samples=data["samples"],
-            holdout_indices=holdout_indices,
-            filtered_genotypes=filtered,
-        )
-        train_time = time.time() - start_time
-
-        # Make predictions
-        predictions = locator.predict_holdout(
-            verbose=False,
-            return_df=True,
-            save_preds_to_disk=False,
-            plot_summary=False,
-            plot_map=False,
-        )
-
-        tf.keras.backend.clear_session()
-
-        return {
-            "rep": rep_idx,
-            "gpu_id": gpu_id,
-            "train_time": train_time,
-            "predictions": predictions.to_dict("records"),
-            "holdout_indices": holdout_indices.tolist(),
-            "final_loss": (
-                float(history.history["loss"][-1])
-                if history and "loss" in history.history
-                else None
-            ),
-        }
-
-    return _ray_holdout_worker
+            all_indices.append(np.random.choice(known_idx, k, replace=False).tolist())
+    return all_indices, k
 
 
 def parallel_holdouts(  # noqa: C901
@@ -120,108 +112,45 @@ def parallel_holdouts(  # noqa: C901
     save_full_pred_matrix: bool = True,
     verbose: bool = True,
     na_action: Optional[str] = None,
+    resume: bool = True,
+    gpu_mem_mb: int = DEFAULT_GPU_MEM_MB,
 ) -> Union[pd.DataFrame, None]:
-    """
-    Run multiple holdout replicates in parallel across multiple GPUs using Ray.
+    """Run multiple holdout replicates in parallel via a ``FoldWorker`` actor pool.
 
-    This is a parallel version of AnalysisMixin.run_holdouts() that distributes
-    replicates across available GPUs.
-
-    Args:
-        locator: Locator instance (for configuration and methods)
-        genotypes: GenotypeArray
-        samples: List of sample IDs
-        k: Number of samples to hold out in each replicate
-        n_reps: Number of holdout replicates to run
-        holdout_indices: Optional list of lists, each containing indices to hold out
-        holdout_sample_ids: Optional list of sample IDs to hold out. If provided,
-            these specific samples will be held out (overrides k and holdout_indices).
-            Can be a single list (used for all replicates) or list of lists
-            (different samples per replicate).
-        gpu_ids: List of GPU IDs to use
-        gpu_fraction: Fraction of GPU to allocate per worker (default 1.0)
-        return_df: Whether to return DataFrame with all predictions
-        save_full_pred_matrix: Whether to save full prediction matrix to disk
-        verbose: Whether to show training progress and intermediate output
-        na_action: How to handle NA samples ('separate', 'exclude', 'fail').
-            If None, uses locator.na_action
-
-    Returns
-    -------
-        pandas.DataFrame or None: If return_df=True, returns DataFrame with predictions
-            for each holdout replicate containing columns:
-            - sampleID: Sample identifier
-            - x_rep0, y_rep0: Predictions from replicate 0
-            - x_rep1, y_rep1: Predictions from replicate 1
-            - ... and so on for all replicates
-
-            Note: True locations are not included. Merge with sample metadata to calculate errors.
+    See ``parallel_k_fold_holdouts`` for the GPU/memory semantics. Output is
+    in wide format (``x_rep0, y_rep0, x_rep1, ...``) to match the existing
+    API contract; a long-format per-replicate checkpoint is written
+    alongside for resume safety.
     """
     _ensure_ray_initialized()
 
-    na_action, status = locator._validate_na_action(
-        samples, na_action, "Holdout analysis"
-    )
-
+    na_action, _ = locator._validate_na_action(samples, na_action, "Holdout analysis")
     sample_data, locs = locator._resolve_locations(samples)
 
-    # Get indices of samples with known locations
-    known_mask = ~np.isnan(locs[:, 0])
-    known_idx = np.where(known_mask)[0]
-
+    known_idx = np.where(~np.isnan(locs[:, 0]))[0]
     if k >= len(known_idx):
         raise ValueError(
-            f"k ({k}) must be less than number of samples with "
-            f"known locations ({len(known_idx)})"
+            f"k ({k}) must be less than number of samples with known locations "
+            f"({len(known_idx)})"
         )
 
-    # Pre-calculate KDE bandwidth if needed
-    bw_locs = locs[known_idx]
     bw_calculated, bw_original = _precalculate_bandwidth(
         locator,
-        bw_locs,
-        f"holdouts_k{k}_n{len(bw_locs)}",
+        locs[known_idx],
+        f"holdouts_k{k}_n{len(known_idx)}",
         verbose,
     )
 
-    # Handle holdout_sample_ids if provided
-    if holdout_sample_ids is not None:
-        if hasattr(samples, "tolist"):
-            samples_list = samples.tolist()
-        else:
-            samples_list = list(samples)
+    all_holdout_indices, k = _resolve_holdout_indices(
+        holdout_indices,
+        holdout_sample_ids,
+        samples,
+        known_idx,
+        k,
+        n_reps,
+    )
+    n_reps = len(all_holdout_indices)
 
-        if isinstance(holdout_sample_ids[0], str):
-            try:
-                holdout_indices = [
-                    [samples_list.index(sid) for sid in holdout_sample_ids]
-                ]
-            except ValueError:
-                missing = [sid for sid in holdout_sample_ids if sid not in samples_list]
-                raise ValueError(f"Sample IDs not found in samples list: {missing}")
-            holdout_indices = holdout_indices * n_reps
-            k = len(holdout_sample_ids)
-        else:
-            holdout_indices = []
-            for rep_ids in holdout_sample_ids:
-                try:
-                    rep_indices = [samples_list.index(sid) for sid in rep_ids]
-                except ValueError:
-                    missing = [sid for sid in rep_ids if sid not in samples_list]
-                    raise ValueError(f"Sample IDs not found in samples list: {missing}")
-                holdout_indices.append(rep_indices)
-            n_reps = len(holdout_indices)
-
-    # Generate holdout indices for all replicates
-    all_holdout_indices = []
-    for rep in range(n_reps):
-        if holdout_indices is not None and rep < len(holdout_indices):
-            rep_holdout_idx = holdout_indices[rep]
-        else:
-            rep_holdout_idx = np.random.choice(known_idx, k, replace=False)
-        all_holdout_indices.append(rep_holdout_idx)
-
-    # Pre-filter once so workers share a small array instead of the full genotypes
     filtered_genotypes = locator._filter_genotypes(genotypes)
     if verbose:
         print(
@@ -229,87 +158,98 @@ def parallel_holdouts(  # noqa: C901
             f"{filtered_genotypes.shape[0]:,} SNPs"
         )
 
-    data_ref = ray.put(
-        {
-            "filtered_genotypes": filtered_genotypes,
-            "samples": samples,
-            "sample_data": sample_data,
-            "locs": locs,
-            "config": locator.config,
-            "known_idx": known_idx,
-        }
-    )
-
-    if verbose:
-        print(f"Running {n_reps} holdout replicates across GPUs {gpu_ids} using Ray...")
-
-    start_time = time.time()
-
-    _ray_holdout_worker = _create_ray_holdout_worker(gpu_fraction)
-
-    # Submit all replicates to Ray
-    futures = []
-    for rep_idx in range(n_reps):
-        if len(gpu_ids) == 0:
-            gpu_id = -1
-        else:
-            gpu_id = gpu_ids[rep_idx % len(gpu_ids)]
-
-        future = _ray_holdout_worker.remote(
-            rep_idx=rep_idx,
-            gpu_id=gpu_id,
-            data=data_ref,
-            holdout_indices=all_holdout_indices[rep_idx],
-        )
-        futures.append(future)
-        if verbose:
-            device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
-            print(f"Submitted replicate {rep_idx} to {device_str}")
-
-    # Wait for all replicates to complete
-    results = _collect_ray_results(
-        futures,
-        desc="Replicates completed",
-        postfix_fn=lambda r: f"Last: Rep {r['rep']}, GPU {r['gpu_id']}",
-        verbose=verbose,
-    )
-
-    total_time = time.time() - start_time
-
-    if verbose:
+    chunk_path = _holdout_chunk_path(locator)
+    done_reps = _resume_completed_reps(chunk_path) if resume else set()
+    if done_reps and verbose:
         print(
-            f"\nCompleted {n_reps} replicates in "
-            f"{total_time:.1f}s "
-            f"({total_time / n_reps:.1f}s per replicate)"
+            f"Resume: {len(done_reps)} / {n_reps} replicates already present in "
+            f"{chunk_path}; skipping those."
         )
+
+    reps_to_run = [i for i in range(n_reps) if i not in done_reps]
+
+    if reps_to_run:
+        data_ref = ray.put(
+            {
+                "filtered_genotypes": filtered_genotypes,
+                "samples": samples,
+                "sample_data": sample_data,
+                "locs": locs,
+                "config": locator.config,
+                "known_idx": known_idx,
+            }
+        )
+
+        actors = make_fold_workers(
+            gpu_ids=gpu_ids,
+            gpu_fraction=gpu_fraction,
+            data_ref=data_ref,
+            gpu_mem_mb=gpu_mem_mb,
+        )
+        if verbose:
+            print(
+                f"Spawned {len(actors)} FoldWorker actors across GPUs {gpu_ids}; "
+                f"dispatching {len(reps_to_run)} replicates "
+                f"(gpu_fraction={gpu_fraction})."
+            )
+
+        pool = ActorPool(actors)
+        rep_args = [(i, all_holdout_indices[i]) for i in reps_to_run]
+
+        pbar = None
+        if verbose:
+            try:
+                from tqdm import tqdm
+
+                pbar = tqdm(total=len(reps_to_run), desc="Replicates")
+            except ImportError:
+                pass
+
+        start_time = time.time()
+        completed = 0
+        for result in pool.map_unordered(
+            lambda actor, args: actor.run_holdout.remote(args[0], args[1]),
+            rep_args,
+        ):
+            _append_rep_to_chunks(chunk_path, result["idx"], result["rows"])
+            completed += 1
+            if pbar is not None:
+                pbar.update(1)
+
+        if pbar is not None:
+            pbar.close()
+
+        total_time = time.time() - start_time
+        if verbose:
+            per_rep = total_time / max(completed, 1)
+            print(
+                f"\nCompleted {completed} replicates in {total_time:.1f}s "
+                f"({per_rep:.1f}s per replicate)."
+            )
+
+        for actor in actors:
+            ray.kill(actor)
+    else:
+        if verbose:
+            print("All replicates already complete.")
 
     _restore_bandwidth(locator, bw_calculated, bw_original)
 
-    if return_df:
-        pred_dfs = []
+    if not return_df:
+        return None
 
-        for result in results:
-            rep_idx = result["rep"]
-            predictions = pd.DataFrame(result["predictions"])
+    # Pivot the long-format chunks to the wide-format output contract.
+    chunks = pd.read_csv(chunk_path)
+    wide = chunks.pivot_table(
+        index="sampleID", columns="rep", values=["x_pred", "y_pred"], aggfunc="first"
+    )
+    wide.columns = [
+        f"{val}_rep{rep}".replace("x_pred", "x").replace("y_pred", "y")
+        for val, rep in wide.columns
+    ]
+    wide = wide.reset_index()
 
-            holdout_preds = predictions[["x_pred", "y_pred"]].copy()
-            holdout_preds.columns = [
-                f"x_rep{rep_idx}",
-                f"y_rep{rep_idx}",
-            ]
-            holdout_preds["sampleID"] = predictions["sampleID"]
-            pred_dfs.append(holdout_preds)
+    if save_full_pred_matrix:
+        wide.to_csv(_holdout_output_path(locator), index=False)
 
-        all_predictions = pred_dfs[0]
-        for df in pred_dfs[1:]:
-            all_predictions = pd.merge(all_predictions, df, on="sampleID", how="outer")
-
-        if save_full_pred_matrix:
-            all_predictions.to_csv(
-                f"{locator.config['out']}_holdouts_predlocs.csv",
-                index=False,
-            )
-
-        return all_predictions
-
-    return None
+    return wide

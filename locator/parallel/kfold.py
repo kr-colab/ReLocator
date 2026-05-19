@@ -1,123 +1,59 @@
-"""K-fold cross-validation parallel methods."""
+"""K-fold cross-validation parallel methods.
 
+This module dispatches folds across a pool of long-lived Ray actors
+(``FoldWorker``) rather than fresh Ray tasks. The actor approach keeps the
+TF runtime + autograph + XLA caches hot across folds, eliminating the
+multi-second cold-start tax that dominated wall time in LOO sweeps.
+
+The dispatcher also writes per-fold predictions to disk as they complete,
+so a kill/crash mid-sweep doesn't discard already-trained folds — re-running
+with ``resume=True`` (default) picks up where the previous run left off.
+"""
+
+from __future__ import annotations
+
+import os
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
 import ray
+from ray.util import ActorPool
 
+from ._actor import DEFAULT_GPU_MEM_MB, make_fold_workers
 from ._helpers import (
-    _collect_ray_results,
-    _create_worker_locator,
     _ensure_ray_initialized,
     _precalculate_bandwidth,
     _restore_bandwidth,
-    _setup_worker_env,
 )
 
 
-def _create_ray_kfold_worker(gpu_fraction: float = 1.0):
-    """
-    Factory function to create a Ray worker with specified GPU fraction.
+def _kfold_output_path(locator) -> str:
+    return f"{locator.config['out']}_kfold_holdouts_predlocs.csv"
 
-    Args:
-        gpu_fraction: Fraction of GPU to allocate per worker (value between 0.0 to 1.0)
-                     1.0 = one full GPU per worker (default)
-                     0.5 = two workers can share one GPU
-                     0.25 = four workers can share one GPU
-                     ...
-                     0.0 = CPU only
 
-    Returns
-    -------
-        Ray remote function configured with specified GPU fraction
-    """
+def _resume_completed_folds(output_path: str) -> set[int]:
+    """Return the set of fold indices already present in ``output_path``."""
+    if not os.path.exists(output_path):
+        return set()
+    try:
+        existing = pd.read_csv(output_path)
+    except (pd.errors.EmptyDataError, FileNotFoundError):
+        return set()
+    if existing.empty or "fold" not in existing.columns:
+        return set()
+    return set(existing["fold"].astype(int).tolist())
 
-    @ray.remote(num_gpus=gpu_fraction)
-    def _ray_kfold_worker(fold_idx: int, gpu_id: int, data: dict) -> Dict[str, Any]:
-        """
-        Ray worker function that runs a single k-fold on a specific GPU.
 
-        Args:
-            fold_idx: Fold index
-            gpu_id: GPU ID to use
-            data: Shared data dict (resolved from Ray object store)
-
-        Returns
-        -------
-            Dictionary with predictions and metadata
-        """
-        _setup_worker_env(gpu_id)
-
-        import allel
-        import tensorflow as tf
-
-        tf.get_logger().setLevel("ERROR")
-
-        print(f"Worker processing fold {fold_idx} on GPU {gpu_id}")
-
-        locator = _create_worker_locator(data, f"fold{fold_idx}")
-
-        # Get fold's IndexSet
-        index_set = data["fold_index_sets"][fold_idx]
-        holdout_indices = index_set.test
-
-        # Use pre-filtered allele counts if available, avoiding the
-        # expensive per-worker copy of the full genotype array.
-        filtered = data.get("filtered_genotypes")
-        if filtered is not None:
-            genotypes = None
-        elif "genotypes_array" in data:
-            genotypes = allel.GenotypeArray(data["genotypes_array"])
-        else:
-            raise ValueError("Worker received neither filtered nor raw genotypes")
-
-        # Train with holdout
-        start_time = time.time()
-        history = locator.train_holdout(
-            genotypes=genotypes,
-            samples=data["samples"],
-            holdout_indices=holdout_indices,
-            filtered_genotypes=filtered,
-        )
-        train_time = time.time() - start_time
-
-        # Make predictions
-        predictions = locator.predict_holdout(
-            verbose=False,
-            return_df=True,
-            save_preds_to_disk=False,
-            plot_summary=False,
-            plot_map=False,
-        )
-
-        # Verify sample IDs match expected holdout samples
-        expected_samples = [data["samples"][i] for i in holdout_indices]
-        actual_samples = predictions["sampleID"].tolist()
-
-        if set(expected_samples) != set(actual_samples):
-            print(f"WARNING: Sample mismatch in fold {fold_idx}!")
-            print(f"Expected {len(expected_samples)} samples, got {len(actual_samples)}")
-            print(f"First 5 expected: {expected_samples[:5]}")
-            print(f"First 5 actual: {actual_samples[:5]}")
-
-        tf.keras.backend.clear_session()
-
-        return {
-            "fold": fold_idx,
-            "gpu_id": gpu_id,
-            "train_time": train_time,
-            "predictions": predictions.to_dict("records"),
-            "holdout_indices": holdout_indices.tolist(),
-            "final_loss": (
-                float(history.history["loss"][-1])
-                if history and "loss" in history.history
-                else None
-            ),
-        }
-
-    return _ray_kfold_worker
+def _append_fold_to_csv(output_path: str, fold: int, rows: list) -> None:
+    """Append one fold's predictions to the running CSV, with header on first write."""
+    write_header = not os.path.exists(output_path) or os.path.getsize(output_path) == 0
+    with open(output_path, "a") as f:
+        if write_header:
+            f.write("sampleID,x_pred,y_pred,fold\n")
+        for r in rows:
+            f.write(f"{r['sampleID']},{r['x_pred']},{r['y_pred']},{fold}\n")
 
 
 def parallel_k_fold_holdouts(  # noqa: C901
@@ -131,97 +67,97 @@ def parallel_k_fold_holdouts(  # noqa: C901
     save_full_pred_matrix: bool = True,
     verbose: bool = True,
     na_action: Optional[str] = None,
+    resume: bool = True,
+    gpu_mem_mb: int = DEFAULT_GPU_MEM_MB,
 ) -> Union[pd.DataFrame, None]:
-    """
-    Run true k-fold cross-validation in parallel across multiple GPUs using Ray.
-
-    This is a parallel version of AnalysisMixin.run_k_fold_holdouts() that distributes
-    folds across available GPUs.
+    """Run true k-fold cross-validation across multiple GPUs via Ray actors.
 
     Args:
-        locator: Locator instance (for configuration and methods)
-        genotypes: GenotypeArray
-        samples: List of sample IDs
-        k: Number of folds (holdout sets)
-        gpu_ids: List of GPU IDs to use
-        gpu_fraction: Fraction of GPU to allocate per worker (default 1.0)
-            - 1.0: One full GPU per worker (safest, no GPU sharing)
-            - 0.5: Two workers can share one GPU
-            - 0.25: Four workers can share one GPU
-            - 0.0: CPU only execution
-        return_df: Whether to return DataFrame with all predictions
-        save_full_pred_matrix: Whether to save full prediction matrix to disk
-        verbose: Whether to show training progress and intermediate output
-        na_action: How to handle NA samples ('separate', 'exclude', 'fail').
-            If None, uses locator.na_action
+        locator: Locator instance (config + helper methods).
+        genotypes: GenotypeArray (or pre-filtered dosage matrix).
+        samples: Sample IDs corresponding to genotypes.
+        k: Number of folds.
+        gpu_ids: List of GPU IDs to dispatch across.
+        gpu_fraction: Fraction of one GPU reserved per actor. ``1.0`` is one
+            actor per GPU; ``0.5`` packs two actors per GPU; ``0.0`` runs CPU
+            only. The actor also caps TF GPU memory at this fraction so
+            co-tenants can't OOM each other.
+        return_df: Return aggregated DataFrame at the end.
+        save_full_pred_matrix: Write the aggregated CSV at the end (the
+            running per-fold CSV is always written regardless).
+        verbose: Print progress + per-fold timing.
+        na_action: ``'separate' | 'exclude' | 'fail'``; defaults to locator's.
+        resume: Skip folds already present in the on-disk CSV.
+        gpu_mem_mb: Total GPU memory in MB used to compute the per-actor cap.
+            Default 80GB matches A100; override for other devices.
 
     Returns
     -------
-        pandas.DataFrame or None: If return_df=True, returns DataFrame with one prediction
-            per held-out sample containing columns:
-            - sampleID: Sample identifier
-            - x_pred: Predicted longitude
-            - y_pred: Predicted latitude
-            - fold: Fold number (0 to k-1)
-
-            Note: True locations are not included. To calculate prediction errors, merge
-            the returned DataFrame with your sample metadata using the sampleID column.
+        DataFrame with columns ``[sampleID, x_pred, y_pred, fold]`` (or
+        ``None`` if ``return_df=False``).
     """
     _ensure_ray_initialized()
 
-    na_action, status = locator._validate_na_action(samples, na_action, "K-fold CV")
+    na_action, _ = locator._validate_na_action(samples, na_action, "K-fold CV")
 
     sample_data, locs = locator._resolve_locations(samples)
-
-    # Create NA mask
     na_mask = np.isnan(locs[:, 0])
     n_total_samples = len(locs)
-    n_samples_with_coords = np.sum(~na_mask)
+    n_with_coords = int(np.sum(~na_mask))
 
-    if k > n_samples_with_coords:
+    if k > n_with_coords:
         raise ValueError(
-            f"k ({k}) must be less than or equal to number of "
-            f"samples with known locations "
-            f"({n_samples_with_coords})"
+            f"k ({k}) must be <= number of samples with known locations "
+            f"({n_with_coords})"
         )
 
-    # Import IndexSet
     from locator.data.indexset import IndexSet
 
-    # Create list to store IndexSets for each fold
-    # Use a fixed seed based on config seed or numpy's current state
     if "seed" in locator.config and locator.config["seed"] is not None:
         kfold_seed = locator.config["seed"]
     else:
         kfold_seed = np.random.randint(0, 2**31)
 
-    fold_index_sets = []
-    for fold_idx in range(k):
-        index_set = IndexSet.from_k_fold(
+    fold_index_sets = [
+        IndexSet.from_k_fold(
             n=n_total_samples,
             k=k,
-            fold=fold_idx,
+            fold=i,
             seed=kfold_seed,
             na_mask=na_mask,
         )
-        fold_index_sets.append(index_set)
+        for i in range(k)
+    ]
 
-    # Pre-calculate KDE bandwidth if needed
-    bw_locs = locs[~na_mask]
     bw_calculated, bw_original = _precalculate_bandwidth(
         locator,
-        bw_locs,
-        f"kfold_k{k}_n{len(bw_locs)}",
+        locs[~na_mask],
+        f"kfold_k{k}_n{n_with_coords}",
         verbose,
     )
 
-    # Pre-filter once so workers share a small array instead of the full genotypes
     filtered_genotypes = locator._filter_genotypes(genotypes)
     if verbose:
         print(
             f"Pre-filtered genotypes: {genotypes.shape[0]:,} → "
             f"{filtered_genotypes.shape[0]:,} SNPs"
         )
+
+    output_path = _kfold_output_path(locator)
+    done_folds = _resume_completed_folds(output_path) if resume else set()
+    if done_folds and verbose:
+        print(
+            f"Resume: {len(done_folds)} / {k} folds already present in "
+            f"{output_path}; skipping those."
+        )
+
+    folds_to_run = [i for i in range(k) if i not in done_folds]
+
+    if not folds_to_run:
+        if verbose:
+            print("All folds already complete.")
+        _restore_bandwidth(locator, bw_calculated, bw_original)
+        return pd.read_csv(output_path) if return_df else None
 
     data_ref = ray.put(
         {
@@ -230,95 +166,84 @@ def parallel_k_fold_holdouts(  # noqa: C901
             "sample_data": sample_data,
             "locs": locs,
             "config": locator.config,
-            "fold_index_sets": fold_index_sets,
             "na_mask": na_mask,
         }
     )
 
+    actors = make_fold_workers(
+        gpu_ids=gpu_ids,
+        gpu_fraction=gpu_fraction,
+        data_ref=data_ref,
+        gpu_mem_mb=gpu_mem_mb,
+    )
     if verbose:
         print(
-            f"Running true {k}-fold cross-validation across GPUs {gpu_ids} using Ray..."
+            f"Spawned {len(actors)} FoldWorker actors across GPUs {gpu_ids}; "
+            f"dispatching {len(folds_to_run)} folds (gpu_fraction={gpu_fraction})."
         )
 
+    pool = ActorPool(actors)
+    fold_args = [(i, fold_index_sets[i].test.tolist()) for i in folds_to_run]
     start_time = time.time()
 
-    # Create the Ray worker with specified GPU fraction
-    _ray_kfold_worker = _create_ray_kfold_worker(gpu_fraction)
+    pbar = None
+    if verbose:
+        try:
+            from tqdm import tqdm
 
-    # Submit all folds to Ray
-    futures = []
-    for fold_idx in range(k):
-        if len(gpu_ids) == 0:
-            gpu_id = -1
-        else:
-            gpu_id = gpu_ids[fold_idx % len(gpu_ids)]
+            pbar = tqdm(total=len(folds_to_run), desc="Folds")
+        except ImportError:
+            pass
 
-        future = _ray_kfold_worker.remote(
-            fold_idx=fold_idx, gpu_id=gpu_id, data=data_ref
-        )
-        futures.append(future)
-        if verbose:
-            device_str = "CPU" if gpu_id == -1 else f"GPU {gpu_id}"
-            print(f"Submitted fold {fold_idx} to {device_str}")
+    completed = 0
+    for result in pool.map_unordered(
+        lambda actor, args: actor.run_holdout.remote(args[0], args[1]),
+        fold_args,
+    ):
+        _append_fold_to_csv(output_path, result["idx"], result["rows"])
+        completed += 1
+        if pbar is not None:
+            pbar.update(1)
 
-    # Wait for all folds to complete
-    results = _collect_ray_results(
-        futures,
-        desc="Folds completed",
-        postfix_fn=lambda r: f"Last: Fold {r['fold']}, GPU {r['gpu_id']}",
-        verbose=verbose,
-    )
+    if pbar is not None:
+        pbar.close()
 
     total_time = time.time() - start_time
-
     if verbose:
+        per_fold = total_time / max(completed, 1)
         print(
-            f"\nCompleted {k}-fold CV in {total_time:.1f}s "
-            f"({total_time / k:.1f}s per fold)"
+            f"\nCompleted {completed} folds in {total_time:.1f}s "
+            f"({per_fold:.1f}s per fold)."
         )
 
     _restore_bandwidth(locator, bw_calculated, bw_original)
 
-    if return_df:
-        # Build predictions DataFrame
-        pred_rows = []
-        for result in results:
-            for pred in result["predictions"]:
-                pred_rows.append(
-                    {
-                        "sampleID": pred["sampleID"],
-                        "x_pred": pred["x_pred"],
-                        "y_pred": pred["y_pred"],
-                        "fold": result["fold"],
-                    }
-                )
+    # Kill actors so the TF GPU memory is released before the caller returns.
+    for actor in actors:
+        ray.kill(actor)
 
-        all_predictions = pd.DataFrame(pred_rows)
+    df = pd.read_csv(output_path)
 
-        # Verify we have predictions for all expected samples
-        expected_samples = set(samples[i] for i in range(len(samples)) if not na_mask[i])
-        actual_samples = set(all_predictions["sampleID"].unique())
-
-        if expected_samples != actual_samples:
-            print("WARNING: Sample mismatch in final results!")
-            print(f"Expected {len(expected_samples)} unique samples")
-            print(f"Got {len(actual_samples)} unique samples")
-            missing = expected_samples - actual_samples
-            extra = actual_samples - expected_samples
-            if missing:
-                print("Missing samples: {list(missing)[:10]}...")
-            if extra:
-                print(f"Extra samples: {list(extra)[:10]}...")
-
-        if save_full_pred_matrix:
-            all_predictions.to_csv(
-                f"{locator.config['out']}_kfold_holdouts_predlocs.csv",
-                index=False,
+    expected = {samples[i] for i in range(len(samples)) if not na_mask[i]}
+    actual = set(df["sampleID"].unique())
+    missing = expected - actual
+    extra = actual - expected
+    if missing or extra:
+        print("WARNING: Sample mismatch in final results!")
+        print(f"  expected {len(expected)} unique samples, got {len(actual)}")
+        if missing:
+            print(
+                f"  missing: {sorted(missing)[:10]}{'...' if len(missing) > 10 else ''}"
             )
+        if extra:
+            print(f"  extra:   {sorted(extra)[:10]}{'...' if len(extra) > 10 else ''}")
 
-        return all_predictions
+    if not save_full_pred_matrix:
+        # The on-disk CSV is the per-fold checkpoint; if the caller doesn't
+        # want a final aggregate the file still exists. Nothing else to do.
+        pass
 
-    return None
+    return df if return_df else None
 
 
 def parallel_leave_one_out(
@@ -330,58 +255,46 @@ def parallel_leave_one_out(
     return_df: bool = True,
     save_full_pred_matrix: bool = True,
     na_action: Optional[str] = None,
+    resume: bool = True,
+    gpu_mem_mb: int = DEFAULT_GPU_MEM_MB,
 ) -> Union[pd.DataFrame, None]:
+    """Leave-one-out cross-validation via the k-fold dispatcher.
+
+    Equivalent to ``parallel_k_fold_holdouts`` with ``k = n_samples_with_coords``.
+    Writes to ``{out}_leave_one_out_predlocs.csv`` instead of the k-fold path
+    so partial LOO and k-fold runs against the same Locator output prefix
+    don't collide.
     """
-    Perform leave-one-out cross-validation in parallel across multiple GPUs.
-
-    This is a parallel version of AnalysisMixin.run_leave_one_out() that uses
-    Ray to distribute the computation. It's a convenience wrapper around
-    parallel_k_fold_holdouts with k equal to the number of samples with known locations.
-
-    Args:
-        locator: Locator instance (for configuration and methods)
-        genotypes: Array of genotype data
-        samples: Sample IDs corresponding to genotypes
-        gpu_ids: List of GPU IDs to use
-        gpu_fraction: Fraction of GPU to allocate per worker (default 1.0)
-        return_df: Whether to return DataFrame with all predictions
-        save_full_pred_matrix: Whether to save full prediction matrix to disk
-        na_action: How to handle NA samples ('separate', 'exclude', 'fail').
-            If None, uses locator.na_action
-
-    Returns
-    -------
-        pandas.DataFrame or None: DataFrame with predictions for each left-out sample
-    """
-    # Get sample status to determine k
     status = locator.get_sample_status(samples)
     n_known = status["n_known"]
-
     if n_known == 0:
         raise ValueError("No samples with known coordinates for leave-one-out CV")
 
-    print(
-        f"Running leave-one-out cross-validation for "
-        f"{n_known} samples across GPUs {gpu_ids}"
-    )
-
-    result = parallel_k_fold_holdouts(
-        locator=locator,
-        genotypes=genotypes,
-        samples=samples,
-        k=n_known,
-        gpu_ids=gpu_ids,
-        gpu_fraction=gpu_fraction,
-        return_df=return_df,
-        save_full_pred_matrix=False,
-        verbose=False,
-        na_action=na_action,
-    )
-
-    if result is not None and save_full_pred_matrix:
-        result.to_csv(
-            f"{locator.config['out']}_leave_one_out_predlocs.csv",
-            index=False,
+    # Route LOO results through a dedicated checkpoint path. We temporarily
+    # patch the Locator's ``out`` prefix so the k-fold helper writes to the
+    # LOO file; this avoids replicating the dispatcher logic.
+    original_out = locator.config["out"]
+    locator.config["out"] = original_out + "__loo"
+    try:
+        df = parallel_k_fold_holdouts(
+            locator=locator,
+            genotypes=genotypes,
+            samples=samples,
+            k=n_known,
+            gpu_ids=gpu_ids,
+            gpu_fraction=gpu_fraction,
+            return_df=return_df,
+            save_full_pred_matrix=False,
+            verbose=True,
+            na_action=na_action,
+            resume=resume,
+            gpu_mem_mb=gpu_mem_mb,
         )
+    finally:
+        locator.config["out"] = original_out
 
-    return result
+    if df is not None and save_full_pred_matrix:
+        loo_path = f"{original_out}_leave_one_out_predlocs.csv"
+        df.to_csv(loo_path, index=False)
+
+    return df
