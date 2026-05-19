@@ -15,7 +15,20 @@ import pytest
 from conftest import make_test_genotypes
 
 from locator import Locator
-from locator.parallel import parallel_k_fold_holdouts, parallel_leave_one_out
+
+try:
+    import ray  # noqa: F401
+
+    RAY_AVAILABLE = True
+except ImportError:
+    RAY_AVAILABLE = False
+
+pytestmark = pytest.mark.skipif(not RAY_AVAILABLE, reason="Ray not installed")
+
+from locator.parallel import (  # noqa: E402
+    parallel_k_fold_holdouts,
+    parallel_leave_one_out,
+)
 
 
 @pytest.fixture
