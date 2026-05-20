@@ -165,10 +165,15 @@ def create_network(
     # Optional PCA-initialized linear projection as the first layer. Placed
     # before BatchNormalization so it sees raw genotype counts, which lets a
     # caller set its weights to PCA loadings and reproduce PCA scores exactly.
+    # Pinned to float32: it computes raw_counts @ loadings + bias, where the
+    # two terms are large and nearly cancel, so float16 loses the result.
     if pca_components is not None:
-        x = layers.Dense(pca_components, activation="linear", name=PCA_LAYER_NAME)(
-            inputs
-        )
+        x = layers.Dense(
+            pca_components,
+            activation="linear",
+            name=PCA_LAYER_NAME,
+            dtype="float32",
+        )(inputs)
         x = layers.BatchNormalization()(x)
     else:
         x = layers.BatchNormalization()(inputs)

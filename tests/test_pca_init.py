@@ -100,6 +100,25 @@ def test_no_pca_projection_when_disabled(genotype_data, basic_config):
     assert PCA_LAYER_NAME not in layer_names
 
 
+def test_pca_projection_is_float32_under_mixed_precision():
+    """The pca_projection layer stays float32 even under a mixed_float16 policy.
+
+    Its forward pass nearly cancels two large terms, so float16 would destroy
+    the PCA scores.
+    """
+    from tensorflow import keras
+
+    from locator.models import create_network
+
+    original = keras.mixed_precision.global_policy()
+    keras.mixed_precision.set_global_policy("mixed_float16")
+    try:
+        model = create_network(input_shape=200, pca_components=8)
+        assert model.get_layer(PCA_LAYER_NAME).compute_dtype == "float32"
+    finally:
+        keras.mixed_precision.set_global_policy(original)
+
+
 def test_pca_components_rejects_site_order(genotype_data, basic_config):
     """pca_components is incompatible with bootstrap/jacknife SNP resampling."""
     genotypes, samples, _, _, n_snps = genotype_data
