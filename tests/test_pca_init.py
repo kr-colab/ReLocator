@@ -6,7 +6,7 @@ from sklearn.decomposition import PCA
 
 from locator import Locator
 from locator.models import PCA_LAYER_NAME
-from locator.pca import compute_pca_projection
+from locator.pca import compute_pca_projection, compute_pca_projection_gram
 
 
 def _pca_config(basic_config, **overrides):
@@ -62,7 +62,8 @@ def test_frozen_projection_keeps_pca_loadings(genotype_data, basic_config):
     train_geno = np.asarray(
         loc.filtered_genotypes[:, loc.index_set.train].T, dtype=np.float32
     )
-    expected, _ = compute_pca_projection(train_geno, 8)
+    # Training fits PCA via the Gram-matrix path, so compare against that.
+    expected, _ = compute_pca_projection_gram(train_geno, 8)
     assert np.allclose(kernel, expected, atol=1e-5)
 
 
@@ -78,7 +79,7 @@ def test_finetune_moves_projection(genotype_data, basic_config):
     train_geno = np.asarray(
         loc.filtered_genotypes[:, loc.index_set.train].T, dtype=np.float32
     )
-    pca_loadings, _ = compute_pca_projection(train_geno, 8)
+    pca_loadings, _ = compute_pca_projection_gram(train_geno, 8)
     assert not np.allclose(kernel, pca_loadings, atol=1e-6)
 
 

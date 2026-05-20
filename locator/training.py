@@ -7,6 +7,7 @@ from datetime import datetime
 import h5py
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from tensorflow import keras
 
 from .data import (
@@ -28,7 +29,7 @@ from .models import (
     loss_with_range_penalty,
     rasterize_species_range,
 )
-from .pca import compute_pca_projection
+from .pca import compute_pca_projection_gram
 from .sample_weights import weight_samples
 
 
@@ -694,10 +695,12 @@ class TrainingMixin:
     def _inject_pca_weights(self, model, pca_components):
         """Initialize the pca_projection layer with PCA loadings and freeze it.
 
-        PCA is fit on the training split only. Recompiling is required for the
-        freeze to take effect before phase-1 training. When training data is
-        not available (e.g. building an architecture to load saved weights
-        into), this is a no-op and the layer keeps its loaded weights.
+        PCA is fit on the training split only, gathered from the GPU-resident
+        genotype table so the eigendecomposition runs on-device with no host
+        round trip. Recompiling is required for the freeze to take effect
+        before phase-1 training. When training data is not available (e.g.
+        building an architecture to load saved weights into), this is a no-op
+        and the layer keeps its loaded weights.
 
         Args:
             model: The model returned by create_network with a pca_projection
@@ -718,8 +721,14 @@ class TrainingMixin:
                 f"min(n_train={n_train}, n_snps={n_snps})"
             )
 
-        train_geno = np.asarray(filtered[:, train_idx].T, dtype=np.float32)
-        W, bias = compute_pca_projection(train_geno, pca_components)
+        # Gather the training rows from the resident table (sample-major, on
+        # the GPU) and fit PCA there via the Gram-matrix method.
+        train_geno = tf.gather(
+            self._get_genotype_table(),
+            np.asarray(train_idx, dtype=np.int32),
+            axis=0,
+        )
+        W, bias = compute_pca_projection_gram(train_geno, pca_components)
 
         projection = model.get_layer(PCA_LAYER_NAME)
         projection.set_weights([W, bias])
