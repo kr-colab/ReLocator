@@ -12,6 +12,7 @@ from tensorflow.keras import backend as K
 from tensorflow.keras import layers
 
 PCA_LAYER_NAME = "pca_projection"
+PCA_GATE_NAME = "pca_finetune_gate"
 
 
 def build_optimizer(algo, learning_rate, weight_decay=0.004):
@@ -116,6 +117,38 @@ def loss_with_range_penalty(
     return euclidean + penalty_weight * penalty
 
 
+class GradientGate(keras.layers.Layer):
+    """Pass values through unchanged while scaling the gradient by a gate.
+
+    Lets the PCA-initialized projection switch between frozen (phase 1) and
+    fine-tuning (phase 2) without changing the training graph. The layer's
+    output value is always its input, but the gradient that reaches the input
+    -- and therefore the upstream projection's weights -- is multiplied by
+    ``gate``: 0 holds the projection at its PCA initialization, 1 lets it
+    train. ``gate`` is a non-trainable variable, so flipping it neither
+    retraces nor recompiles the graph, which keeps the compiled training
+    function reusable across both phases and across folds.
+    """
+
+    def build(self, input_shape):
+        """Create the non-trainable gate variable (starts closed, at 0)."""
+        self.gate = self.add_weight(
+            name="gate",
+            shape=(),
+            initializer="zeros",
+            trainable=False,
+            dtype="float32",
+        )
+        super().build(input_shape)
+
+    def call(self, inputs):
+        """Return the input value with its gradient scaled by the gate."""
+        # gate == 0: output value == inputs, gradient to inputs == 0.
+        # gate == 1: output == inputs with the full gradient.
+        frozen = tf.stop_gradient(inputs)
+        return frozen + self.gate * (inputs - frozen)
+
+
 def create_network(
     input_shape: int,
     width: int = 256,
@@ -174,6 +207,9 @@ def create_network(
             name=PCA_LAYER_NAME,
             dtype="float32",
         )(inputs)
+        # Gradient gate: switches the projection between frozen and fine-tuning
+        # by flipping a variable, so the training graph never changes.
+        x = GradientGate(name=PCA_GATE_NAME, dtype="float32")(x)
         x = layers.BatchNormalization()(x)
     else:
         x = layers.BatchNormalization()(inputs)
@@ -297,6 +333,8 @@ class IndexedGenotypeModel(keras.Model):
 
 __all__ = [
     "PCA_LAYER_NAME",
+    "PCA_GATE_NAME",
+    "GradientGate",
     "IndexedGenotypeModel",
     "build_optimizer",
     "create_network",

@@ -21,6 +21,7 @@ from .data import (
 from .data import filter_snps_legacy as filter_snps
 from .gpu_optimizer import GPUOptimizer
 from .models import (
+    PCA_GATE_NAME,
     PCA_LAYER_NAME,
     IndexedGenotypeModel,
     build_optimizer,
@@ -693,14 +694,15 @@ class TrainingMixin:
         return self._genotype_table
 
     def _inject_pca_weights(self, model, pca_components):
-        """Initialize the pca_projection layer with PCA loadings and freeze it.
+        """Initialize the pca_projection layer with PCA loadings, gate closed.
 
         PCA is fit on the training split only, gathered from the GPU-resident
         genotype table so the eigendecomposition runs on-device with no host
-        round trip. Recompiling is required for the freeze to take effect
-        before phase-1 training. When training data is not available (e.g.
-        building an architecture to load saved weights into), this is a no-op
-        and the layer keeps its loaded weights.
+        round trip. The projection layer stays trainable; phase-1 training is
+        held at the PCA initialization by closing the gradient gate, which
+        needs no recompile. When training data is not available (e.g. building
+        an architecture to load saved weights into), this is a no-op and the
+        layer keeps its loaded weights.
 
         Args:
             model: The model returned by create_network with a pca_projection
@@ -730,13 +732,10 @@ class TrainingMixin:
         )
         W, bias = compute_pca_projection_gram(train_geno, pca_components)
 
-        projection = model.get_layer(PCA_LAYER_NAME)
-        projection.set_weights([W, bias])
-        projection.trainable = False
-        model.compile(
-            optimizer=model.optimizer,
-            loss=self._loss_fn if self._loss_fn is not None else euclidean_distance_loss,
-        )
+        model.get_layer(PCA_LAYER_NAME).set_weights([W, bias])
+        # Close the gate: phase-1 training holds the projection at its PCA
+        # initialization. The layer stays trainable, so the graph is unchanged.
+        model.get_layer(PCA_GATE_NAME).gate.assign(0.0)
 
     def train_window(
         self,
@@ -1011,11 +1010,13 @@ class TrainingMixin:
         """Fit a model, running a two-phase PCA fine-tune when enabled.
 
         With ``pca_components`` set and ``pca_finetune`` true: phase 1 trains
-        with the pca_projection layer frozen at its PCA initialization; phase 2
-        unfreezes it and continues at a low learning rate. Otherwise a single
-        fit runs. Keras resets stateful callbacks (EarlyStopping,
-        ReduceLROnPlateau) at the start of each fit, so the same callback list
-        is reused across both phases.
+        with the projection held at its PCA initialization (gradient gate
+        closed); phase 2 opens the gate and continues at a low learning rate.
+        Both phases share one compiled training function -- only the gate
+        variable, the optimizer state, and the learning rate are reassigned, so
+        phase 2 does not retrace or recompile. Otherwise a single fit runs.
+        Keras resets stateful callbacks (EarlyStopping, ReduceLROnPlateau) at
+        the start of each fit, so the same callback list is reused.
 
         Args:
             model: Compiled Keras model to train.
@@ -1042,12 +1043,12 @@ class TrainingMixin:
         if pca_components is None or not self.config.get("pca_finetune", True):
             return history
 
-        # Phase 2: unfreeze the PCA projection and fine-tune at a low LR.
-        model.get_layer(PCA_LAYER_NAME).trainable = True
-        model.compile(
-            optimizer=self._make_finetune_optimizer(),
-            loss=getattr(self, "_loss_fn", None) or euclidean_distance_loss,
-        )
+        # Phase 2: open the gradient gate so the projection fine-tunes, on a
+        # fresh optimizer state at a low learning rate. The graph is unchanged,
+        # so the compiled training function from phase 1 is reused as-is.
+        model.get_layer(PCA_GATE_NAME).gate.assign(1.0)
+        self._reset_optimizer_state(model.optimizer)
+        model.optimizer.learning_rate = self.config.get("pca_finetune_lr", 1e-4)
         history2 = model.fit(
             train_dataset,
             epochs=max_epochs,
@@ -1057,13 +1058,16 @@ class TrainingMixin:
         )
         return self._concat_histories(history, history2)
 
-    def _make_finetune_optimizer(self):
-        """Build the optimizer for the PCA fine-tuning phase."""
-        return build_optimizer(
-            self.config.get("optimizer_algo", "adam"),
-            self.config.get("pca_finetune_lr", 1e-4),
-            self.config.get("weight_decay", 0.004),
-        )
+    @staticmethod
+    def _reset_optimizer_state(optimizer):
+        """Zero an optimizer's slot variables and step counter in place.
+
+        Gives the fine-tune phase a clean optimizer state without building a
+        new optimizer, which would reset the compile cache and force an XLA
+        recompile. The learning rate is set separately by the caller.
+        """
+        for var in optimizer.variables:
+            var.assign(tf.zeros_like(var))
 
     @staticmethod
     def _concat_histories(history1, history2):
