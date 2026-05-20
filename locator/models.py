@@ -340,11 +340,22 @@ class IndexedGenotypeModel(keras.Model):
         return self.inner.load_weights(*args, **kwargs)
 
 
+def feature_network(model):
+    """Return the network that consumes genotype features.
+
+    Prediction and batch-size probing feed genotype features directly; given
+    either an IndexedGenotypeModel or a plain network, return the one that
+    takes ``(batch, n_snps)`` input.
+    """
+    return model.inner if isinstance(model, IndexedGenotypeModel) else model
+
+
 __all__ = [
     "PCA_LAYER_NAME",
     "PCA_GATE_NAME",
     "GradientGate",
     "IndexedGenotypeModel",
+    "feature_network",
     "build_optimizer",
     "create_network",
     "euclidean_distance_loss",

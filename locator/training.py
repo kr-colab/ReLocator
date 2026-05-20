@@ -27,6 +27,7 @@ from .models import (
     build_optimizer,
     create_network,
     euclidean_distance_loss,
+    feature_network,
     loss_with_range_penalty,
     rasterize_species_range,
 )
@@ -742,7 +743,11 @@ class TrainingMixin:
         )
         W, bias = compute_pca_projection_gram(train_geno, pca_components)
 
-        model.get_layer(PCA_LAYER_NAME).set_weights([W, bias])
+        # Assign the loadings straight from the device tensors -- set_weights
+        # would round them through host memory.
+        projection = model.get_layer(PCA_LAYER_NAME)
+        projection.kernel.assign(W)
+        projection.bias.assign(bias)
         # Close the gate: phase-1 training holds the projection at its PCA
         # initialization. The layer stays trainable, so the graph is unchanged.
         model.get_layer(PCA_GATE_NAME).gate.assign(0.0)
@@ -862,10 +867,10 @@ class TrainingMixin:
             "disable_gpu", False
         ):
             try:
-                # Probe the inner network: it consumes genotype features, while
-                # the IndexedGenotypeModel wrapper consumes sample indices.
+                # Probe the feature network: the IndexedGenotypeModel wrapper
+                # consumes sample indices, not genotype features.
                 optimal_batch = GPUOptimizer.get_optimal_batch_size(
-                    getattr(self.model, "inner", self.model),
+                    feature_network(self.model),
                     input_shape=(self.filtered_genotypes.shape[0],),
                     target_memory_usage=0.85,
                     dataset_size=dataset_size,

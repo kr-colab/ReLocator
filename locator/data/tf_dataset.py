@@ -16,8 +16,8 @@ def build_genotype_table(filtered_genotypes: np.ndarray) -> tf.Tensor:
     The genotype matrix for realistic runs is small enough to live on the GPU
     for the whole run -- its size is ``n_snps * n_samples * dtype_bytes``
     (e.g. 1M x 236 int8 ~= 236 MB, 2M x 236 int8 ~= 472 MB, 4x that for float32
-    dosage). Building it once and gathering rows on-device removes the per-fold
-    re-materialisation and per-epoch host-to-device copies of the old pipeline.
+    dosage). Holding it on-device lets the model gather genotype batches by
+    sample index without any host-to-device traffic during training.
 
     Args:
         filtered_genotypes: Filtered genotype matrix of shape
@@ -46,7 +46,7 @@ def make_tf_dataset(
     batch_size: int = 256,
     sample_weights: Optional[np.ndarray] = None,
     training: bool = True,
-    shuffle_buffer: int = 1024,
+    shuffle: bool = True,
     drop_remainder: Optional[bool] = None,
     prefetch: bool = True,
 ) -> tf.data.Dataset:
@@ -65,7 +65,7 @@ def make_tf_dataset(
         sample_weights: Optional per-sample weights, aligned to the split's
             index order (length must equal the split size).
         training: Whether this is for training (enables shuffling).
-        shuffle_buffer: Non-zero enables shuffling when ``training`` is True.
+        shuffle: Whether to shuffle the split each epoch (only when training).
         drop_remainder: Whether to drop the final partial batch
             (defaults to the value of ``training``).
         prefetch: Whether to prefetch batches.
@@ -97,7 +97,9 @@ def make_tf_dataset(
     else:
         dataset = tf.data.Dataset.from_tensor_slices((indices, coords))
 
-    if training and shuffle_buffer > 0:
+    if training and shuffle:
+        # The split is a few hundred indices; a full-size buffer is a perfect
+        # shuffle at negligible cost.
         dataset = dataset.shuffle(
             buffer_size=len(indices), reshuffle_each_iteration=True
         )
@@ -145,13 +147,14 @@ def make_tf_dataset_from_arrays(
     val_gen: Optional[np.ndarray] = None,
     val_locs: Optional[np.ndarray] = None,
     batch_size: int = 256,
-    **kwargs,
+    cache: bool = True,
+    prefetch: bool = True,
 ) -> Union[tf.data.Dataset, Tuple[tf.data.Dataset, ...]]:
     """Legacy helper: build feature-based datasets from pre-split arrays.
 
-    Kept for backward compatibility. Unlike :func:`make_tf_dataset` (which is
-    index-based), this yields ``(genotype_features, coordinates)`` batches
-    directly from the supplied sample-major arrays.
+    Unlike :func:`make_tf_dataset` (which is index-based), this yields
+    ``(genotype_features, coordinates)`` batches directly from the supplied
+    sample-major arrays.
 
     Args:
         train_gen: Training genotypes of shape ``(n_train, n_features)``.
@@ -161,14 +164,13 @@ def make_tf_dataset_from_arrays(
         val_gen: Optional validation genotypes.
         val_locs: Optional validation locations.
         batch_size: Batch size.
-        **kwargs: Accepts ``cache`` and ``prefetch`` flags.
+        cache: Whether to cache each dataset in memory.
+        prefetch: Whether to prefetch batches.
 
     Returns
     -------
         A single dataset, or a tuple of datasets (train, test, val).
     """
-    cache = kwargs.get("cache", True)
-    prefetch = kwargs.get("prefetch", True)
 
     def _build(gen, locs, training):
         ds = tf.data.Dataset.from_tensor_slices(

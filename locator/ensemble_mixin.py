@@ -9,6 +9,8 @@ from tensorflow import keras
 from .data import IndexSet, NormalizationParams, make_tf_dataset, normalize_locs
 from .ensemble_model_manager import EnsembleModelManager
 from .gpu_optimizer import GPUOptimizer
+from .models import feature_network
+from .prediction import predict_on_indices
 
 # from tqdm import tqdm
 
@@ -475,13 +477,10 @@ class EnsembleMixin:
     def _predict_single_fold(self, model_info, filtered_genotypes, samples, indices):
         """Make predictions using a single fold model."""
         model = model_info["model"]
-        inner = getattr(model, "inner", model)
         if model_info["weights_file"]:
-            inner.load_weights(model_info["weights_file"])
+            feature_network(model).load_weights(model_info["weights_file"])
 
-        # Predict on the sample-major genotype slice for the target indices.
-        pred_array = np.ascontiguousarray(filtered_genotypes[:, indices].T)
-        predictions = inner.predict(pred_array, verbose=0)
+        predictions = predict_on_indices(model, filtered_genotypes, indices)
 
         # Denormalize using NormalizationParams
         norm_params = NormalizationParams(
@@ -637,11 +636,7 @@ class EnsembleMixin:
             model = self._ensemble_model_manager.get_model(
                 fold_idx, filtered_genotypes.shape[0]
             )
-            inner = getattr(model, "inner", model)
-
-            # Predict on the sample-major genotype slice for the target indices.
-            pred_array = np.ascontiguousarray(filtered_genotypes[:, indices].T)
-            predictions = inner.predict(pred_array, verbose=0)
+            predictions = predict_on_indices(model, filtered_genotypes, indices)
 
             # Get normalization params for this fold
             norm_params = self._ensemble_model_manager.get_normalization_params(fold_idx)
@@ -722,7 +717,7 @@ class EnsembleMixin:
             # Only compute for first fold, reuse for others
             if fold_idx == 0 and hasattr(self, "model") and self.model is not None:
                 batch_size = GPUOptimizer.get_optimal_batch_size(
-                    model=getattr(self.model, "inner", self.model),
+                    model=feature_network(self.model),
                     input_shape=(self.filtered_genotypes.shape[0],),
                     dataset_size=dataset_size,
                     verbose=self.config.get("keras_verbose", 1) > 0,

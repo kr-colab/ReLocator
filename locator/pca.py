@@ -61,9 +61,11 @@ def compute_pca_projection_gram(genotype_matrix, n_components):
 
     Returns
     -------
-    W : np.ndarray
-        Loadings of shape ``(n_snps, n_components)``, float32.
-    bias : np.ndarray
+    W : tf.Tensor
+        Loadings of shape ``(n_snps, n_components)``, float32. Returned as a
+        device tensor so the caller can assign it to the projection layer
+        without a host round trip.
+    bias : tf.Tensor
         Bias of shape ``(n_components,)``, float32, equal to ``-(mean @ W)``.
     """
     X = tf.cast(genotype_matrix, tf.float32)
@@ -76,8 +78,5 @@ def compute_pca_projection_gram(genotype_matrix, n_components):
     # Guard against tiny negative eigenvalues from float round-off.
     scale = tf.sqrt(tf.maximum(evals, 1e-12))
     W = tf.linalg.matmul(Xc, evecs, transpose_a=True) / scale
-    bias = -tf.linalg.matmul(mean, W)
-    return (
-        W.numpy().astype(np.float32),
-        tf.reshape(bias, [-1]).numpy().astype(np.float32),
-    )
+    bias = tf.reshape(-tf.linalg.matmul(mean, W), [-1])
+    return W, bias
