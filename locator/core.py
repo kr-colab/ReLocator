@@ -328,6 +328,12 @@ class Locator(
             self.positions = None  # For windowed analysis
         self.unnormedlocs = None  # For calculating sample weights
         self.sample_weights = None
+        # GPU-resident genotype table (see IndexedGenotypeModel) built lazily
+        # and reused across folds; _genotype_table_src records which
+        # filtered_genotypes array it was built from so it can be rebuilt when
+        # the underlying data changes (e.g. per window in windowed analysis).
+        self._genotype_table = None
+        self._genotype_table_src = None
 
         # Store na_action as instance attribute for convenience
         self.na_action = self.config["na_action"]

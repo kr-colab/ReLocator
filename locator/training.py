@@ -11,6 +11,7 @@ from tensorflow import keras
 
 from .data import (
     IndexSet,
+    build_genotype_table,
     filter_dosage_matrix,
     is_dosage_matrix,
     make_tf_dataset,
@@ -20,6 +21,7 @@ from .data import filter_snps_legacy as filter_snps
 from .gpu_optimizer import GPUOptimizer
 from .models import (
     PCA_LAYER_NAME,
+    IndexedGenotypeModel,
     build_optimizer,
     create_network,
     euclidean_distance_loss,
@@ -350,8 +352,9 @@ class TrainingMixin:
                 self.trainlocs = normalized_locs[train]
                 self.testlocs = normalized_locs[test]
 
-        # Create model if not already created
-        if self.model is None:
+        # Create the model. Rebuild when site_order is given so the bootstrap /
+        # jacknife SNP resampling baked into the model matches this replicate.
+        if self.model is None or site_order is not None:
             # Determine input shape
             if self.traingen is not None:
                 input_shape = self.traingen.shape[1]
@@ -363,14 +366,16 @@ class TrainingMixin:
                 else:
                     input_shape = self.filtered_genotypes.shape[0]
 
-            self.model = self._create_model(input_shape=input_shape)
+            self.model = self._create_model(
+                input_shape=input_shape, site_order=site_order
+            )
 
         # Return early if setup_only
         if setup_only:
             return None
 
         callbacks = self._create_callbacks(boot=boot)
-        self._build_datasets_and_fit(normalized_locs, callbacks, site_order=site_order)
+        self._build_datasets_and_fit(normalized_locs, callbacks)
         self._save_training_artifacts(boot=boot)
         return self.history
 
@@ -582,8 +587,20 @@ class TrainingMixin:
             warnings.warn(f"Failed to save model metadata: {e}")
             # Don't fail training if metadata save fails
 
-    def _create_model(self, input_shape):
-        """Create neural network model. Extracted to avoid duplication."""
+    def _create_model(self, input_shape, site_order=None):
+        """Create the training model.
+
+        Builds the coordinate-prediction network (``inner``) and, when a
+        GPU-resident genotype table is available, wraps it in an
+        IndexedGenotypeModel so genotypes are gathered on-device by sample
+        index. When no genotype matrix is loaded (e.g. building an architecture
+        to load saved weights into) the plain network is returned.
+
+        Args:
+            input_shape: Number of input features the inner network expects.
+            site_order: Optional SNP resampling order for bootstrap/jacknife,
+                applied per batch inside the wrapper.
+        """
         loss_fn = None
         if self.config.get("use_range_penalty"):
             if self.config.get("species_range_shapefile") is None:
@@ -614,7 +631,7 @@ class TrainingMixin:
         self._loss_fn = loss_fn
 
         pca_components = self.config.get("pca_components")
-        model = create_network(
+        inner = create_network(
             input_shape=input_shape,
             width=self.config.get("width", 256),
             n_layers=self.config.get("nlayers", 8),
@@ -628,10 +645,51 @@ class TrainingMixin:
             loss_fn=loss_fn,
         )
 
+        # Without a resident genotype matrix there is nothing to gather from;
+        # return the plain network (used by weight-loading paths).
+        if getattr(self, "filtered_genotypes", None) is None:
+            if pca_components is not None:
+                self._inject_pca_weights(inner, pca_components)
+            return inner
+
+        model = IndexedGenotypeModel(
+            inner,
+            self._get_genotype_table(),
+            site_order=site_order,
+            augment=self.config.get("augmentation"),
+        )
+        model.compile(
+            optimizer=build_optimizer(
+                self.config.get("optimizer_algo", "adam"),
+                self.config.get("learning_rate", 0.001),
+                self.config.get("weight_decay", 0.004),
+            ),
+            loss=loss_fn if loss_fn is not None else euclidean_distance_loss,
+        )
+
         if pca_components is not None:
             self._inject_pca_weights(model, pca_components)
 
         return model
+
+    def _get_genotype_table(self):
+        """Build or reuse the GPU-resident genotype table.
+
+        The table is rebuilt only when ``filtered_genotypes`` is a different
+        array object. A Ray actor reuses one Locator and one shared
+        ``filtered_genotypes`` across all its folds, so the table is built once
+        per actor; windowed analysis filters a fresh array per window, so the
+        identity check correctly triggers a rebuild there. ``_filter_genotypes``
+        assigns ``filtered_genotypes`` by reference (never a copy), which keeps
+        this identity guard exact.
+        """
+        if (
+            self._genotype_table is None
+            or self.filtered_genotypes is not self._genotype_table_src
+        ):
+            self._genotype_table = build_genotype_table(self.filtered_genotypes)
+            self._genotype_table_src = self.filtered_genotypes
+        return self._genotype_table
 
     def _inject_pca_weights(self, model, pca_components):
         """Initialize the pca_projection layer with PCA loadings and freeze it.
@@ -786,8 +844,10 @@ class TrainingMixin:
             "disable_gpu", False
         ):
             try:
+                # Probe the inner network: it consumes genotype features, while
+                # the IndexedGenotypeModel wrapper consumes sample indices.
                 optimal_batch = GPUOptimizer.get_optimal_batch_size(
-                    self.model,
+                    getattr(self.model, "inner", self.model),
                     input_shape=(self.filtered_genotypes.shape[0],),
                     target_memory_usage=0.85,
                     dataset_size=dataset_size,
@@ -892,18 +952,17 @@ class TrainingMixin:
         self,
         normalized_locs,
         callbacks,
-        site_order=None,
         keras_verbose=None,
     ):
         """Build tf.data pipelines and train the model.
 
         Requires self.filtered_genotypes, self.index_set, self.model,
-        and self.sample_weights to be set before calling.
+        and self.sample_weights to be set before calling. SNP resampling
+        (site_order) is handled inside the model, not the dataset.
 
         Args:
             normalized_locs: Full normalized location array
             callbacks: List of Keras callbacks
-            site_order: Optional SNP reordering for bootstrap
             keras_verbose: Verbosity for model.fit (default: from config)
 
         Returns
@@ -916,7 +975,6 @@ class TrainingMixin:
             keras_verbose = self.config.get("keras_verbose", 1)
 
         train_dataset = make_tf_dataset(
-            genotypes=self.filtered_genotypes,
             coordinates=normalized_locs,
             index_set=self.index_set,
             split="train",
@@ -925,19 +983,14 @@ class TrainingMixin:
                 self.sample_weights["sample_weights"] if self.sample_weights else None
             ),
             training=True,
-            cache=True,
-            site_order=site_order,
         )
 
         val_dataset = make_tf_dataset(
-            genotypes=self.filtered_genotypes,
             coordinates=normalized_locs,
             index_set=self.index_set,
             split="test",
             batch_size=batch_size,
             training=False,
-            cache=True,
-            site_order=site_order,
         )
 
         self.history = self._fit_model(

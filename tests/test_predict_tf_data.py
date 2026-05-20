@@ -1,7 +1,5 @@
 """Test predict() method with tf.data pipeline"""
 
-from unittest.mock import Mock, patch
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -102,33 +100,29 @@ class TestPredictTFData:
         # Should still work
         assert isinstance(predictions, pd.DataFrame)
 
-    @patch("locator.data.make_tf_dataset")
-    def test_predict_uses_make_tf_dataset(
-        self, mock_make_tf_dataset, genotype_data, basic_config
+    def test_predict_runs_inner_network_on_feature_array(
+        self, genotype_data, basic_config
     ):
-        """Test that predict() calls make_tf_dataset for tf.data pipeline"""
+        """predict() runs the inner network on a sample-major feature array."""
         genotypes, samples, _, _, _ = genotype_data
 
-        # Set up mock to return a mock dataset
-        mock_dataset = Mock()
-        mock_make_tf_dataset.return_value = mock_dataset
-
-        # Create locator and train
         locator = Locator(basic_config)
         locator.train(genotypes=genotypes, samples=samples)
 
-        # Mock model predict to avoid actual prediction
-        locator.model.predict = Mock(return_value=np.random.randn(5, 2))
+        # predict() unwraps IndexedGenotypeModel and feeds genotype features
+        # (shape (n_predict, n_snps)) straight to the inner network.
+        n_snps = locator.filtered_genotypes.shape[0]
+        captured = {}
+        inner = locator.model.inner
 
-        # Call predict with new approach
+        def spy(x, *args, **kwargs):
+            arr = np.asarray(x)
+            captured["x"] = arr
+            return np.random.randn(arr.shape[0], 2)
+
+        inner.predict = spy
         locator.predict(genotypes=genotypes, samples=samples, return_df=True)
 
-        # Verify make_tf_dataset was called
-        assert mock_make_tf_dataset.called
-        call_kwargs = mock_make_tf_dataset.call_args[1]
-
-        # Check parameters
-        assert "genotypes" in call_kwargs
-        assert "index_set" in call_kwargs
-        assert call_kwargs["split"] == "predict"
-        assert call_kwargs["training"] is False
+        assert "x" in captured
+        assert captured["x"].ndim == 2
+        assert captured["x"].shape[1] == n_snps

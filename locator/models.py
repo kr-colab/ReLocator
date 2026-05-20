@@ -216,8 +216,88 @@ def create_network(
     return model
 
 
+class IndexedGenotypeModel(keras.Model):
+    """Model that gathers genotypes from a GPU-resident table by sample index.
+
+    The genotype matrix for realistic runs is small enough to live on the GPU
+    for the entire run (n_snps x n_samples x dtype bytes; sub-GB as int8). This
+    wrapper holds the whole matrix as a GPU-resident, sample-major tensor and
+    makes the model's input a vector of sample indices instead of a genotype
+    batch. Each training step the only host-to-device traffic is the index
+    vector; the row gather, dtype cast, and optional augmentation all run on the
+    GPU, and ``inner`` -- the ordinary coordinate-prediction network -- sees the
+    same ``(batch, n_snps)`` float features it always has.
+
+    The genotype table is held as a plain tensor, never a tracked weight, so it
+    stays out of ``get_weights()`` and checkpoints. ``save_weights`` /
+    ``load_weights`` / ``get_layer`` delegate to ``inner`` so the on-disk weight
+    format and PCA-layer wiring are identical to a bare network.
+
+    Parameters
+    ----------
+    inner : keras.Model
+        Coordinate-prediction network from ``create_network``; consumes
+        ``(batch, n_snps)`` genotype features.
+    genotype_table : tf.Tensor
+        Sample-major genotype matrix, shape ``(n_samples, n_snps)``, native
+        dtype (int8 hard calls or float32 dosage).
+    site_order : array-like or None
+        Optional SNP resampling order (bootstrap/jacknife), applied as a
+        per-batch column gather after the row gather.
+    augment : dict or None
+        Optional augmentation config with ``enabled`` and ``flip_rate`` keys;
+        genotype flipping is applied only during training.
+    """
+
+    def __init__(self, inner, genotype_table, site_order=None, augment=None):
+        super().__init__(name="indexed_genotype_model")
+        self.inner = inner
+        # Deliberately a plain tensor, not a tf.Variable: a Variable attribute
+        # would be tracked by Keras and copied on every get_weights() call
+        # (e.g. by EarlyStopping(restore_best_weights=True)). A constant tensor
+        # is captured by reference into the traced call and stays GPU-resident.
+        self._table = genotype_table
+        self._site_order = (
+            tf.constant(np.asarray(site_order), dtype=tf.int32)
+            if site_order is not None
+            else None
+        )
+        self._augment = augment or {}
+        # Imported here rather than at module scope to keep the models module
+        # free of any import-time dependency on the data subpackage.
+        from .data.tf_dataset import flip_genotypes_tf
+
+        self._flip_fn = flip_genotypes_tf
+
+    def call(self, idx, training=False):
+        """Gather genotypes for a batch of sample indices and predict."""
+        idx = tf.cast(idx, tf.int32)
+        g = tf.gather(self._table, idx, axis=0)  # (batch, n_snps), on GPU
+        if self._site_order is not None:
+            g = tf.gather(g, self._site_order, axis=1)  # bootstrap SNP resample
+        # float32 keeps the optional pca_projection layer (float32, raw counts)
+        # exact; mixed-precision layers inside inner downcast internally.
+        g = tf.cast(g, tf.float32)
+        if training and self._augment.get("enabled", False):
+            g = self._flip_fn(g, self._augment.get("flip_rate", 0.05))
+        return self.inner(g, training=training)
+
+    def get_layer(self, *args, **kwargs):
+        """Delegate so lookups of inner layers (e.g. PCA_LAYER_NAME) resolve."""
+        return self.inner.get_layer(*args, **kwargs)
+
+    def save_weights(self, *args, **kwargs):
+        """Persist only the inner network -- on-disk weight format is unchanged."""
+        return self.inner.save_weights(*args, **kwargs)
+
+    def load_weights(self, *args, **kwargs):
+        """Load weights into the inner network."""
+        return self.inner.load_weights(*args, **kwargs)
+
+
 __all__ = [
     "PCA_LAYER_NAME",
+    "IndexedGenotypeModel",
     "build_optimizer",
     "create_network",
     "euclidean_distance_loss",

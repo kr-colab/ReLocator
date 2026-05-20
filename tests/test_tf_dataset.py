@@ -1,4 +1,4 @@
-"""Tests for unified TensorFlow dataset creation."""
+"""Tests for index-based TensorFlow dataset creation and the genotype table."""
 
 import numpy as np
 import pytest
@@ -6,23 +6,21 @@ import tensorflow as tf
 
 from locator.data import (
     IndexSet,
+    build_genotype_table,
     flip_genotypes_tf,
     make_tf_dataset,
     make_tf_dataset_from_arrays,
 )
+from locator.models import IndexedGenotypeModel, create_network
 
 
 class TestMakeTFDataset:
-    """Test the main make_tf_dataset function."""
+    """Test the index-based make_tf_dataset function."""
 
     def setup_method(self):
         """Create test data."""
         np.random.seed(42)
-        self.n_snps = 100
         self.n_samples = 50
-        self.genotypes = np.random.randint(
-            0, 3, size=(self.n_snps, self.n_samples)
-        ).astype(np.float32)
         self.coordinates = np.random.randn(self.n_samples, 2).astype(np.float32)
 
         # Create IndexSet with train/val/test splits
@@ -31,110 +29,70 @@ class TestMakeTFDataset:
         )
 
     def test_basic_dataset_creation(self):
-        """Test basic dataset creation without weights or augmentation."""
+        """Dataset yields (sample_index, coordinate) batches."""
         dataset = make_tf_dataset(
-            genotypes=self.genotypes,
             coordinates=self.coordinates,
             index_set=self.index_set,
             split="train",
             batch_size=10,
             training=True,
-            cache=False,  # Disable caching for testing
             prefetch=False,
         )
 
-        # Check that we can iterate through the dataset
-        for batch_count, batch in enumerate(dataset):
-            features, labels = batch
+        batch_count = -1
+        for batch_count, (idx, coord) in enumerate(dataset):
+            assert idx.shape == (10,)
+            assert coord.shape == (10, 2)
+            assert idx.dtype == tf.int32
+            assert coord.dtype == tf.float32
+            # Coordinates must stay aligned to their sample index.
+            np.testing.assert_array_equal(coord.numpy(), self.coordinates[idx.numpy()])
 
-            # Check shapes
-            assert features.shape == (10, self.n_snps)  # (batch_size, n_features)
-            assert labels.shape == (10, 2)  # (batch_size, 2)
-
-            # Check dtypes
-            assert features.dtype == tf.float32
-            assert labels.dtype == tf.float32
-
-        # We should have 3 batches (30 samples / 10 batch_size)
-        assert batch_count == 2  # enumerate counts from 0, so 3 batches = 0, 1, 2
+        # 30 training samples / batch 10, drop_remainder defaults to training.
+        assert batch_count == 2
 
     def test_dataset_with_sample_weights(self):
-        """Test dataset creation with sample weights."""
-        # Create sample weights
+        """Dataset yields (index, coordinate, weight) when weights are given."""
         train_size = len(self.index_set.train)
         sample_weights = np.random.rand(train_size).astype(np.float32)
 
         dataset = make_tf_dataset(
-            genotypes=self.genotypes,
             coordinates=self.coordinates,
             index_set=self.index_set,
             split="train",
             batch_size=10,
             sample_weights=sample_weights,
             training=True,
-            cache=False,
             prefetch=False,
         )
 
-        # Check that dataset returns 3 elements
         for batch in dataset.take(1):
             assert len(batch) == 3
-            features, labels, weights = batch
-
-            assert features.shape == (10, self.n_snps)
-            assert labels.shape == (10, 2)
+            idx, coord, weights = batch
+            assert idx.shape == (10,)
+            assert coord.shape == (10, 2)
             assert weights.shape == (10,)
             assert weights.dtype == tf.float32
 
-    def test_dataset_with_augmentation(self):
-        """Test dataset with augmentation enabled."""
-        augment_config = {"enabled": True, "flip_rate": 0.1}
-
+    def test_validation_split_keeps_partial_batch(self):
+        """Non-training splits keep the final partial batch."""
         dataset = make_tf_dataset(
-            genotypes=self.genotypes,
             coordinates=self.coordinates,
             index_set=self.index_set,
-            split="train",
-            batch_size=10,
-            augment=augment_config,
-            training=True,
-            cache=False,
-            prefetch=False,
-        )
-
-        # Just verify we can iterate - augmentation is stochastic
-        for batch in dataset.take(1):
-            features, labels = batch
-            assert features.shape == (10, self.n_snps)
-            assert labels.shape == (10, 2)
-
-    def test_dataset_with_site_order(self):
-        """Test bootstrap resampling with site_order."""
-        # Create random site order for bootstrap
-        site_order = np.random.choice(self.n_snps, self.n_snps, replace=True)
-
-        dataset = make_tf_dataset(
-            genotypes=self.genotypes,
-            coordinates=self.coordinates,
-            index_set=self.index_set,
-            split="train",
-            batch_size=10,
-            site_order=site_order,
+            split="val",
+            batch_size=4,
             training=False,
-            cache=False,
             prefetch=False,
         )
 
-        # Verify shapes are correct
-        for batch in dataset.take(1):
-            features, labels = batch
-            assert features.shape[1] == self.n_snps  # Same number of SNPs
+        n_val = len(self.index_set.get_split("val"))
+        total = sum(int(idx.shape[0]) for idx, _ in dataset)
+        assert total == n_val
 
     def test_invalid_split_raises_error(self):
-        """Test that invalid split name raises error."""
+        """An unknown split name raises KeyError."""
         with pytest.raises(KeyError):
             make_tf_dataset(
-                genotypes=self.genotypes,
                 coordinates=self.coordinates,
                 index_set=self.index_set,
                 split="nonexistent",
@@ -142,12 +100,11 @@ class TestMakeTFDataset:
             )
 
     def test_mismatched_weights_raises_error(self):
-        """Test that mismatched weight length raises error."""
-        wrong_weights = np.random.rand(100)  # Wrong size
+        """A weight array that does not match the split size raises ValueError."""
+        wrong_weights = np.random.rand(100)
 
         with pytest.raises(ValueError, match="Sample weights length"):
             make_tf_dataset(
-                genotypes=self.genotypes,
                 coordinates=self.coordinates,
                 index_set=self.index_set,
                 split="train",
@@ -155,24 +112,85 @@ class TestMakeTFDataset:
                 sample_weights=wrong_weights,
             )
 
-    def test_mixed_precision_dtype(self):
-        """Test dataset creation with float16 dtype."""
-        dataset = make_tf_dataset(
-            genotypes=self.genotypes,
-            coordinates=self.coordinates,
-            index_set=self.index_set,
-            split="train",
-            batch_size=10,
-            dtype_policy="float16",
-            training=False,
-            cache=False,
-            prefetch=False,
-        )
 
-        for batch in dataset.take(1):
-            features, labels = batch
-            assert features.dtype == tf.float16
-            assert labels.dtype == tf.float32  # Coords always float32
+class TestBuildGenotypeTable:
+    """Test the GPU-resident genotype table builder."""
+
+    def test_sample_major_layout(self):
+        """The table is the sample-major transpose of the input."""
+        geno = np.random.randint(0, 3, size=(60, 15)).astype(np.int8)
+        table = build_genotype_table(geno)
+
+        assert table.shape == (15, 60)  # (n_samples, n_snps)
+        np.testing.assert_array_equal(table.numpy(), geno.T)
+
+    def test_preserves_int8_dtype(self):
+        """int8 hard-call inputs stay int8."""
+        geno = np.random.randint(0, 3, size=(30, 8)).astype(np.int8)
+        assert build_genotype_table(geno).dtype == tf.int8
+
+    def test_preserves_float32_dtype(self):
+        """float32 dosage inputs stay float32."""
+        geno = np.random.rand(30, 8).astype(np.float32) * 2.0
+        assert build_genotype_table(geno).dtype == tf.float32
+
+
+class TestIndexedGenotypeModel:
+    """Test the on-device gather wrapper model."""
+
+    def test_batched_gather_matches_manual_gather(self):
+        """wrapper(idx) equals inner(gather(table, idx)) for the same network."""
+        np.random.seed(0)
+        n_snps, n_samples = 40, 20
+        geno = np.random.randint(0, 3, size=(n_snps, n_samples)).astype(np.int8)
+
+        inner = create_network(input_shape=n_snps, width=8, n_layers=2)
+        table = build_genotype_table(geno)
+        wrapper = IndexedGenotypeModel(inner, table)
+
+        idx = tf.constant([5, 0, 12, 19, 3], dtype=tf.int32)
+        out_wrapper = wrapper(idx, training=False).numpy()
+
+        manual_features = tf.cast(tf.gather(geno.T, idx), tf.float32)
+        out_manual = inner(manual_features, training=False).numpy()
+
+        np.testing.assert_allclose(out_wrapper, out_manual, rtol=1e-5, atol=1e-5)
+
+    def test_site_order_column_gather(self):
+        """site_order resamples SNP columns after the per-sample row gather."""
+        np.random.seed(1)
+        n_snps, n_samples = 40, 20
+        geno = np.random.randint(0, 3, size=(n_snps, n_samples)).astype(np.int8)
+        site_order = np.random.choice(n_snps, n_snps, replace=True)
+
+        inner = create_network(input_shape=n_snps, width=8, n_layers=2)
+        table = build_genotype_table(geno)
+        wrapper = IndexedGenotypeModel(inner, table, site_order=site_order)
+
+        idx = tf.constant([2, 7, 11], dtype=tf.int32)
+        out_wrapper = wrapper(idx, training=False).numpy()
+
+        g = tf.gather(geno.T, idx)
+        g = tf.gather(g, site_order, axis=1)
+        out_manual = inner(tf.cast(g, tf.float32), training=False).numpy()
+
+        np.testing.assert_allclose(out_wrapper, out_manual, rtol=1e-5, atol=1e-5)
+
+    def test_save_weights_delegates_to_inner(self, tmp_path):
+        """Weights round-trip through inner so the on-disk format is unchanged."""
+        n_snps = 30
+        inner = create_network(input_shape=n_snps, width=8, n_layers=2)
+        geno = np.random.randint(0, 3, size=(n_snps, 10)).astype(np.int8)
+        wrapper = IndexedGenotypeModel(inner, build_genotype_table(geno))
+
+        path = str(tmp_path / "model.weights.h5")
+        wrapper.save_weights(path)
+
+        # A bare network of the same architecture can load the file.
+        reloaded = create_network(input_shape=n_snps, width=8, n_layers=2)
+        reloaded.load_weights(path)
+        for w_a, w_b in zip(inner.get_weights(), reloaded.get_weights(), strict=True):
+            np.testing.assert_array_equal(w_a, w_b)
 
 
 class TestFlipGenotypesTF:
@@ -180,36 +198,29 @@ class TestFlipGenotypesTF:
 
     def test_flip_genotypes_basic(self):
         """Test basic genotype flipping."""
-        # Create test genotypes with known values
         genotypes = tf.constant([0.0, 1.0, 0.0, 1.0, 2.0], dtype=tf.float32)
-
-        # Set seed for reproducibility
         tf.random.set_seed(42)
 
-        # Apply flipping with high rate to ensure some flips
         flipped = flip_genotypes_tf(genotypes, flip_rate=0.8)
 
-        # Check that 2s (missing) are never flipped
+        # 2s (missing) are never flipped
         original_2s = tf.where(genotypes == 2.0)
         flipped_2s = tf.gather(flipped, original_2s)
         assert tf.reduce_all(flipped_2s == 2.0)
 
-        # Check shape is preserved
         assert flipped.shape == genotypes.shape
 
     def test_flip_preserves_missing_values(self):
-        """Test that missing values (2) are never flipped."""
+        """Missing values (2) are never flipped."""
         genotypes = tf.constant([[0.0, 1.0, 2.0], [2.0, 0.0, 1.0]], dtype=tf.float32)
 
-        # Apply flipping many times
         for _ in range(10):
             flipped = flip_genotypes_tf(genotypes, flip_rate=0.5)
-            # Check all 2s remain 2s
             assert tf.reduce_all(tf.where(genotypes == 2.0, flipped == 2.0, True))
 
 
 class TestMakeTFDatasetFromArrays:
-    """Test the legacy compatibility function."""
+    """Test the legacy feature-based compatibility function."""
 
     def test_single_dataset_creation(self):
         """Test creating a single training dataset."""
@@ -224,10 +235,8 @@ class TestMakeTFDatasetFromArrays:
             prefetch=False,
         )
 
-        # Should return single dataset
         assert isinstance(dataset, tf.data.Dataset)
 
-        # Check shapes
         for batch in dataset.take(1):
             features, labels = batch
             assert features.shape == (10, 100)
@@ -254,18 +263,10 @@ class TestMakeTFDatasetFromArrays:
             prefetch=False,
         )
 
-        # Check all three datasets
         for ds in [train_ds, test_ds, val_ds]:
             assert isinstance(ds, tf.data.Dataset)
 
-        # Verify different behaviors
-        # Training should have drop_remainder=True by default
-        train_batch_count = sum(1 for _ in train_ds)
-        assert train_batch_count == 6  # 30 / 5
-
-        # Test/val should have drop_remainder=False by default
-        test_batch_count = sum(1 for _ in test_ds)
-        assert test_batch_count == 2  # 10 / 5
-
-        val_batch_count = sum(1 for _ in val_ds)
-        assert val_batch_count == 2  # 10 / 5
+        # Training drops the partial final batch; validation/test keep it.
+        assert sum(1 for _ in train_ds) == 6  # 30 / 5
+        assert sum(1 for _ in test_ds) == 2  # 10 / 5
+        assert sum(1 for _ in val_ds) == 2  # 10 / 5

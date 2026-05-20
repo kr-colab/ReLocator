@@ -353,8 +353,11 @@ class HoldoutMixin:
                     2, af[i], size=holdout_gen_modified.shape[0]
                 )
 
-            # Get predictions
-            predictions = self.model.predict(holdout_gen_modified, verbose=0)
+            # Get predictions. holdout_gen_modified is a per-sample genotype
+            # array (sites randomly resampled), so it is fed to the inner
+            # network directly rather than gathered from the resident table.
+            inner = getattr(self.model, "inner", self.model)
+            predictions = inner.predict(holdout_gen_modified, verbose=0)
 
             # Denormalize
             predictions[:, 0] = predictions[:, 0] * self.sdlong + self.meanlong
