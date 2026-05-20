@@ -7,10 +7,12 @@ from datetime import datetime
 import h5py
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 from tensorflow import keras
 
 from .data import (
     IndexSet,
+    build_genotype_table,
     filter_dosage_matrix,
     is_dosage_matrix,
     make_tf_dataset,
@@ -19,14 +21,17 @@ from .data import (
 from .data import filter_snps_legacy as filter_snps
 from .gpu_optimizer import GPUOptimizer
 from .models import (
+    PCA_GATE_NAME,
     PCA_LAYER_NAME,
+    IndexedGenotypeModel,
     build_optimizer,
     create_network,
     euclidean_distance_loss,
+    feature_network,
     loss_with_range_penalty,
     rasterize_species_range,
 )
-from .pca import compute_pca_projection
+from .pca import compute_pca_projection_gram
 from .sample_weights import weight_samples
 
 
@@ -350,8 +355,9 @@ class TrainingMixin:
                 self.trainlocs = normalized_locs[train]
                 self.testlocs = normalized_locs[test]
 
-        # Create model if not already created
-        if self.model is None:
+        # Create the model. Rebuild when site_order is given so the bootstrap /
+        # jacknife SNP resampling baked into the model matches this replicate.
+        if self.model is None or site_order is not None:
             # Determine input shape
             if self.traingen is not None:
                 input_shape = self.traingen.shape[1]
@@ -363,14 +369,16 @@ class TrainingMixin:
                 else:
                     input_shape = self.filtered_genotypes.shape[0]
 
-            self.model = self._create_model(input_shape=input_shape)
+            self.model = self._create_model(
+                input_shape=input_shape, site_order=site_order
+            )
 
         # Return early if setup_only
         if setup_only:
             return None
 
         callbacks = self._create_callbacks(boot=boot)
-        self._build_datasets_and_fit(normalized_locs, callbacks, site_order=site_order)
+        self._build_datasets_and_fit(normalized_locs, callbacks)
         self._save_training_artifacts(boot=boot)
         return self.history
 
@@ -470,8 +478,18 @@ class TrainingMixin:
         # Handle sample weights if enabled
         self._calculate_sample_weights(train_indices)
 
-        # Create model
-        self.model = self._create_model(input_shape=self.filtered_genotypes.shape[0])
+        # Build the model, or reuse the previous fold's. Reuse is valid only
+        # when the genotype table is unchanged (k-fold/LOO sharing one filtered
+        # array, as a Ray actor does); it keeps the compiled training function,
+        # avoiding a per-fold XLA recompile.
+        current_table = self._get_genotype_table()
+        if (
+            isinstance(self.model, IndexedGenotypeModel)
+            and self.model.genotype_table is current_table
+        ):
+            self._reset_model_for_fold()
+        else:
+            self.model = self._create_model(input_shape=self.filtered_genotypes.shape[0])
 
         # Create callbacks
         # For train_holdout, we might want to skip saving intermediate models
@@ -582,8 +600,20 @@ class TrainingMixin:
             warnings.warn(f"Failed to save model metadata: {e}")
             # Don't fail training if metadata save fails
 
-    def _create_model(self, input_shape):
-        """Create neural network model. Extracted to avoid duplication."""
+    def _create_model(self, input_shape, site_order=None):
+        """Create the training model.
+
+        Builds the coordinate-prediction network (``inner``) and, when a
+        GPU-resident genotype table is available, wraps it in an
+        IndexedGenotypeModel so genotypes are gathered on-device by sample
+        index. When no genotype matrix is loaded (e.g. building an architecture
+        to load saved weights into) the plain network is returned.
+
+        Args:
+            input_shape: Number of input features the inner network expects.
+            site_order: Optional SNP resampling order for bootstrap/jacknife,
+                applied per batch inside the wrapper.
+        """
         loss_fn = None
         if self.config.get("use_range_penalty"):
             if self.config.get("species_range_shapefile") is None:
@@ -614,7 +644,7 @@ class TrainingMixin:
         self._loss_fn = loss_fn
 
         pca_components = self.config.get("pca_components")
-        model = create_network(
+        inner = create_network(
             input_shape=input_shape,
             width=self.config.get("width", 256),
             n_layers=self.config.get("nlayers", 8),
@@ -628,18 +658,62 @@ class TrainingMixin:
             loss_fn=loss_fn,
         )
 
+        # Without a resident genotype matrix there is nothing to gather from;
+        # return the plain network (used by weight-loading paths).
+        if getattr(self, "filtered_genotypes", None) is None:
+            if pca_components is not None:
+                self._inject_pca_weights(inner, pca_components)
+            return inner
+
+        model = IndexedGenotypeModel(
+            inner,
+            self._get_genotype_table(),
+            site_order=site_order,
+            augment=self.config.get("augmentation"),
+        )
+        model.compile(
+            optimizer=build_optimizer(
+                self.config.get("optimizer_algo", "adam"),
+                self.config.get("learning_rate", 0.001),
+                self.config.get("weight_decay", 0.004),
+            ),
+            loss=loss_fn if loss_fn is not None else euclidean_distance_loss,
+        )
+
         if pca_components is not None:
             self._inject_pca_weights(model, pca_components)
 
         return model
 
-    def _inject_pca_weights(self, model, pca_components):
-        """Initialize the pca_projection layer with PCA loadings and freeze it.
+    def _get_genotype_table(self):
+        """Build or reuse the GPU-resident genotype table.
 
-        PCA is fit on the training split only. Recompiling is required for the
-        freeze to take effect before phase-1 training. When training data is
-        not available (e.g. building an architecture to load saved weights
-        into), this is a no-op and the layer keeps its loaded weights.
+        The table is rebuilt only when ``filtered_genotypes`` is a different
+        array object. A Ray actor reuses one Locator and one shared
+        ``filtered_genotypes`` across all its folds, so the table is built once
+        per actor; windowed analysis filters a fresh array per window, so the
+        identity check correctly triggers a rebuild there. ``_filter_genotypes``
+        assigns ``filtered_genotypes`` by reference (never a copy), which keeps
+        this identity guard exact.
+        """
+        if (
+            self._genotype_table is None
+            or self.filtered_genotypes is not self._genotype_table_src
+        ):
+            self._genotype_table = build_genotype_table(self.filtered_genotypes)
+            self._genotype_table_src = self.filtered_genotypes
+        return self._genotype_table
+
+    def _inject_pca_weights(self, model, pca_components):
+        """Initialize the pca_projection layer with PCA loadings, gate closed.
+
+        PCA is fit on the training split only, gathered from the GPU-resident
+        genotype table so the eigendecomposition runs on-device with no host
+        round trip. The projection layer stays trainable; phase-1 training is
+        held at the PCA initialization by closing the gradient gate, which
+        needs no recompile. When training data is not available (e.g. building
+        an architecture to load saved weights into), this is a no-op and the
+        layer keeps its loaded weights.
 
         Args:
             model: The model returned by create_network with a pca_projection
@@ -660,16 +734,23 @@ class TrainingMixin:
                 f"min(n_train={n_train}, n_snps={n_snps})"
             )
 
-        train_geno = np.asarray(filtered[:, train_idx].T, dtype=np.float32)
-        W, bias = compute_pca_projection(train_geno, pca_components)
-
-        projection = model.get_layer(PCA_LAYER_NAME)
-        projection.set_weights([W, bias])
-        projection.trainable = False
-        model.compile(
-            optimizer=model.optimizer,
-            loss=self._loss_fn if self._loss_fn is not None else euclidean_distance_loss,
+        # Gather the training rows from the resident table (sample-major, on
+        # the GPU) and fit PCA there via the Gram-matrix method.
+        train_geno = tf.gather(
+            self._get_genotype_table(),
+            np.asarray(train_idx, dtype=np.int32),
+            axis=0,
         )
+        W, bias = compute_pca_projection_gram(train_geno, pca_components)
+
+        # Assign the loadings straight from the device tensors -- set_weights
+        # would round them through host memory.
+        projection = model.get_layer(PCA_LAYER_NAME)
+        projection.kernel.assign(W)
+        projection.bias.assign(bias)
+        # Close the gate: phase-1 training holds the projection at its PCA
+        # initialization. The layer stays trainable, so the graph is unchanged.
+        model.get_layer(PCA_GATE_NAME).gate.assign(0.0)
 
     def train_window(
         self,
@@ -786,8 +867,10 @@ class TrainingMixin:
             "disable_gpu", False
         ):
             try:
+                # Probe the feature network: the IndexedGenotypeModel wrapper
+                # consumes sample indices, not genotype features.
                 optimal_batch = GPUOptimizer.get_optimal_batch_size(
-                    self.model,
+                    feature_network(self.model),
                     input_shape=(self.filtered_genotypes.shape[0],),
                     target_memory_usage=0.85,
                     dataset_size=dataset_size,
@@ -892,18 +975,17 @@ class TrainingMixin:
         self,
         normalized_locs,
         callbacks,
-        site_order=None,
         keras_verbose=None,
     ):
         """Build tf.data pipelines and train the model.
 
         Requires self.filtered_genotypes, self.index_set, self.model,
-        and self.sample_weights to be set before calling.
+        and self.sample_weights to be set before calling. SNP resampling
+        (site_order) is handled inside the model, not the dataset.
 
         Args:
             normalized_locs: Full normalized location array
             callbacks: List of Keras callbacks
-            site_order: Optional SNP reordering for bootstrap
             keras_verbose: Verbosity for model.fit (default: from config)
 
         Returns
@@ -916,7 +998,6 @@ class TrainingMixin:
             keras_verbose = self.config.get("keras_verbose", 1)
 
         train_dataset = make_tf_dataset(
-            genotypes=self.filtered_genotypes,
             coordinates=normalized_locs,
             index_set=self.index_set,
             split="train",
@@ -925,19 +1006,14 @@ class TrainingMixin:
                 self.sample_weights["sample_weights"] if self.sample_weights else None
             ),
             training=True,
-            cache=True,
-            site_order=site_order,
         )
 
         val_dataset = make_tf_dataset(
-            genotypes=self.filtered_genotypes,
             coordinates=normalized_locs,
             index_set=self.index_set,
             split="test",
             batch_size=batch_size,
             training=False,
-            cache=True,
-            site_order=site_order,
         )
 
         self.history = self._fit_model(
@@ -949,11 +1025,13 @@ class TrainingMixin:
         """Fit a model, running a two-phase PCA fine-tune when enabled.
 
         With ``pca_components`` set and ``pca_finetune`` true: phase 1 trains
-        with the pca_projection layer frozen at its PCA initialization; phase 2
-        unfreezes it and continues at a low learning rate. Otherwise a single
-        fit runs. Keras resets stateful callbacks (EarlyStopping,
-        ReduceLROnPlateau) at the start of each fit, so the same callback list
-        is reused across both phases.
+        with the projection held at its PCA initialization (gradient gate
+        closed); phase 2 opens the gate and continues at a low learning rate.
+        Both phases share one compiled training function -- only the gate
+        variable, the optimizer state, and the learning rate are reassigned, so
+        phase 2 does not retrace or recompile. Otherwise a single fit runs.
+        Keras resets stateful callbacks (EarlyStopping, ReduceLROnPlateau) at
+        the start of each fit, so the same callback list is reused.
 
         Args:
             model: Compiled Keras model to train.
@@ -980,12 +1058,12 @@ class TrainingMixin:
         if pca_components is None or not self.config.get("pca_finetune", True):
             return history
 
-        # Phase 2: unfreeze the PCA projection and fine-tune at a low LR.
-        model.get_layer(PCA_LAYER_NAME).trainable = True
-        model.compile(
-            optimizer=self._make_finetune_optimizer(),
-            loss=getattr(self, "_loss_fn", None) or euclidean_distance_loss,
-        )
+        # Phase 2: open the gradient gate so the projection fine-tunes, on a
+        # fresh optimizer state at a low learning rate. The graph is unchanged,
+        # so the compiled training function from phase 1 is reused as-is.
+        model.get_layer(PCA_GATE_NAME).gate.assign(1.0)
+        self._reset_optimizer_state(model.optimizer)
+        model.optimizer.learning_rate = self.config.get("pca_finetune_lr", 1e-4)
         history2 = model.fit(
             train_dataset,
             epochs=max_epochs,
@@ -995,13 +1073,69 @@ class TrainingMixin:
         )
         return self._concat_histories(history, history2)
 
-    def _make_finetune_optimizer(self):
-        """Build the optimizer for the PCA fine-tuning phase."""
-        return build_optimizer(
-            self.config.get("optimizer_algo", "adam"),
-            self.config.get("pca_finetune_lr", 1e-4),
-            self.config.get("weight_decay", 0.004),
-        )
+    @staticmethod
+    def _reset_optimizer_state(optimizer):
+        """Zero an optimizer's momentum/velocity slots and step counter.
+
+        Gives a reused model -- the fine-tune phase, or the next fold -- a
+        clean optimizer state without building a new optimizer, which would
+        reset the compile cache and force an XLA recompile. Under mixed
+        precision the optimizer is a LossScaleOptimizer wrapping the real one;
+        only the inner optimizer is zeroed, so the adapting loss scale is left
+        intact (zeroing it would stall training). The learning rate is zeroed
+        here too and must be set by the caller afterwards.
+        """
+        inner = getattr(optimizer, "inner_optimizer", optimizer)
+        for var in inner.variables:
+            var.assign(tf.zeros_like(var))
+
+    @staticmethod
+    def _reinitialize_layer_weights(model):
+        """Re-draw every layer weight from its initializer.
+
+        Used when reusing a model across folds: gives each fold a fresh random
+        initialization, exactly as a newly constructed network would have,
+        while keeping the compiled training function. Covers the weight kinds
+        create_network produces (Dense kernel/bias, BatchNormalization
+        gamma/beta and moving statistics); raises if a trainable weight is
+        left uncovered so a future architecture change cannot silently leak
+        state between folds.
+        """
+        reset = set()
+        for layer in model.layers:
+            for weight_attr, init_attr in (
+                ("kernel", "kernel_initializer"),
+                ("bias", "bias_initializer"),
+                ("gamma", "gamma_initializer"),
+                ("beta", "beta_initializer"),
+                ("moving_mean", "moving_mean_initializer"),
+                ("moving_variance", "moving_variance_initializer"),
+            ):
+                weight = getattr(layer, weight_attr, None)
+                initializer = getattr(layer, init_attr, None)
+                if weight is not None and initializer is not None:
+                    weight.assign(initializer(weight.shape, weight.dtype))
+                    reset.add(id(weight))
+        missed = [w for w in model.trainable_variables if id(w) not in reset]
+        if missed:
+            raise RuntimeError(
+                "_reinitialize_layer_weights left weights uncovered: "
+                f"{[w.name for w in missed]}"
+            )
+
+    def _reset_model_for_fold(self):
+        """Reset a reused model to a fresh per-fold starting state.
+
+        Re-draws all layer weights from their initializers, zeros the
+        optimizer state, restores the base learning rate, and re-fits the
+        per-fold PCA projection. The compiled training function is left
+        intact, so the fold does not pay an XLA recompile.
+        """
+        self._reinitialize_layer_weights(self.model.inner)
+        self._reset_optimizer_state(self.model.optimizer)
+        self.model.optimizer.learning_rate = self.config.get("learning_rate", 0.001)
+        if self.config.get("pca_components") is not None:
+            self._inject_pca_weights(self.model, self.config["pca_components"])
 
     @staticmethod
     def _concat_histories(history1, history2):

@@ -8,6 +8,21 @@ import numpy as np
 import pandas as pd
 
 from .data import filter_dosage_matrix, is_dosage_matrix
+from .models import feature_network
+
+
+def predict_on_indices(model, filtered_genotypes, indices, site_order=None, verbose=0):
+    """Predict coordinates for the given samples from the genotype matrix.
+
+    Slices the requested samples, transposes to sample-major, and runs the
+    network that consumes genotype features -- unwrapping IndexedGenotypeModel
+    when needed.
+    """
+    inner = feature_network(model)
+    features = np.ascontiguousarray(filtered_genotypes[:, indices].T)
+    if site_order is not None:
+        features = features[:, site_order]
+    return inner.predict(features, verbose=verbose)
 
 
 class PredictionMixin:
@@ -53,6 +68,10 @@ class PredictionMixin:
         if self.model is None:
             raise ValueError("Model must be trained before prediction")
 
+        # IndexedGenotypeModel gathers genotypes by index for training; for
+        # prediction we feed genotype features straight to the feature network.
+        inner = feature_network(self.model)
+
         # Check if using new tf.data approach or old array approach
         if genotypes is not None:
             # New tf.data approach
@@ -62,10 +81,6 @@ class PredictionMixin:
                     DeprecationWarning,
                     stacklevel=2,
                 )
-
-            # Import required modules
-            from .data import IndexSet, make_tf_dataset
-            from .data import filter_snps_legacy as filter_snps
 
             # Determine which samples to predict
             locs = None
@@ -142,30 +157,13 @@ class PredictionMixin:
                     impute=self.config.get("impute_missing", False),
                 )
 
-            # Create IndexSet for prediction
-            predict_index_set = IndexSet(
-                indices={"predict": indices},
-                total_samples=len(samples),
-                na_mask=None,  # Not needed for prediction
-            )
-
-            # Create dummy coordinates for prediction (values don't matter)
-            dummy_coords = np.zeros((len(samples), 2))
-
-            # Create prediction dataset
-            predict_dataset = make_tf_dataset(
-                genotypes=filtered_genotypes,  # Use filtered genotypes
-                coordinates=dummy_coords,
-                index_set=predict_index_set,
-                split="predict",
-                batch_size=self.config.get("batch_size", 256),
-                training=False,
-                cache=True,
+            predictions = predict_on_indices(
+                self.model,
+                filtered_genotypes,
+                indices,
                 site_order=site_order,
+                verbose=verbose,
             )
-
-            # Get predictions
-            predictions = self.model.predict(predict_dataset, verbose=verbose)
 
             # Store the indices we predicted on for later use
             prediction_indices = indices
@@ -199,7 +197,7 @@ class PredictionMixin:
                 return empty_df if return_df else None
 
             # Get predictions
-            predictions = self.model.predict(predgen)
+            predictions = inner.predict(predgen)
 
             # Use stored pred_indices
             prediction_indices = (
@@ -460,32 +458,11 @@ class PredictionMixin:
         if verbose:
             print("Predicting locations for holdout samples...")
 
-        # Use tf.data approach for predictions
-        from .data import IndexSet, make_tf_dataset
-
-        # Create IndexSet for holdout samples
-        holdout_index_set = IndexSet(
-            indices={"predict": self.holdout_idx},
-            total_samples=len(self.samples),
-            na_mask=None,
+        # holdout_gen is the (n_holdout, n_snps) feature slice stored by
+        # _store_holdout_state; predict on it directly.
+        predictions = feature_network(self.model).predict(
+            self.holdout_gen, verbose=verbose
         )
-
-        # Create dummy coordinates for prediction
-        dummy_coords = np.zeros((len(self.samples), 2))
-
-        # Create prediction dataset
-        predict_dataset = make_tf_dataset(
-            genotypes=self.filtered_genotypes,
-            coordinates=dummy_coords,
-            index_set=holdout_index_set,
-            split="predict",
-            batch_size=self.config.get("batch_size", 256),
-            training=False,
-            cache=True,
-        )
-
-        # Get predictions
-        predictions = self.model.predict(predict_dataset, verbose=verbose)
 
         # Create output dataframe
         pred_df = pd.DataFrame(predictions, columns=["x", "y"])

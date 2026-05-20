@@ -6,7 +6,7 @@ from sklearn.decomposition import PCA
 
 from locator import Locator
 from locator.models import PCA_LAYER_NAME
-from locator.pca import compute_pca_projection
+from locator.pca import compute_pca_projection, compute_pca_projection_gram
 
 
 def _pca_config(basic_config, **overrides):
@@ -62,7 +62,8 @@ def test_frozen_projection_keeps_pca_loadings(genotype_data, basic_config):
     train_geno = np.asarray(
         loc.filtered_genotypes[:, loc.index_set.train].T, dtype=np.float32
     )
-    expected, _ = compute_pca_projection(train_geno, 8)
+    # Training fits PCA via the Gram-matrix path, so compare against that.
+    expected, _ = compute_pca_projection_gram(train_geno, 8)
     assert np.allclose(kernel, expected, atol=1e-5)
 
 
@@ -78,7 +79,7 @@ def test_finetune_moves_projection(genotype_data, basic_config):
     train_geno = np.asarray(
         loc.filtered_genotypes[:, loc.index_set.train].T, dtype=np.float32
     )
-    pca_loadings, _ = compute_pca_projection(train_geno, 8)
+    pca_loadings, _ = compute_pca_projection_gram(train_geno, 8)
     assert not np.allclose(kernel, pca_loadings, atol=1e-6)
 
 
@@ -125,3 +126,28 @@ def test_pca_components_rejects_site_order(genotype_data, basic_config):
     loc = Locator(_pca_config(basic_config, pca_components=8, max_epochs=1))
     with pytest.raises(ValueError, match="bootstrap"):
         loc.train(genotypes=genotypes, samples=samples, site_order=np.arange(n_snps))
+
+
+def test_gradient_gate_controls_gradient_flow():
+    """GradientGate passes values through but gates the gradient to its input.
+
+    Defined last: it runs TensorFlow ops, and the Locator-based tests above
+    must configure TF threading before the eager context is initialized.
+    """
+    import tensorflow as tf
+
+    from locator.models import GradientGate
+
+    gate = GradientGate(dtype="float32")
+    x = tf.Variable([[1.0, -2.0, 3.0]])
+    gate(x)  # first call builds the gate weight
+
+    for g, expected_grad in [(0.0, 0.0), (1.0, 1.0)]:
+        gate.gate.assign(g)
+        with tf.GradientTape() as tape:
+            y = gate(x)
+        grad = tape.gradient(y, x)
+        # Output value equals the input regardless of the gate state.
+        assert np.allclose(y.numpy(), x.numpy())
+        # Gradient reaching the input is scaled by the gate.
+        assert np.allclose(grad.numpy(), expected_grad)

@@ -1,6 +1,7 @@
 """PCA loadings for the optional PCA-initialized projection layer."""
 
 import numpy as np
+import tensorflow as tf
 from sklearn.decomposition import PCA
 
 
@@ -33,3 +34,49 @@ def compute_pca_projection(genotype_matrix, n_components):
     W = pca.components_.T
     bias = -(pca.mean_ @ W)
     return W.astype(np.float32), bias.astype(np.float32)
+
+
+def compute_pca_projection_gram(genotype_matrix, n_components):
+    """Fit PCA via the Gram-matrix eigendecomposition; a fast path for the
+    PCA-initialized projection layer.
+
+    Returns the same ``(W, bias)`` contract as :func:`compute_pca_projection`,
+    but built entirely from TensorFlow ops, so it runs on the GPU when the
+    input tensor is GPU-resident. With far more SNPs than samples the Gram
+    matrix ``Xc @ Xcᵀ`` is only ``(n_samples, n_samples)``, so the fit reduces
+    to one small eigendecomposition plus two matmuls -- orders of magnitude
+    cheaper than an SVD over the full ``(n_samples, n_snps)`` matrix.
+
+    The Gram matrix's eigenvectors are the left singular vectors of ``Xc`` and
+    its eigenvalues the squared singular values, so the loadings are recovered
+    as ``V = Xcᵀ @ U / singular_value``.
+
+    Parameters
+    ----------
+    genotype_matrix : tf.Tensor or np.ndarray
+        Genotype matrix of shape ``(n_samples, n_snps)``, any numeric dtype.
+        Pass training samples only to avoid leaking held-out samples.
+    n_components : int
+        Number of PCA components (the projection width).
+
+    Returns
+    -------
+    W : tf.Tensor
+        Loadings of shape ``(n_snps, n_components)``, float32. Returned as a
+        device tensor so the caller can assign it to the projection layer
+        without a host round trip.
+    bias : tf.Tensor
+        Bias of shape ``(n_components,)``, float32, equal to ``-(mean @ W)``.
+    """
+    X = tf.cast(genotype_matrix, tf.float32)
+    mean = tf.reduce_mean(X, axis=0, keepdims=True)
+    Xc = X - mean
+    gram = tf.linalg.matmul(Xc, Xc, transpose_b=True)
+    evals, evecs = tf.linalg.eigh(gram)  # ascending eigenvalues
+    evals = evals[::-1][:n_components]
+    evecs = evecs[:, ::-1][:, :n_components]
+    # Guard against tiny negative eigenvalues from float round-off.
+    scale = tf.sqrt(tf.maximum(evals, 1e-12))
+    W = tf.linalg.matmul(Xc, evecs, transpose_a=True) / scale
+    bias = tf.reshape(-tf.linalg.matmul(mean, W), [-1])
+    return W, bias

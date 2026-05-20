@@ -9,6 +9,8 @@ from tensorflow import keras
 from .data import IndexSet, NormalizationParams, make_tf_dataset, normalize_locs
 from .ensemble_model_manager import EnsembleModelManager
 from .gpu_optimizer import GPUOptimizer
+from .models import feature_network
+from .prediction import predict_on_indices
 
 # from tqdm import tqdm
 
@@ -294,9 +296,12 @@ class EnsembleMixin:
             "sdlat": sdlat,
         }
 
-        # Expose the fold's split so _create_model can fit per-fold PCA on the
-        # training samples when pca_components is enabled.
+        # Expose the fold's split and genotypes so _create_model can build the
+        # IndexedGenotypeModel (and fit per-fold PCA when pca_components is set).
+        # The parallel ensemble actor calls this method directly, bypassing
+        # train_ensemble, so filtered_genotypes must be set here too.
         self.index_set = index_set
+        self.filtered_genotypes = filtered_genotypes
 
         # Create model
         model = self._create_model(input_shape=filtered_genotypes.shape[0])
@@ -313,26 +318,22 @@ class EnsembleMixin:
         # Determine optimal batch size for ensemble
         batch_size = self.get_ensemble_batch_size(len(train_idx), fold_idx)
 
-        # Create datasets
+        # Create datasets. Augmentation is applied inside the model (configured
+        # via self.config["augmentation"] in train_ensemble), not the pipeline.
         train_dataset = make_tf_dataset(
-            genotypes=filtered_genotypes,
             coordinates=normalized_locs,
             index_set=index_set,
             split="train",
             batch_size=batch_size,
-            augment=augment_config,
             training=True,
-            cache=True,
         )
 
         val_dataset = make_tf_dataset(
-            genotypes=filtered_genotypes,
             coordinates=normalized_locs,
             index_set=index_set,
             split="test",  # k-fold uses 'test' for validation
             batch_size=batch_size,
             training=False,
-            cache=True,
         )
 
         # Create callbacks for this fold
@@ -475,18 +476,11 @@ class EnsembleMixin:
 
     def _predict_single_fold(self, model_info, filtered_genotypes, samples, indices):
         """Make predictions using a single fold model."""
-        # Load model weights if needed
         model = model_info["model"]
         if model_info["weights_file"]:
-            model.load_weights(model_info["weights_file"])
+            feature_network(model).load_weights(model_info["weights_file"])
 
-        # Create prediction dataset
-        pred_dataset = self._create_prediction_dataset(
-            filtered_genotypes, samples, indices
-        )
-
-        # Make predictions
-        predictions = model.predict(pred_dataset, verbose=0)
+        predictions = predict_on_indices(model, filtered_genotypes, indices)
 
         # Denormalize using NormalizationParams
         norm_params = NormalizationParams(
@@ -497,29 +491,6 @@ class EnsembleMixin:
         )
 
         return norm_params.reverse(predictions)
-
-    def _create_prediction_dataset(self, filtered_genotypes, samples, indices):
-        """Create tf.data dataset for prediction."""
-        # Create IndexSet for prediction
-        pred_index_set = IndexSet.from_manual(
-            train=np.array([], dtype=int),
-            test=indices,
-            total_samples=len(samples),
-        )
-
-        # Create dummy coordinates (not used in prediction)
-        dummy_coords = np.zeros((len(samples), 2))
-
-        # Create and return dataset
-        return make_tf_dataset(
-            genotypes=filtered_genotypes,
-            coordinates=dummy_coords,
-            index_set=pred_index_set,
-            split="test",
-            batch_size=self.config.get("batch_size", 32),
-            training=False,
-            cache=False,
-        )
 
     def _format_ensemble_predictions_df(
         self,
@@ -665,14 +636,7 @@ class EnsembleMixin:
             model = self._ensemble_model_manager.get_model(
                 fold_idx, filtered_genotypes.shape[0]
             )
-
-            # Create prediction dataset
-            pred_dataset = self._create_prediction_dataset(
-                filtered_genotypes, samples, indices
-            )
-
-            # Make predictions
-            predictions = model.predict(pred_dataset, verbose=0)
+            predictions = predict_on_indices(model, filtered_genotypes, indices)
 
             # Get normalization params for this fold
             norm_params = self._ensemble_model_manager.get_normalization_params(fold_idx)
@@ -753,7 +717,7 @@ class EnsembleMixin:
             # Only compute for first fold, reuse for others
             if fold_idx == 0 and hasattr(self, "model") and self.model is not None:
                 batch_size = GPUOptimizer.get_optimal_batch_size(
-                    model=self.model,
+                    model=feature_network(self.model),
                     input_shape=(self.filtered_genotypes.shape[0],),
                     dataset_size=dataset_size,
                     verbose=self.config.get("keras_verbose", 1) > 0,

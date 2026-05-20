@@ -193,11 +193,12 @@ class TestAnalysisTFData:
         # Should have been called at least twice (train and validation datasets)
         assert call_count >= 2
 
-        # Verify the calls included correct parameters
+        # Verify the calls included correct parameters. The index-based
+        # pipeline carries coordinates and indices, not the genotype matrix.
         calls = mock_make_tf_dataset.call_args_list
         for call in calls:
             kwargs = call[1]
-            assert "genotypes" in kwargs
+            assert "coordinates" in kwargs
             assert "index_set" in kwargs
             assert "split" in kwargs
 
