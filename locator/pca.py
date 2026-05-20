@@ -80,3 +80,40 @@ def compute_pca_projection_gram(genotype_matrix, n_components):
     W = tf.linalg.matmul(Xc, evecs, transpose_a=True) / scale
     bias = tf.reshape(-tf.linalg.matmul(mean, W), [-1])
     return W, bias
+
+
+def scree_elbow(genotype_matrix):
+    """Pick a PCA rank from the genotype-PCA scree elbow.
+
+    Computes the explained-variance spectrum (Gram-matrix eigenvalues over the
+    samples) and returns the rank at the chord-distance elbow: the point of the
+    explained-variance curve farthest below the straight line joining its first
+    and last points. For genotype data the spectrum drops steeply then flattens,
+    so this is a stable, data-driven projection width.
+
+    Parameters
+    ----------
+    genotype_matrix : tf.Tensor or np.ndarray
+        Genotype matrix of shape ``(n_samples, n_snps)``; training samples only.
+
+    Returns
+    -------
+    int
+        The elbow rank, at least 1.
+    """
+    X = tf.cast(genotype_matrix, tf.float32)
+    mean = tf.reduce_mean(X, axis=0, keepdims=True)
+    Xc = X - mean
+    gram = tf.linalg.matmul(Xc, Xc, transpose_b=True)
+    evals = np.clip(tf.linalg.eigvalsh(gram).numpy()[::-1], 0.0, None)
+    total = evals.sum()
+    if total <= 0.0:
+        return 1
+    # Keep the meaningful components; a centred n-sample matrix has rank n-1.
+    evr = evals[evals > total * 1e-9] / total
+    if len(evr) < 3 or evr[0] == evr[-1]:
+        return max(1, len(evr))
+    x = np.arange(len(evr), dtype=np.float64) / (len(evr) - 1)
+    y = (evr - evr.min()) / (evr.max() - evr.min())
+    chord = y[0] + x * (y[-1] - y[0])
+    return int(np.argmax(chord - y)) + 1
