@@ -305,6 +305,15 @@ class IndexedGenotypeModel(keras.Model):
 
         self._flip_fn = flip_genotypes_tf
 
+    @property
+    def genotype_table(self):
+        """The GPU-resident genotype table this model gathers from.
+
+        The compiled ``call`` captures this tensor by reference, so a model
+        may only be reused while its table is unchanged.
+        """
+        return self._table
+
     def call(self, idx, training=False):
         """Gather genotypes for a batch of sample indices and predict."""
         idx = tf.cast(idx, tf.int32)

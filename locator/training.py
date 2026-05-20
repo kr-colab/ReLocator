@@ -477,8 +477,18 @@ class TrainingMixin:
         # Handle sample weights if enabled
         self._calculate_sample_weights(train_indices)
 
-        # Create model
-        self.model = self._create_model(input_shape=self.filtered_genotypes.shape[0])
+        # Build the model, or reuse the previous fold's. Reuse is valid only
+        # when the genotype table is unchanged (k-fold/LOO sharing one filtered
+        # array, as a Ray actor does); it keeps the compiled training function,
+        # avoiding a per-fold XLA recompile.
+        current_table = self._get_genotype_table()
+        if (
+            isinstance(self.model, IndexedGenotypeModel)
+            and self.model.genotype_table is current_table
+        ):
+            self._reset_model_for_fold()
+        else:
+            self.model = self._create_model(input_shape=self.filtered_genotypes.shape[0])
 
         # Create callbacks
         # For train_holdout, we might want to skip saving intermediate models
@@ -1060,14 +1070,67 @@ class TrainingMixin:
 
     @staticmethod
     def _reset_optimizer_state(optimizer):
-        """Zero an optimizer's slot variables and step counter in place.
+        """Zero an optimizer's momentum/velocity slots and step counter.
 
-        Gives the fine-tune phase a clean optimizer state without building a
-        new optimizer, which would reset the compile cache and force an XLA
-        recompile. The learning rate is set separately by the caller.
+        Gives a reused model -- the fine-tune phase, or the next fold -- a
+        clean optimizer state without building a new optimizer, which would
+        reset the compile cache and force an XLA recompile. Under mixed
+        precision the optimizer is a LossScaleOptimizer wrapping the real one;
+        only the inner optimizer is zeroed, so the adapting loss scale is left
+        intact (zeroing it would stall training). The learning rate is zeroed
+        here too and must be set by the caller afterwards.
         """
-        for var in optimizer.variables:
+        inner = getattr(optimizer, "inner_optimizer", optimizer)
+        for var in inner.variables:
             var.assign(tf.zeros_like(var))
+
+    @staticmethod
+    def _reinitialize_layer_weights(model):
+        """Re-draw every layer weight from its initializer.
+
+        Used when reusing a model across folds: gives each fold a fresh random
+        initialization, exactly as a newly constructed network would have,
+        while keeping the compiled training function. Covers the weight kinds
+        create_network produces (Dense kernel/bias, BatchNormalization
+        gamma/beta and moving statistics); raises if a trainable weight is
+        left uncovered so a future architecture change cannot silently leak
+        state between folds.
+        """
+        reset = set()
+        for layer in model.layers:
+            for weight_attr, init_attr in (
+                ("kernel", "kernel_initializer"),
+                ("bias", "bias_initializer"),
+                ("gamma", "gamma_initializer"),
+                ("beta", "beta_initializer"),
+                ("moving_mean", "moving_mean_initializer"),
+                ("moving_variance", "moving_variance_initializer"),
+            ):
+                weight = getattr(layer, weight_attr, None)
+                initializer = getattr(layer, init_attr, None)
+                if weight is not None and initializer is not None:
+                    weight.assign(initializer(weight.shape, weight.dtype))
+                    reset.add(id(weight))
+        missed = [w for w in model.trainable_variables if id(w) not in reset]
+        if missed:
+            raise RuntimeError(
+                "_reinitialize_layer_weights left weights uncovered: "
+                f"{[w.name for w in missed]}"
+            )
+
+    def _reset_model_for_fold(self):
+        """Reset a reused model to a fresh per-fold starting state.
+
+        Re-draws all layer weights from their initializers, zeros the
+        optimizer state, restores the base learning rate, and re-fits the
+        per-fold PCA projection. The compiled training function is left
+        intact, so the fold does not pay an XLA recompile.
+        """
+        self._reinitialize_layer_weights(self.model.inner)
+        self._reset_optimizer_state(self.model.optimizer)
+        self.model.optimizer.learning_rate = self.config.get("learning_rate", 0.001)
+        if self.config.get("pca_components") is not None:
+            self._inject_pca_weights(self.model, self.config["pca_components"])
 
     @staticmethod
     def _concat_histories(history1, history2):

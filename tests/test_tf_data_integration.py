@@ -35,3 +35,24 @@ class TestTFDataIntegration:
         # First argument should be a tf.data.Dataset
         train_data = fit_call[0][0]
         assert hasattr(train_data, "__iter__")  # It's a dataset, not a numpy array
+
+    def test_train_holdout_reuses_model_across_folds(self, genotype_data, basic_config):
+        """Folds sharing one genotype table reuse the compiled model."""
+        from locator.models import IndexedGenotypeModel
+
+        genotypes, samples, _, _, _ = genotype_data
+        locator = Locator(basic_config)
+        # One shared filtered array, as the parallel k-fold/LOO dispatch does.
+        filtered = locator._filter_genotypes(genotypes)
+
+        locator.train_holdout(
+            samples=samples, holdout_indices=[0, 1, 2], filtered_genotypes=filtered
+        )
+        first_model = locator.model
+        assert isinstance(first_model, IndexedGenotypeModel)
+
+        locator.train_holdout(
+            samples=samples, holdout_indices=[3, 4, 5], filtered_genotypes=filtered
+        )
+        # The second fold reused the same compiled model object.
+        assert locator.model is first_model
