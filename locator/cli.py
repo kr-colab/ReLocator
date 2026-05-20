@@ -136,6 +136,29 @@ def parse_args():
                           default: 256",
     )
     parser.add_argument(
+        "--pca_components",
+        default=None,
+        type=int,
+        help="If set, prepend a PCA-initialized linear projection of this "
+        "width as the first layer and fine-tune it. Recommended when the "
+        "number of SNPs greatly exceeds the number of samples. "
+        "default: None (disabled)",
+    )
+    parser.add_argument(
+        "--no_pca_finetune",
+        dest="pca_finetune",
+        default=True,
+        action="store_false",
+        help="Keep the PCA projection frozen at its PCA initialization "
+        "instead of running the low-learning-rate fine-tuning phase.",
+    )
+    parser.add_argument(
+        "--pca_finetune_lr",
+        default=1e-4,
+        type=float,
+        help="Learning rate for the PCA fine-tuning phase. default: 1e-4",
+    )
+    parser.add_argument(
         "--out",
         help="file name stem for output",
     )

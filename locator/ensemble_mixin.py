@@ -294,6 +294,10 @@ class EnsembleMixin:
             "sdlat": sdlat,
         }
 
+        # Expose the fold's split so _create_model can fit per-fold PCA on the
+        # training samples when pca_components is enabled.
+        self.index_set = index_set
+
         # Create model
         model = self._create_model(input_shape=filtered_genotypes.shape[0])
 
@@ -336,13 +340,13 @@ class EnsembleMixin:
             fold_idx, save_fold_models, patience_multiplier
         )
 
-        # Train model
-        history = model.fit(
+        # Train model (runs the two-phase PCA fine-tune when enabled)
+        history = self._fit_model(
+            model,
             train_dataset,
-            epochs=self.config.get("max_epochs", 5000),
-            verbose=self.config.get("keras_verbose", 1) if verbose else 0,
-            validation_data=val_dataset,
-            callbacks=callbacks,
+            val_dataset,
+            callbacks,
+            keras_verbose=self.config.get("keras_verbose", 1) if verbose else 0,
         )
 
         # Return model info

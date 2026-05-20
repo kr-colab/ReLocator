@@ -165,6 +165,9 @@ class Locator(
         - **width** (*int*): Width of neural network layers.
         - **nlayers** (*int*): Number of neural network layers.
         - **dropout_prop** (*float*): Dropout proportion.
+        - **pca_components** (*int*): If set, prepend a PCA-initialized linear projection of this width as the first layer and fine-tune it. Recommended when n_SNPs >> n_samples. Default None (disabled).
+        - **pca_finetune** (*bool*): Whether to unfreeze the PCA projection for a low-learning-rate fine-tuning phase. Default True. False keeps the projection frozen at its PCA initialization.
+        - **pca_finetune_lr** (*float*): Learning rate for the PCA fine-tuning phase. Default 1e-4.
         - **keras_verbose** (*int*): Verbosity level for Keras training.
         - **impute_missing** (*bool*): Whether to impute missing genotypes.
         - **validation_split** (*float*): Proportion of data to use for validation.
@@ -207,6 +210,10 @@ class Locator(
             "width": 256,
             "nlayers": 8,
             "dropout_prop": 0.25,
+            # PCA-initialized projection (for n_SNPs >> n_samples)
+            "pca_components": None,
+            "pca_finetune": True,
+            "pca_finetune_lr": 1e-4,
             # Training parameters
             "max_epochs": 5000,
             "patience": 100,

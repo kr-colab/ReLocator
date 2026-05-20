@@ -11,6 +11,30 @@ from tensorflow import keras
 from tensorflow.keras import backend as K
 from tensorflow.keras import layers
 
+PCA_LAYER_NAME = "pca_projection"
+
+
+def build_optimizer(algo, learning_rate, weight_decay=0.004):
+    """Build a Keras optimizer from an algorithm name.
+
+    Args:
+        algo: "adam" or "adamw" (case-insensitive).
+        learning_rate: Learning rate.
+        weight_decay: Weight decay, used only for AdamW.
+
+    Returns
+    -------
+        A configured keras optimizer.
+    """
+    algo = algo.lower()
+    if algo == "adam":
+        return keras.optimizers.Adam(learning_rate=learning_rate)
+    if algo == "adamw":
+        return keras.optimizers.AdamW(
+            learning_rate=learning_rate, weight_decay=weight_decay
+        )
+    raise ValueError(f"Unsupported optimizer: {algo}")
+
 
 def rasterize_species_range(shapefile_path, resolution=0.1):
     gdf = gpd.read_file(shapefile_path)
@@ -97,6 +121,7 @@ def create_network(
     width: int = 256,
     n_layers: int = 8,
     dropout_prop: float = 0.25,
+    pca_components: Optional[int] = None,
     optimizer_config: Optional[dict] = None,
     loss_fn: Optional[callable] = None,
 ) -> keras.Model:
@@ -112,6 +137,11 @@ def create_network(
     :param dropout_prop: Dropout proportion for middle dropout layer,
         defaults to 0.25.
     :type dropout_prop: float, optional
+    :param pca_components: If set, prepend a linear projection layer named
+        "pca_projection" of this width as the first layer. The caller is
+        responsible for initializing its weights with PCA loadings. Defaults
+        to None (no projection layer).
+    :type pca_components: int, optional
     :param optimizer_config: Configuration for the optimizer. Should be a dict containing keys:
         "algo" (str): "adam" or "adamw";
         "learning_rate" (float);
@@ -132,8 +162,21 @@ def create_network(
     # Create input layer explicitly
     inputs = keras.Input(shape=(input_shape,))
 
-    # Batch normalization on input
-    x = layers.BatchNormalization()(inputs)
+    # Optional PCA-initialized linear projection as the first layer. Placed
+    # before BatchNormalization so it sees raw genotype counts, which lets a
+    # caller set its weights to PCA loadings and reproduce PCA scores exactly.
+    # Pinned to float32: it computes raw_counts @ loadings + bias, where the
+    # two terms are large and nearly cancel, so float16 loses the result.
+    if pca_components is not None:
+        x = layers.Dense(
+            pca_components,
+            activation="linear",
+            name=PCA_LAYER_NAME,
+            dtype="float32",
+        )(inputs)
+        x = layers.BatchNormalization()(x)
+    else:
+        x = layers.BatchNormalization()(inputs)
 
     # First half of layers
     for i in range(int(np.floor(n_layers / 2))):
@@ -157,17 +200,11 @@ def create_network(
     if optimizer_config is None:
         optimizer = "Adam"
     else:
-        if optimizer_config["algo"].lower() == "adam":
-            optimizer = keras.optimizers.Adam(
-                learning_rate=optimizer_config["learning_rate"]
-            )
-        elif optimizer_config["algo"].lower() == "adamw":
-            optimizer = keras.optimizers.AdamW(
-                learning_rate=optimizer_config["learning_rate"],
-                weight_decay=optimizer_config["weight_decay"],
-            )
-        else:
-            raise ValueError(f"Unsupported optimizer: {optimizer_config['algo']}")
+        optimizer = build_optimizer(
+            optimizer_config["algo"],
+            optimizer_config["learning_rate"],
+            optimizer_config.get("weight_decay", 0.004),
+        )
 
     # Use provided loss function if available; else default to euclidean_distance_loss
     if loss_fn is None:
@@ -180,6 +217,8 @@ def create_network(
 
 
 __all__ = [
+    "PCA_LAYER_NAME",
+    "build_optimizer",
     "create_network",
     "euclidean_distance_loss",
     "loss_with_range_penalty",
