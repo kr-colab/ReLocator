@@ -18,7 +18,15 @@ from .data import (
 )
 from .data import filter_snps_legacy as filter_snps
 from .gpu_optimizer import GPUOptimizer
-from .models import create_network, loss_with_range_penalty, rasterize_species_range
+from .models import (
+    PCA_LAYER_NAME,
+    build_optimizer,
+    create_network,
+    euclidean_distance_loss,
+    loss_with_range_penalty,
+    rasterize_species_range,
+)
+from .pca import compute_pca_projection
 from .sample_weights import weight_samples
 
 
@@ -213,6 +221,14 @@ class TrainingMixin:
         # Store samples and site_order
         self.samples = samples
         self.site_order = site_order
+
+        if self.config.get("pca_components") is not None and (
+            train_gen is not None or site_order is not None
+        ):
+            raise ValueError(
+                "pca_components is not supported with bootstrap/jacknife "
+                "resampling (pre-processed train_gen or site_order)."
+            )
 
         # Use instance default if na_action not specified
         if na_action is None:
@@ -595,17 +611,64 @@ class TrainingMixin:
                     penalty_weight=self.config.get("penalty_weight", 1.0),
                 )
 
-        return create_network(
+        self._loss_fn = loss_fn
+
+        pca_components = self.config.get("pca_components")
+        model = create_network(
             input_shape=input_shape,
             width=self.config.get("width", 256),
             n_layers=self.config.get("nlayers", 8),
             dropout_prop=self.config.get("dropout_prop", 0.25),
+            pca_components=pca_components,
             optimizer_config={
                 "algo": self.config.get("optimizer_algo", "adam"),
                 "learning_rate": self.config.get("learning_rate", 0.001),
                 "weight_decay": self.config.get("weight_decay", 0.004),
             },
             loss_fn=loss_fn,
+        )
+
+        if pca_components is not None:
+            self._inject_pca_weights(model, pca_components)
+
+        return model
+
+    def _inject_pca_weights(self, model, pca_components):
+        """Initialize the pca_projection layer with PCA loadings and freeze it.
+
+        PCA is fit on the training split only. Recompiling is required for the
+        freeze to take effect before phase-1 training. When training data is
+        not available (e.g. building an architecture to load saved weights
+        into), this is a no-op and the layer keeps its loaded weights.
+
+        Args:
+            model: The model returned by create_network with a pca_projection
+                layer.
+            pca_components: Projection width.
+        """
+        index_set = getattr(self, "index_set", None)
+        filtered = getattr(self, "filtered_genotypes", None)
+        if index_set is None or filtered is None:
+            return
+
+        n_snps = filtered.shape[0]
+        train_idx = index_set.train
+        n_train = len(train_idx)
+        if pca_components > min(n_train, n_snps):
+            raise ValueError(
+                f"pca_components ({pca_components}) cannot exceed "
+                f"min(n_train={n_train}, n_snps={n_snps})"
+            )
+
+        train_geno = np.asarray(filtered[:, train_idx].T, dtype=np.float32)
+        W, bias = compute_pca_projection(train_geno, pca_components)
+
+        projection = model.get_layer(PCA_LAYER_NAME)
+        projection.set_weights([W, bias])
+        projection.trainable = False
+        model.compile(
+            optimizer=model.optimizer,
+            loss=self._loss_fn if self._loss_fn is not None else euclidean_distance_loss,
         )
 
     def train_window(
@@ -632,6 +695,12 @@ class TrainingMixin:
         -------
             keras.callbacks.History object from model training
         """
+        if self.config.get("pca_components") is not None:
+            raise ValueError(
+                "pca_components is not supported with windowed analysis; "
+                "run windows without the PCA-init projection."
+            )
+
         # Store samples and index set
         self.samples = samples
         self.index_set = index_set
@@ -871,15 +940,77 @@ class TrainingMixin:
             site_order=site_order,
         )
 
-        history = self.model.fit(
+        self.history = self._fit_model(
+            self.model, train_dataset, val_dataset, callbacks, keras_verbose
+        )
+        return self.history
+
+    def _fit_model(self, model, train_dataset, val_dataset, callbacks, keras_verbose):
+        """Fit a model, running a two-phase PCA fine-tune when enabled.
+
+        With ``pca_components`` set and ``pca_finetune`` true: phase 1 trains
+        with the pca_projection layer frozen at its PCA initialization; phase 2
+        unfreezes it and continues at a low learning rate. Otherwise a single
+        fit runs. Keras resets stateful callbacks (EarlyStopping,
+        ReduceLROnPlateau) at the start of each fit, so the same callback list
+        is reused across both phases.
+
+        Args:
+            model: Compiled Keras model to train.
+            train_dataset: Training tf.data.Dataset.
+            val_dataset: Validation tf.data.Dataset.
+            callbacks: List of Keras callbacks.
+            keras_verbose: Verbosity passed to model.fit.
+
+        Returns
+        -------
+            keras.callbacks.History (phase-2 history with both phases merged
+            when the two-phase fine-tune runs).
+        """
+        max_epochs = self.config.get("max_epochs", 5000)
+        history = model.fit(
             train_dataset,
-            epochs=self.config.get("max_epochs", 5000),
+            epochs=max_epochs,
             validation_data=val_dataset,
             callbacks=callbacks,
             verbose=keras_verbose,
         )
-        self.history = history
-        return history
+
+        pca_components = self.config.get("pca_components")
+        if pca_components is None or not self.config.get("pca_finetune", True):
+            return history
+
+        # Phase 2: unfreeze the PCA projection and fine-tune at a low LR.
+        model.get_layer(PCA_LAYER_NAME).trainable = True
+        model.compile(
+            optimizer=self._make_finetune_optimizer(),
+            loss=getattr(self, "_loss_fn", None) or euclidean_distance_loss,
+        )
+        history2 = model.fit(
+            train_dataset,
+            epochs=max_epochs,
+            validation_data=val_dataset,
+            callbacks=callbacks,
+            verbose=keras_verbose,
+        )
+        return self._concat_histories(history, history2)
+
+    def _make_finetune_optimizer(self):
+        """Build the optimizer for the PCA fine-tuning phase."""
+        return build_optimizer(
+            self.config.get("optimizer_algo", "adam"),
+            self.config.get("pca_finetune_lr", 1e-4),
+            self.config.get("weight_decay", 0.004),
+        )
+
+    @staticmethod
+    def _concat_histories(history1, history2):
+        """Merge two Keras History objects into one covering both phases."""
+        keys = set(history1.history) & set(history2.history)
+        history2.history = {
+            k: list(history1.history[k]) + list(history2.history[k]) for k in keys
+        }
+        return history2
 
     def _save_training_artifacts(self, boot=0, save=True):
         """Save training history and model metadata to disk.
