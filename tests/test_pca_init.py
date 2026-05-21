@@ -50,6 +50,17 @@ def test_train_builds_pca_projection(genotype_data, basic_config):
     assert layer.units == 8
 
 
+def test_pca_components_auto_resolves_to_elbow(genotype_data, basic_config):
+    """pca_components='auto' picks a concrete projection width from the scree."""
+    genotypes, samples, _, _, _ = genotype_data
+    loc = Locator(_pca_config(basic_config, pca_components="auto", max_epochs=2))
+    loc.train(genotypes=genotypes, samples=samples)
+
+    resolved = loc.config["pca_components"]
+    assert isinstance(resolved, int) and resolved >= 1
+    assert loc.model.get_layer(PCA_LAYER_NAME).units == resolved
+
+
 def test_frozen_projection_keeps_pca_loadings(genotype_data, basic_config):
     """With pca_finetune=False the projection stays at its PCA initialization."""
     genotypes, samples, _, _, _ = genotype_data
@@ -151,3 +162,20 @@ def test_gradient_gate_controls_gradient_flow():
         assert np.allclose(y.numpy(), x.numpy())
         # Gradient reaching the input is scaled by the gate.
         assert np.allclose(grad.numpy(), expected_grad)
+
+
+def test_scree_elbow_finds_low_rank_structure():
+    """scree_elbow returns a small rank for data with a few dominant axes.
+
+    Defined last: it runs TensorFlow ops (see the note above).
+    """
+    from locator.pca import scree_elbow
+
+    rng = np.random.default_rng(0)
+    n, p, k = 60, 2000, 3
+    factors = rng.standard_normal((n, k))
+    loadings = rng.standard_normal((k, p))
+    X = factors @ loadings * 10.0 + rng.standard_normal((n, p))
+
+    rank = scree_elbow(X)
+    assert 2 <= rank <= 8

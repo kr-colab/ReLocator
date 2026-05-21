@@ -31,7 +31,7 @@ from .models import (
     loss_with_range_penalty,
     rasterize_species_range,
 )
-from .pca import compute_pca_projection_gram
+from .pca import compute_pca_projection_gram, scree_elbow
 from .sample_weights import weight_samples
 
 
@@ -643,7 +643,7 @@ class TrainingMixin:
 
         self._loss_fn = loss_fn
 
-        pca_components = self.config.get("pca_components")
+        pca_components = self._resolve_pca_components()
         inner = create_network(
             input_shape=input_shape,
             width=self.config.get("width", 256),
@@ -703,6 +703,37 @@ class TrainingMixin:
             self._genotype_table = build_genotype_table(self.filtered_genotypes)
             self._genotype_table_src = self.filtered_genotypes
         return self._genotype_table
+
+    def _resolve_pca_components(self):
+        """Resolve the pca_components config value to a concrete width.
+
+        Returns None (no projection) or an int. The string ``"auto"`` is
+        resolved to the genotype-PCA scree elbow of the training split and
+        written back to the config, so every fold and the saved metadata of a
+        run share one rank.
+        """
+        pca_components = self.config.get("pca_components")
+        if pca_components is None or isinstance(pca_components, int):
+            return pca_components
+        if pca_components != "auto":
+            raise ValueError(
+                f"pca_components must be None, an int, or 'auto'; got {pca_components!r}"
+            )
+        index_set = getattr(self, "index_set", None)
+        if index_set is None or getattr(self, "filtered_genotypes", None) is None:
+            raise ValueError(
+                "pca_components='auto' needs training data; pass an explicit "
+                "integer when building an architecture to load weights into"
+            )
+        train_geno = tf.gather(
+            self._get_genotype_table(),
+            np.asarray(index_set.train, dtype=np.int32),
+            axis=0,
+        )
+        rank = scree_elbow(train_geno)
+        self.config["pca_components"] = rank
+        print(f"pca_components='auto': using scree-elbow rank {rank}")
+        return rank
 
     def _inject_pca_weights(self, model, pca_components):
         """Initialize the pca_projection layer with PCA loadings, gate closed.
