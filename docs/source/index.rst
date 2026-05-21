@@ -11,6 +11,7 @@ Locator is a deep learning-based tool for predicting geographic coordinates from
    usage
    cli
    ensemble_guide
+   pca_guide
    parallel_analysis_guide
    plotting_guide
    na_handling_guide
@@ -24,6 +25,7 @@ Quick Links
 * :doc:`usage` - Basic and advanced usage guide
 * :doc:`cli` - Command-line interface
 * :doc:`ensemble_guide` - Ensemble models and k-fold cross-validation
+* :doc:`pca_guide` - The PCA model for data with many SNPs
 * :doc:`parallel_analysis_guide` - Multi-GPU parallel analysis guide
 * :doc:`plotting_guide` - Visualization and plotting guide
 * :doc:`na_handling_guide` - Guide for handling missing coordinates
