@@ -65,8 +65,7 @@ similar dosage values.
 
 ## Site filtering
 
-Hard-coded defaults (matching the previous `scripts/gl_to_locator.py`
-script):
+Hard-coded defaults applied inside the loader:
 
 | Threshold | Value | Effect |
 |---|---|---|
