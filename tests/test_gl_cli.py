@@ -89,6 +89,53 @@ def test_cli_gl_dosage_runs_end_to_end(tmp_path: Path):
     )
 
 
+def test_cli_gl_threshold_flags_run_end_to_end(tmp_path: Path):
+    beagle = tmp_path / "out.beagle.gz"
+    bam_list = tmp_path / "bams.txt"
+    sample_data = tmp_path / "samples.tsv"
+    _write_synthetic_beagle(beagle, n_sites=100, n_samples=6, seed=2)
+    _write_bam_list(bam_list, [f"Ind{i}" for i in range(6)])
+    _write_sample_data(sample_data, [f"Ind{i}" for i in range(6)])
+
+    out_prefix = tmp_path / "out" / "run"
+
+    proc = subprocess.run(
+        _cmd_prefix()
+        + [
+            "--gl",
+            str(beagle),
+            "--bam_list",
+            str(bam_list),
+            "--gl_min_maf",
+            "0.05",
+            "--gl_max_missing_frac",
+            "0.25",
+            "--gl_missing_threshold",
+            "0.5",
+            "--sample_data",
+            str(sample_data),
+            "--out",
+            str(out_prefix),
+            "--max_epochs",
+            "2",
+            "--patience",
+            "2",
+            "--train_split",
+            "0.5",
+            "--seed",
+            "1",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, f"stderr:\n{proc.stderr}\nstdout:\n{proc.stdout}"
+    expected_predlocs = out_prefix.parent / "run_predlocs.txt"
+    assert expected_predlocs.exists(), (
+        f"Expected {expected_predlocs} — stderr:\n{proc.stderr}\nstdout:\n{proc.stdout}"
+    )
+
+
 def test_cli_gl_without_bam_list_errors(tmp_path: Path):
     beagle = tmp_path / "out.beagle.gz"
     sample_data = tmp_path / "samples.tsv"

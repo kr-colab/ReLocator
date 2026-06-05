@@ -63,6 +63,28 @@ def parse_args():
         "--gl is set.",
     )
     parser.add_argument(
+        "--gl_min_maf",
+        type=float,
+        default=0.01,
+        help="GL site filter: drop sites with mean-dosage MAF below this. "
+        "Ignored unless --gl is set. default: 0.01",
+    )
+    parser.add_argument(
+        "--gl_max_missing_frac",
+        type=float,
+        default=0.10,
+        help="GL site filter: drop sites whose fraction of missing samples "
+        "exceeds this. Ignored unless --gl is set. default: 0.10",
+    )
+    parser.add_argument(
+        "--gl_missing_threshold",
+        type=float,
+        default=0.4,
+        help="GL missingness call: a sample at a site is missing if "
+        "max(GL_AA, GL_AB, GL_BB) < this. Ignored unless --gl is set. "
+        "default: 0.40",
+    )
+    parser.add_argument(
         "--sample_data",
         help="tab-delimited text file with columns\
                          'sampleID \t x \t y'.\
@@ -278,6 +300,9 @@ def main():  # noqa: C901
         gl=args.gl,
         bam_list=args.bam_list,
         gl_mode=args.gl_mode,
+        gl_missing_threshold=args.gl_missing_threshold,
+        gl_min_maf=args.gl_min_maf,
+        gl_max_missing_frac=args.gl_max_missing_frac,
     )
     sample_data, locs = loc.sort_samples(samples, args.sample_data)
 

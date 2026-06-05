@@ -235,7 +235,15 @@ class DataLoaderMixin:
         samples = np.array(df.index, dtype=object)
         return dosage, samples
 
-    def _load_from_gl(self, beagle_path, bam_list_path, gl_mode="dosage"):
+    def _load_from_gl(
+        self,
+        beagle_path,
+        bam_list_path,
+        gl_mode="dosage",
+        gl_missing_threshold=0.4,
+        gl_min_maf=0.01,
+        gl_max_missing_frac=0.10,
+    ):
         """Load ANGSD genotype-likelihood data as a continuous-dosage matrix.
 
         Reads an ANGSD ``-doGlf 2`` beagle.gz file plus a paired bam_list
@@ -248,20 +256,35 @@ class DataLoaderMixin:
 
         - ``"dosage"`` (default): returns ``(n_sites_kept, n_samples)``.
           Each value is expected dosage E[geno] = P(AB) + 2*P(BB) under a
-          flat prior. Missing samples (max GL < 0.4) are imputed with
-          site-mean dosage. Site filter: ``min_maf=0.01``,
-          ``max_missing_frac=0.10``.
+          flat prior. Missing samples (max GL < ``gl_missing_threshold``) are
+          imputed with site-mean dosage, then sites are filtered by
+          ``gl_min_maf`` and ``gl_max_missing_frac``.
         - ``"full_gl"``: returns ``(3 * n_sites_kept, n_samples)``. Three
           pseudo-rows per genomic site holding the AA / AB / BB GL
           probabilities. Preserves genotype uncertainty information that
           the dosage scalar collapses. Missing samples are imputed with the
           per-site mean GL triplet.
 
-        Filter thresholds match those documented in the native GL loader
-        and are not currently surfaced as CLI flags.
+        Args:
+            gl_missing_threshold: A sample at a site is treated as missing if
+                ``max(GL_AA, GL_AB, GL_BB) < gl_missing_threshold``. Default 0.4.
+            gl_min_maf: Drop sites whose mean-dosage MAF falls below this.
+                Default 0.01.
+            gl_max_missing_frac: Drop sites whose fraction of missing samples
+                exceeds this. Default 0.10.
         """
         if gl_mode not in ("dosage", "full_gl"):
             raise ValueError(f"gl_mode must be 'dosage' or 'full_gl', got {gl_mode!r}")
+        if not 0.0 <= gl_missing_threshold <= 1.0:
+            raise ValueError(
+                f"gl_missing_threshold must be in [0, 1], got {gl_missing_threshold!r}"
+            )
+        if not 0.0 <= gl_max_missing_frac <= 1.0:
+            raise ValueError(
+                f"gl_max_missing_frac must be in [0, 1], got {gl_max_missing_frac!r}"
+            )
+        if gl_min_maf < 0.0:
+            raise ValueError(f"gl_min_maf must be >= 0, got {gl_min_maf!r}")
 
         sample_ids = _gl.sample_ids_from_bam_list(bam_list_path)
         n_samples = len(sample_ids)
@@ -271,16 +294,20 @@ class DataLoaderMixin:
         gl = _gl.reshape_gl(gl_flat, n_samples)
 
         dosage = _gl.expected_dosage(gl)
-        missing_mask = _gl.detect_missing(gl, gl_missing_threshold=0.4)
+        missing_mask = _gl.detect_missing(gl, gl_missing_threshold=gl_missing_threshold)
         dosage = _gl.impute_dosage_with_site_mean(dosage, missing_mask)
 
         keep, _reasons = _gl.filter_sites(
-            dosage, missing_mask, min_maf=0.01, max_missing_frac=0.10
+            dosage,
+            missing_mask,
+            min_maf=gl_min_maf,
+            max_missing_frac=gl_max_missing_frac,
         )
         if not keep.any():
             raise ValueError(
                 f"No sites passed the MAF/missingness filter "
-                f"(min_maf=0.01, max_missing_frac=0.10) on {beagle_path}."
+                f"(gl_min_maf={gl_min_maf}, gl_max_missing_frac={gl_max_missing_frac}) "
+                f"on {beagle_path}."
             )
 
         if gl_mode == "dosage":
@@ -310,6 +337,9 @@ class DataLoaderMixin:
         gl=None,
         bam_list=None,
         gl_mode="dosage",
+        gl_missing_threshold=0.4,
+        gl_min_maf=0.01,
+        gl_max_missing_frac=0.10,
     ):
         """Load genotype data from various input sources.
 
@@ -341,6 +371,14 @@ class DataLoaderMixin:
                 ``"full_gl"``. ``"dosage"`` returns one expected-dosage value
                 per site per sample; ``"full_gl"`` returns all three AA/AB/BB
                 GL probabilities as separate rows.
+            gl_missing_threshold (float): GL site filter; a sample at a site is
+                missing if ``max(GL_AA, GL_AB, GL_BB) < gl_missing_threshold``.
+                Ignored unless ``gl`` is set. Default 0.4.
+            gl_min_maf (float): GL site filter; drop sites whose mean-dosage MAF
+                falls below this. Ignored unless ``gl`` is set. Default 0.01.
+            gl_max_missing_frac (float): GL site filter; drop sites whose
+                fraction of missing samples exceeds this. Ignored unless ``gl``
+                is set. Default 0.10.
 
         Returns
         -------
@@ -436,7 +474,14 @@ class DataLoaderMixin:
                     "--gl / gl= requires a paired --bam_list / bam_list= "
                     "to derive sample IDs from the ANGSD BAM filelist."
                 )
-            return self._load_from_gl(gl, bam_list, gl_mode=gl_mode)
+            return self._load_from_gl(
+                gl,
+                bam_list,
+                gl_mode=gl_mode,
+                gl_missing_threshold=gl_missing_threshold,
+                gl_min_maf=gl_min_maf,
+                gl_max_missing_frac=gl_max_missing_frac,
+            )
 
         else:
             raise ValueError(

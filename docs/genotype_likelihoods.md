@@ -65,17 +65,34 @@ similar dosage values.
 
 ## Site filtering
 
-Hard-coded defaults applied inside the loader:
+Three thresholds control which sites survive. Each has a CLI flag and a
+matching `load_genotypes` keyword; the values below are the defaults.
 
-| Threshold | Value | Effect |
-|---|---|---|
-| `gl_missing_threshold` | 0.4 | Sample at site is missing if `max(GL_AA, GL_AB, GL_BB) < 0.4` (near-uniform GL = no information) |
-| `max_missing_frac` | 0.10 | Site dropped if missing fraction across samples exceeds this |
-| `min_maf` | 0.01 | Site dropped if mean-dosage-derived MAF falls below this |
+| Threshold | CLI flag | Default | Effect |
+|---|---|---|---|
+| `gl_missing_threshold` | `--gl_missing_threshold` | 0.4 | Sample at site is missing if `max(GL_AA, GL_AB, GL_BB) < this` (near-uniform GL = no information) |
+| `gl_max_missing_frac` | `--gl_max_missing_frac` | 0.10 | Site dropped if missing fraction across samples exceeds this |
+| `gl_min_maf` | `--gl_min_maf` | 0.01 | Site dropped if mean-dosage-derived MAF falls below this |
 
-These are not yet surfaced as CLI flags. If your dataset needs different
-thresholds, edit `locator/loaders.py:_load_from_gl` directly or open an
-issue.
+Override them on the command line:
+
+```bash
+locator --gl output.beagle.gz --bam_list bam.filelist \
+    --sample_data data/sample_data.txt --out out/gl_run/run1 \
+    --gl_min_maf 0.05 --gl_max_missing_frac 0.20 --gl_missing_threshold 0.5
+```
+
+Or via the Python API:
+
+```python
+genotypes, samples = loc.load_genotypes(
+    gl="output.beagle.gz",
+    bam_list="bam.filelist",
+    gl_min_maf=0.05,
+    gl_max_missing_frac=0.20,
+    gl_missing_threshold=0.5,
+)
+```
 
 ## Missing data
 
