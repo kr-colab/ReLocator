@@ -22,7 +22,7 @@ from ray.util import ActorPool
 
 from locator.data.filters import is_dosage_matrix
 
-from ._actor import DEFAULT_GPU_MEM_MB, make_window_actors
+from ._actor import DEFAULT_GPU_MEM_MB, make_window_actors, make_window_loo_actors
 from ._helpers import (
     _ensure_ray_initialized,
     _precalculate_bandwidth,
@@ -36,6 +36,56 @@ def _windows_chunk_path(locator) -> str:
 
 def _windows_output_path(locator) -> str:
     return f"{locator.config['out']}_windows_holdouts_predlocs.csv"
+
+
+def _windows_loo_chunk_path(locator) -> str:
+    return f"{locator.config['out']}_windows_loo_chunks.csv"
+
+
+def _windows_loo_output_path(locator) -> str:
+    return f"{locator.config['out']}_windows_loo_predlocs.csv"
+
+
+def _build_windows_to_run(windows, done_labels, positions) -> List[Dict[str, Any]]:
+    """Turn generated windows into dispatch dicts, skipping resumed labels."""
+    windows_to_run: List[Dict[str, Any]] = []
+    for wi, win in enumerate(windows):
+        label = win.get("label", f"pos{win['start']}")
+        if label in done_labels:
+            continue
+        snp_indices = (
+            np.where(win["indices"])[0].tolist()
+            if "indices" in win
+            else np.where((positions >= win["start"]) & (positions < win["stop"]))[
+                0
+            ].tolist()
+        )
+        windows_to_run.append(
+            {
+                "window_idx": wi,
+                "window_label": label,
+                "window_chromosome": win.get("chromosome"),
+                "window_start": win["start"],
+                "window_stop": win["stop"],
+                "snp_indices": snp_indices,
+            }
+        )
+    return windows_to_run
+
+
+def _pivot_window_chunks(chunk_path: str) -> Optional[pd.DataFrame]:
+    """Pivot the long per-window checkpoint to wide ``x_<label>``/``y_<label>``."""
+    chunks = pd.read_csv(chunk_path)
+    if chunks.empty:
+        return None
+    wide = chunks.pivot_table(
+        index="sampleID",
+        columns="window_label",
+        values=["x_pred", "y_pred"],
+        aggfunc="first",
+    )
+    wide.columns = [f"{val.replace('_pred', '')}_{label}" for val, label in wide.columns]
+    return wide.reset_index()
 
 
 def _resume_completed_windows(chunk_path: str) -> set[str]:
@@ -238,28 +288,7 @@ def parallel_windows_holdouts(  # noqa: C901
             f"present in {chunk_path}; skipping those."
         )
 
-    windows_to_run: List[Dict[str, Any]] = []
-    for wi, win in enumerate(windows):
-        label = win.get("label", f"pos{win['start']}")
-        if label in done_labels:
-            continue
-        snp_indices = (
-            np.where(win["indices"])[0].tolist()
-            if "indices" in win
-            else np.where(
-                (locator.positions >= win["start"]) & (locator.positions < win["stop"])
-            )[0].tolist()
-        )
-        windows_to_run.append(
-            {
-                "window_idx": wi,
-                "window_label": label,
-                "window_chromosome": win.get("chromosome"),
-                "window_start": win["start"],
-                "window_stop": win["stop"],
-                "snp_indices": snp_indices,
-            }
-        )
+    windows_to_run = _build_windows_to_run(windows, done_labels, locator.positions)
 
     if windows_to_run:
         # Note: windowed analysis must materialize the full genotype array on
@@ -354,22 +383,199 @@ def parallel_windows_holdouts(  # noqa: C901
             print("Warning: No windows produced predictions.")
         return None
 
-    chunks = pd.read_csv(chunk_path)
-    if chunks.empty:
+    wide = _pivot_window_chunks(chunk_path)
+    if wide is None:
         if verbose:
             print("Warning: No windows produced predictions.")
         return None
 
-    wide = chunks.pivot_table(
-        index="sampleID",
-        columns="window_label",
-        values=["x_pred", "y_pred"],
-        aggfunc="first",
-    )
-    wide.columns = [f"{val.replace('_pred', '')}_{label}" for val, label in wide.columns]
-    wide = wide.reset_index()
-
     if save_full_pred_matrix:
         wide.to_csv(_windows_output_path(locator), index=False)
+
+    return wide
+
+
+def parallel_windows_leave_one_out(  # noqa: C901
+    locator,
+    genotypes,
+    samples,
+    window_start: int = 0,
+    window_size: int = int(5e5),
+    window_stop: Optional[int] = None,
+    respect_chromosomes: bool = True,
+    gpu_ids: List[int] = [0, 1],
+    gpu_fraction: float = 1.0,
+    return_df: bool = True,
+    save_full_pred_matrix: bool = True,
+    verbose: bool = True,
+    na_action: Optional[str] = None,
+    resume: bool = True,
+    gpu_mem_mb: int = DEFAULT_GPU_MEM_MB,
+) -> Union[pd.DataFrame, None]:
+    """Full leave-one-out within every genomic window, across a pool of GPUs.
+
+    For each window, every sample with known coordinates is held out in turn
+    and predicted by a model trained on the rest (``W`` windows x ``N`` samples
+    model fits). Requires continuous-dosage (GL) input with positions already
+    populated (``load_genotypes(gl=...)`` or a dosage zarr). Each window is one
+    Ray task; the actor filters that window's dosage once and loops the LOO
+    folds, so every fold sees the same SNP set. Checkpointing is per window
+    (a window's ``N`` rows flush together) to ``{out}_windows_loo_chunks.csv``.
+    """
+    _ensure_ray_initialized()
+
+    if not is_dosage_matrix(genotypes):
+        raise ValueError(
+            "parallel_windows_leave_one_out requires a continuous-dosage matrix "
+            "(GL input via load_genotypes(gl=...) or a dosage zarr); hard-call "
+            "GenotypeArray input is not supported."
+        )
+
+    locator.samples = samples
+    locator.genotypes = genotypes
+
+    na_action, _ = locator._validate_na_action(samples, na_action, "Windows LOO")
+
+    _load_positions(locator, verbose)
+
+    sample_data, locs = locator._resolve_locations(samples)
+    na_mask = np.isnan(locs[:, 0])
+    loo_indices = [int(i) for i in np.where(~na_mask)[0]]
+    if len(loo_indices) < 2:
+        raise ValueError(
+            f"Leave-one-out needs >= 2 samples with known coordinates, got "
+            f"{len(loo_indices)}."
+        )
+
+    if window_stop is None:
+        window_stop = max(locator.positions)
+
+    from locator.data.windows import generate_genomic_windows
+
+    chromosomes = getattr(locator, "chromosomes", None)
+    windows = generate_genomic_windows(
+        positions=locator.positions,
+        chromosomes=chromosomes,
+        window_start=window_start,
+        window_size=window_size,
+        window_stop=window_stop,
+        respect_chromosomes=respect_chromosomes,
+        min_snps_per_window=locator.config.get("min_snps_per_window", 1),
+        verbose=verbose,
+    )
+
+    bw_calculated, bw_original = _precalculate_bandwidth(
+        locator,
+        locs[~na_mask],
+        f"windows_loo_n{len(loo_indices)}",
+        verbose,
+    )
+
+    chunk_path = _windows_loo_chunk_path(locator)
+    done_labels = _resume_completed_windows(chunk_path) if resume else set()
+    if done_labels and verbose:
+        print(
+            f"Resume: {len(done_labels)} / {len(windows)} windows already "
+            f"present in {chunk_path}; skipping those."
+        )
+
+    windows_to_run = _build_windows_to_run(windows, done_labels, locator.positions)
+
+    if verbose:
+        n_fits = len(windows_to_run) * len(loo_indices)
+        print(
+            f"LOO-per-window: {len(windows_to_run)} windows x {len(loo_indices)} "
+            f"samples = {n_fits} model fits."
+        )
+
+    if windows_to_run:
+        data_ref = ray.put(
+            {
+                "genotypes_array": genotypes,
+                "samples": samples,
+                "sample_data": sample_data,
+                "config": locator.config,
+                "loo_indices": loo_indices,
+            }
+        )
+
+        actors = make_window_loo_actors(
+            gpu_ids=gpu_ids,
+            gpu_fraction=gpu_fraction,
+            data_ref=data_ref,
+            gpu_mem_mb=gpu_mem_mb,
+        )
+        if verbose:
+            print(
+                f"Spawned {len(actors)} WindowLOOActor actors across GPUs "
+                f"{gpu_ids}; dispatching {len(windows_to_run)} windows "
+                f"(gpu_fraction={gpu_fraction})."
+            )
+
+        pool = ActorPool(actors)
+        start_time = time.time()
+
+        pbar = None
+        if verbose:
+            try:
+                from tqdm import tqdm
+
+                pbar = tqdm(total=len(windows_to_run), desc="Windows (LOO)")
+            except ImportError:
+                pass
+
+        completed = 0
+        for result in pool.map_unordered(
+            lambda actor, w: actor.run_window_loo.remote(
+                w["window_idx"],
+                w["window_label"],
+                w["window_chromosome"],
+                w["window_start"],
+                w["window_stop"],
+                w["snp_indices"],
+            ),
+            windows_to_run,
+        ):
+            if result["rows"]:
+                _append_window_to_chunks(
+                    chunk_path, result["window_label"], result["rows"]
+                )
+            completed += 1
+            if pbar is not None:
+                pbar.update(1)
+
+        if pbar is not None:
+            pbar.close()
+
+        total_time = time.time() - start_time
+        if verbose:
+            print(
+                f"\nCompleted {completed} windows in {total_time:.1f}s "
+                f"({total_time / max(completed, 1):.1f}s per window)."
+            )
+
+        for actor in actors:
+            ray.kill(actor)
+    elif verbose:
+        print("All windows already complete.")
+
+    _restore_bandwidth(locator, bw_calculated, bw_original)
+
+    if not return_df:
+        return None
+
+    if not os.path.exists(chunk_path):
+        if verbose:
+            print("Warning: No windows produced predictions.")
+        return None
+
+    wide = _pivot_window_chunks(chunk_path)
+    if wide is None:
+        if verbose:
+            print("Warning: No windows produced predictions.")
+        return None
+
+    if save_full_pred_matrix:
+        wide.to_csv(_windows_loo_output_path(locator), index=False)
 
     return wide
