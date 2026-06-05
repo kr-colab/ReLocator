@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import zarr
 
+from locator import _gl as _gl
 from locator import _microsat as _ms
 
 
@@ -137,8 +138,9 @@ class DataLoaderMixin:
           applies MAC/max_snps filters on the continuous values directly,
           skipping biallelic checks (which are not meaningful for continuous
           dosage). NaN values are silently dropped at the MAC filter —
-          callers should impute upstream (gl_to_locator.py site-mean fill
-          handles this for ANGSD beagle inputs).
+          callers should impute upstream. For GL inputs, use the native
+          loader (`load_genotypes(gl=..., bam_list=...)`) which performs
+          site-mean imputation inside the loader.
 
         Args:
             matrix_path: Path to tab-delimited matrix file containing genotype data.
@@ -161,8 +163,7 @@ class DataLoaderMixin:
             if not ((dosage >= 0.0) & (dosage <= 2.0)).all():
                 raise ValueError(
                     "Continuous-dosage matrix has values outside [0, 2]; "
-                    "expected expected-dosage encoding (e.g. from "
-                    "scripts/gl_to_locator.py)."
+                    "expected expected-dosage encoding."
                 )
             return dosage, samples
 
@@ -234,14 +235,82 @@ class DataLoaderMixin:
         samples = np.array(df.index, dtype=object)
         return dosage, samples
 
-    def load_genotypes(
+    def _load_from_gl(self, beagle_path, bam_list_path, gl_mode="dosage"):
+        """Load ANGSD genotype-likelihood data as a continuous-dosage matrix.
+
+        Reads an ANGSD ``-doGlf 2`` beagle.gz file plus a paired bam_list
+        (sample IDs derived from ``Path(bam).stem``). Returns a 2-D float32
+        matrix in the same shape ``_load_from_matrix`` produces for its
+        continuous-dosage branch, so downstream filtering dispatches through
+        the existing ``is_dosage_matrix`` path without further wiring.
+
+        Two modes:
+
+        - ``"dosage"`` (default): returns ``(n_sites_kept, n_samples)``.
+          Each value is expected dosage E[geno] = P(AB) + 2*P(BB) under a
+          flat prior. Missing samples (max GL < 0.4) are imputed with
+          site-mean dosage. Site filter: ``min_maf=0.01``,
+          ``max_missing_frac=0.10``.
+        - ``"full_gl"``: returns ``(3 * n_sites_kept, n_samples)``. Three
+          pseudo-rows per genomic site holding the AA / AB / BB GL
+          probabilities. Preserves genotype uncertainty information that
+          the dosage scalar collapses. Missing samples are imputed with the
+          per-site mean GL triplet.
+
+        Filter thresholds match those documented in the native GL loader
+        and are not currently surfaced as CLI flags.
+        """
+        if gl_mode not in ("dosage", "full_gl"):
+            raise ValueError(f"gl_mode must be 'dosage' or 'full_gl', got {gl_mode!r}")
+
+        sample_ids = _gl.sample_ids_from_bam_list(bam_list_path)
+        n_samples = len(sample_ids)
+
+        _markers, gl_flat = _gl.load_beagle(beagle_path)
+        _gl.validate_dimensions(gl_flat, n_samples, beagle_path, bam_list_path)
+        gl = _gl.reshape_gl(gl_flat, n_samples)
+
+        dosage = _gl.expected_dosage(gl)
+        missing_mask = _gl.detect_missing(gl, gl_missing_threshold=0.4)
+        dosage = _gl.impute_dosage_with_site_mean(dosage, missing_mask)
+
+        keep, _reasons = _gl.filter_sites(
+            dosage, missing_mask, min_maf=0.01, max_missing_frac=0.10
+        )
+        if not keep.any():
+            raise ValueError(
+                f"No sites passed the MAF/missingness filter "
+                f"(min_maf=0.01, max_missing_frac=0.10) on {beagle_path}."
+            )
+
+        if gl_mode == "dosage":
+            out = dosage[keep, :].astype(np.float32, copy=False)
+        else:  # full_gl
+            gl_imputed = _gl.impute_gl_with_site_mean(gl, missing_mask)
+            kept_gl = gl_imputed[keep, :, :]  # (n_kept, n_samples, 3)
+            # Reshape to (3 * n_kept, n_samples) with row order AA, AB, BB
+            # per site. transpose to (n_kept, 3, n_samples) then flatten the
+            # first two dims.
+            out = (
+                kept_gl.transpose(0, 2, 1)
+                .reshape(-1, n_samples)
+                .astype(np.float32, copy=False)
+            )
+
+        samples = np.array(sample_ids, dtype=object)
+        return out, samples
+
+    def load_genotypes(  # noqa: C901
         self,
         vcf=None,
         zarr=None,
         matrix=None,
         microsat=None,
         microsat_min_allele_freq=0.01,
-    ):  # noqa: C901
+        gl=None,
+        bam_list=None,
+        gl_mode="dosage",
+    ):
         """Load genotype data from various input sources.
 
         This method can load genotype data from:
@@ -250,6 +319,7 @@ class DataLoaderMixin:
         3. A zarr file (scikit-allel or bio2zarr format)
         4. A tab-delimited matrix file
         5. A tab-delimited microsatellite genotype table
+        6. ANGSD beagle GL file paired with a BAM list
 
         For windowed analysis, SNP positions must be available either from:
         - Column names in the genotype DataFrame
@@ -263,13 +333,22 @@ class DataLoaderMixin:
             microsat (str, optional): Path to tab-delimited microsatellite genotype table
             microsat_min_allele_freq (float, optional): Drop microsat alleles below
                 this per-locus frequency. Default 0.01.
+            gl (str, optional): Path to ANGSD ``-doGlf 2`` beagle.gz file
+            bam_list (str, optional): Path to BAM file list used in ANGSD run
+                (one path per line). Required when ``gl`` is provided.
+                Sample IDs are derived from ``Path(bam).stem``.
+            gl_mode (str): GL encoding mode, one of ``"dosage"`` (default) or
+                ``"full_gl"``. ``"dosage"`` returns one expected-dosage value
+                per site per sample; ``"full_gl"`` returns all three AA/AB/BB
+                GL probabilities as separate rows.
 
         Returns
         -------
             tuple: (genotypes, samples) where:
                 - genotypes is an allel.GenotypeArray of shape (n_sites, n_samples, 2)
                   for VCF/zarr/integer-matrix inputs, or a float32 ndarray of shape
-                  (n_sites, n_samples) for continuous-dosage (matrix float / microsat) inputs
+                  (n_sites, n_samples) for continuous-dosage inputs (matrix float,
+                  microsat, or GL)
                 - samples is a numpy array of sample IDs
 
         Examples
@@ -293,6 +372,11 @@ class DataLoaderMixin:
 
             >>> # Using microsatellite genotypes
             >>> genotypes, samples = locator.load_genotypes(microsat="path/to/microsats.tsv")
+
+            >>> # Using ANGSD genotype-likelihood file
+            >>> genotypes, samples = locator.load_genotypes(
+            ...     gl="output.beagle.gz", bam_list="bams.txt", gl_mode="dosage"
+            ... )
 
         Raises
         ------
@@ -346,10 +430,18 @@ class DataLoaderMixin:
                 microsat, min_allele_freq=microsat_min_allele_freq
             )
 
+        elif gl is not None:
+            if bam_list is None:
+                raise ValueError(
+                    "--gl / gl= requires a paired --bam_list / bam_list= "
+                    "to derive sample IDs from the ANGSD BAM filelist."
+                )
+            return self._load_from_gl(gl, bam_list, gl_mode=gl_mode)
+
         else:
             raise ValueError(
                 "No genotype data provided. Either initialize with genotype_data DataFrame "
-                "or provide vcf/zarr/matrix/microsat path."
+                "or provide vcf/zarr/matrix/microsat/gl path."
             )
 
     def sort_samples(self, samples=None, sample_data_file=None, reorder=True):  # noqa: C901
