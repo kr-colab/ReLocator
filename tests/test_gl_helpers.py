@@ -71,6 +71,26 @@ def test_load_beagle_empty_raises(tmp_path):
         _gl.load_beagle(beagle)
 
 
+def test_parse_markers_basic():
+    chroms, positions = _gl.parse_markers(["chr1_100", "chr1_200", "chr2_5"])
+    np.testing.assert_array_equal(chroms, np.array(["chr1", "chr1", "chr2"]))
+    np.testing.assert_array_equal(positions, np.array([100, 200, 5]))
+    assert positions.dtype == np.int64
+
+
+def test_parse_markers_underscore_in_chromosome():
+    # chromosome names may contain underscores; only the last is the separator.
+    chroms, positions = _gl.parse_markers(["scaffold_12_2039"])
+    assert list(chroms) == ["scaffold_12"]
+    assert list(positions) == [2039]
+
+
+@pytest.mark.parametrize("bad", [["chr1"], ["chr1_x"], ["chr1_100", "noUnderscore"]])
+def test_parse_markers_unparseable_raises(bad):
+    with pytest.raises(ValueError, match="Could not parse"):
+        _gl.parse_markers(bad)
+
+
 def test_validate_dimensions_pass():
     gl_flat = np.zeros((10, 9), dtype=np.float32)
     _gl.validate_dimensions(

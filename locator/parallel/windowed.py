@@ -20,6 +20,8 @@ import pandas as pd
 import ray
 from ray.util import ActorPool
 
+from locator.data.filters import is_dosage_matrix
+
 from ._actor import DEFAULT_GPU_MEM_MB, make_window_actors
 from ._helpers import (
     _ensure_ray_initialized,
@@ -263,9 +265,12 @@ def parallel_windows_holdouts(  # noqa: C901
         # Note: windowed analysis must materialize the full genotype array on
         # the actor because every window slices a different SNP subset; we
         # can't pre-filter to a small array as the other dispatchers do.
+        # Continuous-dosage (GL) input is a bare 2D ndarray with no ``.values``;
+        # ship it directly. Hard-call inputs are GenotypeArray/DataFrame-like.
+        genotypes_array = genotypes if is_dosage_matrix(genotypes) else genotypes.values
         data_ref = ray.put(
             {
-                "genotypes_array": genotypes.values,
+                "genotypes_array": genotypes_array,
                 "samples": samples,
                 "sample_data": sample_data,
                 "config": locator.config,

@@ -57,6 +57,41 @@ def load_beagle(beagle_path):
     return markers, gl_flat
 
 
+def parse_markers(markers):
+    """Parse beagle ``chrom_pos`` marker strings into chromosomes and positions.
+
+    ANGSD beagle ``marker`` entries encode the genomic site as
+    ``<chrom>_<pos>`` (e.g. ``chr01_2039``). Chromosome names may themselves
+    contain underscores (e.g. ``scaffold_12_2039``), so the split is on the
+    LAST underscore only.
+
+    Returns
+    -------
+    chromosomes : np.ndarray (object), length n_sites
+    positions : np.ndarray (int64), length n_sites
+    """
+    chroms = []
+    positions = []
+    bad = []
+    for m in markers:
+        chrom, sep, pos_str = m.rpartition("_")
+        if not sep:
+            bad.append(m)
+            continue
+        try:
+            positions.append(int(pos_str))
+        except ValueError:
+            bad.append(m)
+            continue
+        chroms.append(chrom)
+    if bad:
+        raise ValueError(
+            f"Could not parse {len(bad)} beagle marker(s) as 'chrom_pos'; "
+            f"first offenders: {bad[:10]}"
+        )
+    return np.array(chroms, dtype=object), np.array(positions, dtype=np.int64)
+
+
 def validate_dimensions(gl_flat, n_samples, beagle_path, bam_list_path):
     expected_cols = n_samples * 3
     if gl_flat.shape[1] != expected_cols:

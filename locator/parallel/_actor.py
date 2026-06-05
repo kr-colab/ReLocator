@@ -192,11 +192,18 @@ class WindowActor:
         self._locator = _create_worker_locator(self._data, "actor")
         self._base_out = self._data["config"]["out"]
 
-        # Materialise the full GenotypeArray once on the actor; window calls
-        # only slice ``window_snp_indices`` off it.
-        import allel
+        # Materialise the full genotypes once on the actor; window calls only
+        # slice ``window_snp_indices`` off it. Continuous-dosage (GL) input is a
+        # 2D float matrix and is kept as-is; hard calls become a GenotypeArray.
+        from locator.data.filters import is_dosage_matrix
 
-        self._genotypes = allel.GenotypeArray(self._data["genotypes_array"])
+        arr = self._data["genotypes_array"]
+        if is_dosage_matrix(arr):
+            self._genotypes = arr
+        else:
+            import allel
+
+            self._genotypes = allel.GenotypeArray(arr)
 
         loc = self._locator
         loc.genotypes = self._genotypes
