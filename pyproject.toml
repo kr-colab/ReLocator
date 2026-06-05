@@ -62,6 +62,7 @@ fast-vcf = [
 [project.scripts]
 locator = "locator.cli:main"
 vcf_to_zarr = "scripts.vcf_to_zarr:main"
+beagle_to_zarr = "scripts.beagle_to_zarr:main"
 
 [project.urls]
 Homepage = "https://github.com/kr-colab/ReLocator"
@@ -74,6 +75,9 @@ include = ["locator*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Put the repo root on sys.path so tests can import the `scripts` package
+# (e.g. scripts.beagle_to_zarr), which is not part of the installed wheel.
+pythonpath = ["."]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]

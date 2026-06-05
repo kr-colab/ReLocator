@@ -48,7 +48,9 @@ class DataLoaderMixin:
     def _load_from_zarr(self, zarr_path):
         """Load genotypes from zarr file.
 
-        Supports both scikit-allel format (calldata/GT, samples) and
+        Supports three layouts: a continuous-dosage store written by
+        ``beagle_to_zarr`` (a ``dosage`` array + ``variants/POS``/
+        ``variants/CHROM``), scikit-allel format (calldata/GT, samples), and
         VCF Zarr / bio2zarr format (call_genotype, sample_id).
 
         Args:
@@ -57,11 +59,25 @@ class DataLoaderMixin:
         Returns
         -------
             tuple: (genotypes, samples) where:
-                - genotypes is an allel.GenotypeArray containing genetic data
+                - genotypes is an allel.GenotypeArray for hard-call stores, or a
+                  2D float32 dosage ndarray (n_sites, n_samples) for dosage stores
                 - samples is a numpy array of sample IDs
         """
         print("reading zarr")
         callset = zarr.open_group(zarr_path, mode="r")
+
+        if "dosage" in callset or callset.attrs.get("locator_format") == "dosage":
+            # Continuous-dosage (GL) store. Return the 2D float matrix directly;
+            # positions/chromosomes come from the store so windowed analysis
+            # works through the same path as VCF/zarr hard-call input.
+            dosage = np.asarray(callset["dosage"][:], dtype=np.float32)
+            samples = np.array([str(x) for x in callset["samples"][:]], dtype=object)
+            self.positions = np.asarray(callset["variants/POS"][:])
+            self.chromosomes = np.array(
+                [str(x) for x in callset["variants/CHROM"][:]], dtype=object
+            )
+            self._report_variant_metadata()
+            return dosage, samples
 
         if "call_genotype" in callset:
             # bio2zarr / VCF Zarr format
