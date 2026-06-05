@@ -268,6 +268,83 @@ class WindowActor:
         }
 
 
+@ray.remote
+class WindowLOOActor:
+    """Ray actor for full leave-one-out within each genomic window.
+
+    Per window the dosage slice is filtered once, then every sample is held
+    out in turn and predicted by a model trained on the rest. Filtering once
+    and reusing the filtered matrix across folds keeps the SNP set identical
+    for every fold and lets ``train_holdout`` reuse the compiled model between
+    folds (only the weights are re-initialised). LOO is dosage-only, so the
+    full genotype matrix is a 2D float ndarray kept as-is.
+    """
+
+    def __init__(
+        self,
+        gpu_id: int,
+        gpu_fraction: float,
+        data_ref,
+        gpu_mem_mb: int = DEFAULT_GPU_MEM_MB,
+    ):
+        self._tf = _init_actor_runtime(gpu_id, gpu_fraction, gpu_mem_mb)
+        self._data: Dict[str, Any] = data_ref
+        self._locator = _create_worker_locator(self._data, "actor")
+        self._base_out = self._data["config"]["out"]
+        self._genotypes = self._data["genotypes_array"]
+
+    def ready(self) -> bool:
+        return True
+
+    def run_window_loo(
+        self,
+        window_idx: int,
+        window_label: str,
+        window_chromosome,
+        window_start: int,
+        window_stop: int,
+        snp_indices: List[int],
+    ) -> Dict[str, Any]:
+        empty = {
+            "window_idx": window_idx,
+            "window_label": window_label,
+            "window_chromosome": window_chromosome,
+            "window_start": window_start,
+            "window_stop": window_stop,
+            "rows": None,
+            "n_snps": 0,
+        }
+        if len(snp_indices) == 0:
+            return empty
+
+        loc = self._locator
+        # Filter the window's dosage rows once; reuse for every LOO fold.
+        window_dosage = self._genotypes[snp_indices, :]
+        filtered = loc._filter_genotypes(window_dosage)
+        if filtered.shape[0] == 0:
+            return empty
+
+        rows = []
+        for i in self._data["loo_indices"]:
+            loc.config["out"] = f"{self._base_out}_win{window_idx}_fold{i}"
+            loc.train_holdout(
+                genotypes=None,
+                samples=self._data["samples"],
+                holdout_indices=[i],
+                filtered_genotypes=filtered,
+            )
+            preds = loc.predict_holdout(
+                verbose=False,
+                return_df=True,
+                save_preds_to_disk=False,
+                plot_summary=False,
+                plot_map=False,
+            )
+            if preds is not None:
+                rows.extend(preds[["sampleID", "x_pred", "y_pred"]].to_dict("records"))
+        return {**empty, "rows": rows or None, "n_snps": int(filtered.shape[0])}
+
+
 def _spawn(actor_cls, gpu_ids, gpu_fraction, data_ref, gpu_mem_mb):
     """Spawn ``actor_cls`` instances pinned round-robin across ``gpu_ids``.
 
@@ -318,3 +395,10 @@ def make_ensemble_actors(gpu_ids, gpu_fraction, data_ref, gpu_mem_mb=DEFAULT_GPU
 def make_window_actors(gpu_ids, gpu_fraction, data_ref, gpu_mem_mb=DEFAULT_GPU_MEM_MB):
     """Spawn a pool of ``WindowActor`` actors."""
     return _spawn(WindowActor, gpu_ids, gpu_fraction, data_ref, gpu_mem_mb)
+
+
+def make_window_loo_actors(
+    gpu_ids, gpu_fraction, data_ref, gpu_mem_mb=DEFAULT_GPU_MEM_MB
+):
+    """Spawn a pool of ``WindowLOOActor`` actors."""
+    return _spawn(WindowLOOActor, gpu_ids, gpu_fraction, data_ref, gpu_mem_mb)
