@@ -137,6 +137,103 @@ def test_impute_gl_with_site_mean_fills_missing_triplet():
     np.testing.assert_allclose(out[0, 2], np.array([0.5, 0.5, 0.0]))
 
 
+def _impute_dosage_reference(dosage, missing_mask):
+    """Original per-site loop, kept here as the numerical reference."""
+    for i in range(dosage.shape[0]):
+        mask = missing_mask[i]
+        if not mask.any():
+            continue
+        present = dosage[i, ~mask]
+        dosage[i, mask] = present.mean() if present.size > 0 else 0.0
+    return dosage
+
+
+def _impute_gl_reference(gl, missing_mask):
+    """Original per-site loop, kept here as the numerical reference."""
+    for i in range(gl.shape[0]):
+        mask = missing_mask[i]
+        if not mask.any():
+            continue
+        present = gl[i, ~mask, :]
+        if present.size == 0:
+            gl[i, mask, :] = np.array([1.0 / 3, 1.0 / 3, 1.0 / 3], dtype=gl.dtype)
+        else:
+            gl[i, mask, :] = present.mean(axis=0)
+    return gl
+
+
+def test_impute_dosage_matches_reference_loop():
+    rng = np.random.default_rng(0)
+    dosage = rng.uniform(0.0, 2.0, size=(50, 8)).astype(np.float32)
+    missing = rng.random((50, 8)) < 0.3
+    missing[3, :] = True  # a fully-missing site exercises the 0.0 fallback
+    missing[7, :] = False  # a site with no missing samples is a no-op
+    got = _gl.impute_dosage_with_site_mean(dosage.copy(), missing)
+    expected = _impute_dosage_reference(dosage.copy(), missing)
+    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-6)
+
+
+def test_impute_gl_matches_reference_loop():
+    rng = np.random.default_rng(1)
+    gl = rng.dirichlet(np.ones(3), size=(50, 8)).astype(np.float32)
+    missing = rng.random((50, 8)) < 0.3
+    missing[3, :] = True  # fully-missing site exercises the [1/3,1/3,1/3] fallback
+    missing[7, :] = False  # no-missing site is a no-op
+    got = _gl.impute_gl_with_site_mean(gl.copy(), missing)
+    expected = _impute_gl_reference(gl.copy(), missing)
+    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-6)
+
+
+def test_impute_dosage_all_missing_site_falls_back_to_zero():
+    dosage = np.array([[5.0, 6.0, 7.0]], dtype=np.float32)
+    missing = np.array([[True, True, True]])
+    out = _gl.impute_dosage_with_site_mean(dosage, missing)
+    np.testing.assert_array_equal(out, np.zeros((1, 3), dtype=np.float32))
+
+
+def test_impute_gl_all_missing_site_falls_back_to_uniform():
+    gl = np.full((1, 3, 3), 9.0, dtype=np.float32)
+    missing = np.array([[True, True, True]])
+    out = _gl.impute_gl_with_site_mean(gl, missing)
+    np.testing.assert_allclose(out, np.full((1, 3, 3), 1.0 / 3, dtype=np.float32))
+
+
+def test_impute_dosage_mutates_in_place():
+    dosage = np.array([[0.0, 1.0, 2.0, 99.0]], dtype=np.float32)
+    missing = np.array([[False, False, False, True]])
+    out = _gl.impute_dosage_with_site_mean(dosage, missing)
+    assert out is dosage
+
+
+def test_impute_gl_mutates_in_place():
+    gl = np.zeros((1, 3, 3), dtype=np.float32)
+    missing = np.array([[False, False, True]])
+    out = _gl.impute_gl_with_site_mean(gl, missing)
+    assert out is gl
+
+
+def test_load_beagle_malformed_value_raises(tmp_path):
+    beagle = tmp_path / "bad.beagle.gz"
+    with gzip.open(beagle, "wt") as fh:
+        fh.write("marker\tallele1\tallele2\tInd0\tInd0\tInd0\n")
+        fh.write("chr1_0\tA\tC\t0.5\tnot_a_float\t0.2\n")
+    with pytest.raises(ValueError, match="Failed to parse"):
+        _gl.load_beagle(beagle)
+
+
+def test_load_beagle_uncompressed_plain_file(tmp_path):
+    """compression is inferred from the suffix, so a plain .beagle loads too."""
+    beagle = tmp_path / "out.beagle"
+    lines = ["marker\tallele1\tallele2\tInd0\tInd0\tInd0\tInd1\tInd1\tInd1"]
+    for i in range(4):
+        lines.append(f"chr1_{i}\tA\tC\t0.8\t0.1\t0.1\t0.2\t0.5\t0.3")
+    beagle.write_text("\n".join(lines) + "\n")
+    markers, gl_flat = _gl.load_beagle(beagle)
+    assert len(markers) == 4
+    assert gl_flat.shape == (4, 6)  # 2 samples * 3 GLs
+    assert gl_flat.dtype == np.float32
+
+
 def test_filter_sites_min_maf_drops_invariant():
     # site 0: all dosage = 0 → MAF = 0; site 1: 50/50 → MAF = 0.5
     dosage = np.array([[0.0, 0.0, 0.0], [0.0, 1.0, 2.0]], dtype=np.float32)
