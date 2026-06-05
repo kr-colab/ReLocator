@@ -167,3 +167,87 @@ def test_load_from_gl_all_sites_filtered_raises(tmp_path):
     loc = Locator({"sample_data": str(sample_data)})
     with pytest.raises(ValueError, match="[Nn]o sites"):
         loc.load_genotypes(gl=str(beagle), bam_list=str(bam_list))
+
+
+def test_load_from_gl_defaults_match_explicit_defaults(tmp_path):
+    """Calling with no threshold kwargs must equal passing the documented defaults."""
+    beagle = tmp_path / "out.beagle.gz"
+    bam_list = tmp_path / "bams.txt"
+    sample_data = tmp_path / "samples.tsv"
+    _write_synthetic_beagle(beagle, n_sites=30, n_samples=5, seed=7)
+    _write_bam_list(bam_list, [f"Ind{i}" for i in range(5)])
+    _write_sample_data(sample_data, [f"Ind{i}" for i in range(5)])
+
+    loc = Locator({"sample_data": str(sample_data)})
+    implicit, _ = loc.load_genotypes(gl=str(beagle), bam_list=str(bam_list))
+    explicit, _ = loc.load_genotypes(
+        gl=str(beagle),
+        bam_list=str(bam_list),
+        gl_missing_threshold=0.4,
+        gl_min_maf=0.01,
+        gl_max_missing_frac=0.10,
+    )
+    np.testing.assert_array_equal(implicit, explicit)
+
+
+@pytest.mark.parametrize(
+    "seed, permissive_kwargs, strict_kwargs, strictly_fewer",
+    [
+        # A higher gl_min_maf removes more low-frequency sites; with
+        # Dirichlet-uniform GLs the strict cutoff drops at least one.
+        (11, {"gl_min_maf": 0.0}, {"gl_min_maf": 0.4}, True),
+        # gl_missing_threshold=0.6 forces near-uniform GLs to count as missing
+        # so gl_max_missing_frac actually bites. Monotone, but not guaranteed
+        # to drop a site on this synthetic data, so only assert <=.
+        (
+            13,
+            {"gl_missing_threshold": 0.6, "gl_min_maf": 0.0, "gl_max_missing_frac": 1.0},
+            {"gl_missing_threshold": 0.6, "gl_min_maf": 0.0, "gl_max_missing_frac": 0.0},
+            False,
+        ),
+    ],
+)
+def test_load_from_gl_stricter_filter_drops_more_sites(
+    tmp_path, seed, permissive_kwargs, strict_kwargs, strictly_fewer
+):
+    """A stricter threshold keeps no more sites than a permissive one."""
+    beagle = tmp_path / "out.beagle.gz"
+    bam_list = tmp_path / "bams.txt"
+    sample_data = tmp_path / "samples.tsv"
+    _write_synthetic_beagle(beagle, n_sites=40, n_samples=6, seed=seed)
+    _write_bam_list(bam_list, [f"Ind{i}" for i in range(6)])
+    _write_sample_data(sample_data, [f"Ind{i}" for i in range(6)])
+
+    loc = Locator({"sample_data": str(sample_data)})
+    permissive, _ = loc.load_genotypes(
+        gl=str(beagle), bam_list=str(bam_list), **permissive_kwargs
+    )
+    strict, _ = loc.load_genotypes(
+        gl=str(beagle), bam_list=str(bam_list), **strict_kwargs
+    )
+    assert strict.shape[0] <= permissive.shape[0]
+    if strictly_fewer:
+        assert strict.shape[0] < permissive.shape[0]
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"gl_min_maf": -0.1}, "gl_min_maf"),
+        ({"gl_max_missing_frac": 2.0}, "gl_max_missing_frac"),
+        ({"gl_max_missing_frac": -0.5}, "gl_max_missing_frac"),
+        ({"gl_missing_threshold": -1.0}, "gl_missing_threshold"),
+        ({"gl_missing_threshold": 1.5}, "gl_missing_threshold"),
+    ],
+)
+def test_load_from_gl_out_of_range_thresholds_raise(tmp_path, kwargs, match):
+    beagle = tmp_path / "out.beagle.gz"
+    bam_list = tmp_path / "bams.txt"
+    sample_data = tmp_path / "samples.tsv"
+    _write_synthetic_beagle(beagle, n_sites=5, n_samples=3, seed=17)
+    _write_bam_list(bam_list, [f"Ind{i}" for i in range(3)])
+    _write_sample_data(sample_data, [f"Ind{i}" for i in range(3)])
+
+    loc = Locator({"sample_data": str(sample_data)})
+    with pytest.raises(ValueError, match=match):
+        loc.load_genotypes(gl=str(beagle), bam_list=str(bam_list), **kwargs)
