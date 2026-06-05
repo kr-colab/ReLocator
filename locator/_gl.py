@@ -7,10 +7,10 @@ and the `locator --gl ... --bam_list ... --gl_mode {dosage,full_gl}` CLI flags.
 
 from __future__ import annotations
 
-import gzip
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 
 def sample_ids_from_bam_list(bam_list_path):
@@ -35,22 +35,22 @@ def load_beagle(beagle_path):
               columns are GL triplets [AA, AB, BB] per sample.
     """
     print(f"Loading beagle file: {beagle_path}", flush=True)
-    rows = []
-    markers = []
-    open_fn = gzip.open if str(beagle_path).endswith(".gz") else open
-    with open_fn(beagle_path, "rt") as fh:
-        fh.readline()  # discard header
-        for line in fh:
-            fields = line.rstrip("\n").split("\t")
-            markers.append(fields[0])
-            rows.append(fields[3:])  # skip marker, allele1, allele2
-
-    if not rows:
+    # Columns are read positionally (header skipped) because the beagle header
+    # repeats each sample ID three times, which would otherwise need de-duping.
+    # Compression is inferred from the path suffix, so .gz and plain files both
+    # work without an explicit branch.
+    try:
+        df = pd.read_csv(beagle_path, sep="\t", header=None, skiprows=1)
+    except pd.errors.EmptyDataError:
+        raise ValueError(f"No data rows found in beagle file: {beagle_path}")
+    if df.empty:
         raise ValueError(f"No data rows found in beagle file: {beagle_path}")
 
+    markers = df.iloc[:, 0].astype(str).tolist()
     try:
-        gl_flat = np.array(rows, dtype=np.float32)
-    except ValueError as e:
+        # skip marker, allele1, allele2; the rest are GL triplets per sample.
+        gl_flat = df.iloc[:, 3:].to_numpy(dtype=np.float32)
+    except (ValueError, TypeError) as e:
         raise ValueError(f"Failed to parse beagle GL values as float32. Error: {e}")
 
     print(f"  Loaded {len(markers)} sites", flush=True)
@@ -86,26 +86,32 @@ def detect_missing(gl, gl_missing_threshold):
 
 def impute_dosage_with_site_mean(dosage, missing_mask):
     """Impute missing dosage values with site-mean across non-missing samples."""
-    for i in range(dosage.shape[0]):
-        mask = missing_mask[i]
-        if not mask.any():
-            continue
-        present = dosage[i, ~mask]
-        dosage[i, mask] = present.mean() if present.size > 0 else 0.0
+    present = ~missing_mask  # (n_sites, n_samples)
+    counts = present.sum(axis=1)  # (n_sites,)
+    # einsum zeroes the missing entries' contribution, so only present values
+    # enter the per-site sum (matching present.mean()).
+    sums = np.einsum("ij,ij->i", dosage, present.astype(dosage.dtype))
+    site_mean = np.zeros(dosage.shape[0], dtype=dosage.dtype)
+    nz = counts > 0
+    site_mean[nz] = sums[nz] / counts[nz]
+    # sites with no present sample keep site_mean = 0.0 (the loop's fallback).
+    dosage[missing_mask] = np.broadcast_to(site_mean[:, None], dosage.shape)[
+        missing_mask
+    ]
     return dosage
 
 
 def impute_gl_with_site_mean(gl, missing_mask):
     """Impute missing GL triplets with site-mean triplet across non-missing samples."""
-    for i in range(gl.shape[0]):
-        mask = missing_mask[i]
-        if not mask.any():
-            continue
-        present = gl[i, ~mask, :]
-        if present.size == 0:
-            gl[i, mask, :] = np.array([1.0 / 3, 1.0 / 3, 1.0 / 3], dtype=gl.dtype)
-        else:
-            gl[i, mask, :] = present.mean(axis=0)
+    present = ~missing_mask  # (n_sites, n_samples)
+    counts = present.sum(axis=1)  # (n_sites,)
+    sums = np.einsum("ijk,ij->ik", gl, present.astype(gl.dtype))  # (n_sites, 3)
+    # initialize to the uniform fallback so all-missing sites need no special case.
+    site_mean = np.full((gl.shape[0], gl.shape[2]), 1.0 / 3, dtype=gl.dtype)
+    nz = counts > 0
+    site_mean[nz] = sums[nz] / counts[nz][:, None]
+    mask3d = np.broadcast_to(missing_mask[:, :, None], gl.shape)
+    gl[mask3d] = np.broadcast_to(site_mean[:, None, :], gl.shape)[mask3d]
     return gl
 
 
