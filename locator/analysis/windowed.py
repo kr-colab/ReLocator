@@ -6,6 +6,7 @@ from tensorflow import keras
 from tqdm import tqdm
 
 from ..data import IndexSet, normalize_locs
+from ..data.filters import is_dosage_matrix
 
 
 class WindowedMixin:
@@ -89,7 +90,10 @@ class WindowedMixin:
         if len(windows) > 0:
             first_window_indices = windows[0]["indices"]
             if np.sum(first_window_indices) > 0:
-                window_genos = genotypes[first_window_indices, :, :]
+                if is_dosage_matrix(genotypes):
+                    window_genos = genotypes[first_window_indices, :]
+                else:
+                    window_genos = genotypes[first_window_indices, :, :]
                 self.train(genotypes=window_genos, samples=samples, na_action=na_action)
 
         # Create lists to store predictions
@@ -99,7 +103,10 @@ class WindowedMixin:
         for window in tqdm(windows):
             if window["n_snps"] > 0:
                 # Get genotypes for this window
-                window_genos = genotypes[window["indices"], :, :]
+                if is_dosage_matrix(genotypes):
+                    window_genos = genotypes[window["indices"], :]
+                else:
+                    window_genos = genotypes[window["indices"], :, :]
 
                 # Clear existing model and weights
                 self.model = None

@@ -289,7 +289,7 @@ class DataLoaderMixin:
         sample_ids = _gl.sample_ids_from_bam_list(bam_list_path)
         n_samples = len(sample_ids)
 
-        _markers, gl_flat = _gl.load_beagle(beagle_path)
+        markers, gl_flat = _gl.load_beagle(beagle_path)
         _gl.validate_dimensions(gl_flat, n_samples, beagle_path, bam_list_path)
         gl = _gl.reshape_gl(gl_flat, n_samples)
 
@@ -312,6 +312,14 @@ class DataLoaderMixin:
 
         if gl_mode == "dosage":
             out = dosage[keep, :].astype(np.float32, copy=False)
+            # Derive per-site positions/chromosomes from the kept beagle markers
+            # so windowed analysis has coordinates (1:1 with the dosage rows).
+            # full_gl emits 3 rows per site and cannot align to a single
+            # position array, so positions are left unset there.
+            chroms_all, pos_all = _gl.parse_markers(markers)
+            self.chromosomes = chroms_all[keep]
+            self.positions = pos_all[keep]
+            self._report_variant_metadata()
         else:  # full_gl
             gl_imputed = _gl.impute_gl_with_site_mean(gl, missing_mask)
             kept_gl = gl_imputed[keep, :, :]  # (n_kept, n_samples, 3)

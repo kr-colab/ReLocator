@@ -85,3 +85,60 @@ def test_parallel_windows_holdouts_cpu_smoke(small_data_with_positions):
     assert os.path.exists(chunk_path)
     chunks = pd.read_csv(chunk_path)
     assert chunks["window_label"].nunique() >= 1
+
+
+@pytest.fixture
+def small_dosage_with_positions(tmp_path):
+    """A 2D float dosage matrix (GL-style) with injected positions."""
+    rng = np.random.default_rng(0)
+    n_snps, n_samples = 100, 20
+    dosage = rng.uniform(0.0, 2.0, size=(n_snps, n_samples)).astype(np.float32)
+    samples = np.array([f"s{i}" for i in range(n_samples)], dtype=object)
+    sample_file = tmp_path / "samples.txt"
+    content = "sampleID\tx\ty\n"
+    for i, sid in enumerate(samples):
+        content += f"{sid}\t{float(i)}\t{float(i * 2)}\n"
+    sample_file.write_text(content)
+
+    config = {
+        "out": str(tmp_path / "win_dosage_test"),
+        "sample_data": str(sample_file),
+        "max_epochs": 2,
+        "patience": 1,
+        "batch_size": 4,
+        "width": 16,
+        "nlayers": 2,
+        "keras_verbose": 0,
+        "verbose_splits": False,
+        "holdout_no_intermediate_saves": True,
+        "save_fold_models": False,
+        "min_snps_per_window": 5,
+    }
+    loc = Locator(config)
+    loc.positions = np.arange(1, n_snps + 1) * 1000
+    return loc, dosage, samples, tmp_path
+
+
+@pytest.mark.slow
+def test_parallel_windows_holdouts_dosage_cpu_smoke(small_dosage_with_positions):
+    """GL dosage matrix flows through the parallel windowed path on CPU."""
+    loc, dosage, samples, tmp_path = small_dosage_with_positions
+    df = parallel_windows_holdouts(
+        locator=loc,
+        genotypes=dosage,  # bare 2D float ndarray, no .values
+        samples=samples,
+        window_start=0,
+        window_size=50_000,
+        respect_chromosomes=False,
+        holdout_indices=list(range(0, 4)),
+        gpu_ids=[],
+        gpu_fraction=0.0,
+        return_df=True,
+        save_full_pred_matrix=True,
+        verbose=False,
+    )
+    assert df is not None
+    assert "sampleID" in df.columns
+    x_cols = [c for c in df.columns if c.startswith("x_")]
+    y_cols = [c for c in df.columns if c.startswith("y_")]
+    assert len(x_cols) >= 1 and len(y_cols) == len(x_cols)

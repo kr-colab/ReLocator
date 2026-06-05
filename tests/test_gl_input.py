@@ -251,3 +251,99 @@ def test_load_from_gl_out_of_range_thresholds_raise(tmp_path, kwargs, match):
     loc = Locator({"sample_data": str(sample_data)})
     with pytest.raises(ValueError, match=match):
         loc.load_genotypes(gl=str(beagle), bam_list=str(bam_list), **kwargs)
+
+
+def _write_controlled_beagle(path: Path, rows: list[tuple[str, list[float]]]) -> None:
+    """Write a beagle with explicit marker names and GL triplets per sample.
+
+    Each row is (marker, flat_gl) where flat_gl is n_samples*3 values.
+    """
+    n_cols = len(rows[0][1])
+    n_samples = n_cols // 3
+    header = ["marker", "allele1", "allele2"]
+    for s in range(n_samples):
+        header += [f"Ind{s}", f"Ind{s}", f"Ind{s}"]
+    lines = ["\t".join(header)]
+    for marker, gl in rows:
+        lines.append("\t".join([marker, "A", "C"] + [f"{v:.6f}" for v in gl]))
+    with gzip.open(path, "wb") as fh:
+        fh.write(("\n".join(lines) + "\n").encode())
+
+
+def test_load_from_gl_dosage_sets_positions_for_kept_sites(tmp_path):
+    beagle = tmp_path / "out.beagle.gz"
+    bam_list = tmp_path / "bams.txt"
+    sample_data = tmp_path / "samples.tsv"
+    ids = ["Ind0", "Ind1", "Ind2"]
+    het = [0.0, 1.0, 0.0] * 3  # all-AB: dosage 1, MAF 0.5 -> kept
+    mono = [1.0, 0.0, 0.0] * 3  # all-AA: dosage 0, MAF 0 -> dropped
+    _write_controlled_beagle(
+        beagle,
+        [("chr1_10", het), ("chr1_20", het), ("chr1_30", mono), ("chr2_5", het)],
+    )
+    _write_bam_list(bam_list, ids)
+    _write_sample_data(sample_data, ids)
+
+    loc = Locator({"sample_data": str(sample_data)})
+    genotypes, _ = loc.load_genotypes(gl=str(beagle), bam_list=str(bam_list))
+
+    # site chr1_30 is monomorphic and filtered out; positions track kept sites.
+    assert loc.positions is not None
+    assert len(loc.positions) == genotypes.shape[0]
+    np.testing.assert_array_equal(loc.positions, np.array([10, 20, 5]))
+    np.testing.assert_array_equal(
+        np.asarray(loc.chromosomes), np.array(["chr1", "chr1", "chr2"], dtype=object)
+    )
+    assert 30 not in loc.positions
+
+
+def test_load_from_gl_full_gl_leaves_positions_unset(tmp_path):
+    beagle = tmp_path / "out.beagle.gz"
+    bam_list = tmp_path / "bams.txt"
+    sample_data = tmp_path / "samples.tsv"
+    _write_synthetic_beagle(beagle, n_sites=10, n_samples=4, seed=3)
+    _write_bam_list(bam_list, [f"Ind{i}" for i in range(4)])
+    _write_sample_data(sample_data, [f"Ind{i}" for i in range(4)])
+
+    loc = Locator({"sample_data": str(sample_data)})
+    loc.load_genotypes(gl=str(beagle), bam_list=str(bam_list), gl_mode="full_gl")
+    # full_gl emits 3 rows per site, so per-site positions cannot align 1:1.
+    assert getattr(loc, "positions", None) is None
+
+
+@pytest.mark.slow
+def test_run_windows_holdouts_on_gl_dosage(tmp_path):
+    """End-to-end: GL dosage flows through sequential windowed holdouts."""
+    beagle = tmp_path / "out.beagle.gz"
+    bam_list = tmp_path / "bams.txt"
+    sample_data = tmp_path / "samples.tsv"
+    ids = [f"Ind{i}" for i in range(8)]
+    _write_synthetic_beagle(beagle, n_sites=30, n_samples=8, seed=5)
+    _write_bam_list(bam_list, ids)
+    _write_sample_data(sample_data, ids)
+
+    loc = Locator(
+        {
+            "sample_data": str(sample_data),
+            "keras_verbose": 0,
+            "max_epochs": 2,
+            "patience": 1,
+            "out": str(tmp_path / "gl_win"),
+        }
+    )
+    genotypes, samples = loc.load_genotypes(gl=str(beagle), bam_list=str(bam_list))
+    assert loc.positions is not None  # set by the GL loader from markers
+
+    # positions are 0..29 (chr1_<i>), so a 10bp window yields multiple windows.
+    result = loc.run_windows_holdouts(
+        genotypes=genotypes,
+        samples=samples,
+        k=2,
+        window_size=10,
+        return_df=True,
+        save_full_pred_matrix=False,
+    )
+    assert result is not None
+    x_cols = [c for c in result.columns if c.startswith("x_")]
+    assert len(x_cols) > 0
+    assert len(result) == 2  # k holdout samples

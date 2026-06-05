@@ -817,7 +817,12 @@ class TrainingMixin:
         self.samples = samples
         self.index_set = index_set
 
-        window_genotypes = genotypes[window_snp_indices, :, :]
+        # Continuous-dosage (GL) input is 2D (n_sites, n_samples); hard calls
+        # are 3D (n_sites, n_samples, ploidy). Slice on the right rank.
+        if is_dosage_matrix(genotypes):
+            window_genotypes = genotypes[window_snp_indices, :]
+        else:
+            window_genotypes = genotypes[window_snp_indices, :, :]
         self._filter_genotypes(window_genotypes)
 
         # Store filtered data shape
