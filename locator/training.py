@@ -1092,7 +1092,13 @@ class TrainingMixin:
         # each batch is the split exactly once, and fix steps_per_epoch (there
         # is no natural epoch boundary under repeat()).
         train_batch = min(batch_size, n_train) if fast else batch_size
-        steps_per_epoch = max(1, n_train // train_batch) if fast else None
+        # ``train_batch`` is 0 only when the train split is empty; leave
+        # steps_per_epoch None so make_tf_dataset raises its clear "no samples"
+        # error instead of a ZeroDivisionError here.
+        if fast and train_batch:
+            steps_per_epoch = max(1, n_train // train_batch)
+        else:
+            steps_per_epoch = None
 
         train_dataset = make_tf_dataset(
             coordinates=normalized_locs,
