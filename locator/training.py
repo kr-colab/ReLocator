@@ -1086,22 +1086,24 @@ class TrainingMixin:
 
         fast = self.config.get("fast_fold_fit", fast_default)
         n_train = len(self.index_set.train)
-        # With repeat() there is no natural epoch boundary, so steps_per_epoch
-        # must be fixed; match the non-fast path's drop_remainder=True batching
-        # unless the split is smaller than a batch (then one partial batch).
-        drop_remainder = n_train >= batch_size
-        steps_per_epoch = max(1, n_train // batch_size) if fast else None
+        # Under repeat() the stream is infinite, so batch() always emits a full
+        # batch; a split smaller than batch_size would otherwise be padded with
+        # duplicate samples inside one batch. Cap the batch to the split size so
+        # each batch is the split exactly once, and fix steps_per_epoch (there
+        # is no natural epoch boundary under repeat()).
+        train_batch = min(batch_size, n_train) if fast else batch_size
+        steps_per_epoch = max(1, n_train // train_batch) if fast else None
 
         train_dataset = make_tf_dataset(
             coordinates=normalized_locs,
             index_set=self.index_set,
             split="train",
-            batch_size=batch_size,
+            batch_size=train_batch,
             sample_weights=(
                 self.sample_weights["sample_weights"] if self.sample_weights else None
             ),
             training=True,
-            drop_remainder=drop_remainder if fast else None,
+            drop_remainder=True if fast else None,
             repeat=fast,
         )
 

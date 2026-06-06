@@ -51,6 +51,30 @@ class TestMakeTFDataset:
         # 30 training samples / batch 10, drop_remainder defaults to training.
         assert batch_count == 2
 
+    def test_repeat_yields_full_unique_batches(self):
+        """repeat=True with batch==split size yields infinite, dup-free batches.
+
+        This is the contract the fast fold-fit path relies on: it caps the batch
+        to the split size so a split smaller than the default batch is not padded
+        with duplicate samples under repeat().
+        """
+        n_train = len(self.index_set.train)
+        dataset = make_tf_dataset(
+            coordinates=self.coordinates,
+            index_set=self.index_set,
+            split="train",
+            batch_size=n_train,
+            training=True,
+            prefetch=False,
+            drop_remainder=True,
+            repeat=True,
+        )
+        it = iter(dataset)
+        for _ in range(3):  # repeats indefinitely; each batch covers the split once
+            idx = next(it)[0].numpy()
+            assert idx.shape == (n_train,)
+            assert len(set(idx.tolist())) == n_train  # no duplicates within a batch
+
     def test_dataset_with_sample_weights(self):
         """Dataset yields (index, coordinate, weight) when weights are given."""
         train_size = len(self.index_set.train)
