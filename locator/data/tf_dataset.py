@@ -49,6 +49,7 @@ def make_tf_dataset(
     shuffle: bool = True,
     drop_remainder: Optional[bool] = None,
     prefetch: bool = True,
+    repeat: bool = False,
 ) -> tf.data.Dataset:
     """Create an index-based tf.data pipeline for training or validation.
 
@@ -69,6 +70,10 @@ def make_tf_dataset(
         drop_remainder: Whether to drop the final partial batch
             (defaults to the value of ``training``).
         prefetch: Whether to prefetch batches.
+        repeat: Whether to repeat the dataset indefinitely. Pair with a
+            ``steps_per_epoch`` on ``model.fit`` so one iterator serves the whole
+            run instead of being rebuilt every epoch (the per-epoch iterator
+            rebuild dominates wall time for tiny splits). Reshuffles each cycle.
 
     Returns
     -------
@@ -103,6 +108,10 @@ def make_tf_dataset(
         dataset = dataset.shuffle(
             buffer_size=len(indices), reshuffle_each_iteration=True
         )
+
+    if repeat:
+        # Repeat before batching so each cycle reshuffles then re-forms batches.
+        dataset = dataset.repeat()
 
     dataset = dataset.batch(batch_size, drop_remainder=drop_remainder)
 

@@ -187,11 +187,13 @@ class TestAnalysisTFData:
         # Create locator
         locator = Locator(basic_config)
 
-        # Test train_holdout
+        # Test train_holdout. The fast fold-fit path (default for holdouts)
+        # builds the train dataset via make_tf_dataset and computes validation
+        # with an on-device callback, so the train split still flows through the
+        # index-based pipeline here.
         locator.train_holdout(genotypes=genotypes, samples=samples, k=5)
 
-        # Should have been called at least twice (train and validation datasets)
-        assert call_count >= 2
+        assert call_count >= 1
 
         # Verify the calls included correct parameters. The index-based
         # pipeline carries coordinates and indices, not the genotype matrix.
@@ -201,6 +203,13 @@ class TestAnalysisTFData:
             assert "coordinates" in kwargs
             assert "index_set" in kwargs
             assert "split" in kwargs
+
+        # The standard (non-fast) path still builds both train and val datasets
+        # through make_tf_dataset.
+        call_count = 0
+        locator_slow = Locator({**basic_config, "fast_fold_fit": False})
+        locator_slow.train_holdout(genotypes=genotypes, samples=samples, k=5)
+        assert call_count >= 2
 
     # Leave-one-out test (separate due to special requirements)
     def test_leave_one_out_small_dataset(self, basic_config):

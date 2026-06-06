@@ -35,6 +35,42 @@ from .pca import compute_pca_projection_gram, scree_elbow
 from .sample_weights import weight_samples
 
 
+class _OnDeviceValLoss(keras.callbacks.Callback):
+    """Compute val_loss from a GPU-resident split without a tf.data pass.
+
+    Keras rebuilds the validation iterator every epoch; for the tiny holdout
+    splits used by k-fold / leave-one-out / windowed analysis that per-epoch
+    setup dominates wall time. This callback instead evaluates the validation
+    split with a single compiled call over on-device index/coordinate tensors
+    and writes the result into ``logs['val_loss']`` so the standard
+    EarlyStopping / ReduceLROnPlateau callbacks see it unchanged. It must run
+    before those callbacks (prepend it to the callback list).
+    """
+
+    def __init__(self, val_indices, val_coords, loss_fn):
+        super().__init__()
+        self._idx = tf.constant(np.asarray(val_indices, dtype=np.int32))
+        self._y = tf.constant(np.asarray(val_coords, dtype=np.float32))
+        self._loss_fn = loss_fn
+        self._compute = None
+
+    def on_train_begin(self, logs=None):
+        model, idx, y, loss_fn = self.model, self._idx, self._y, self._loss_fn
+
+        @tf.function
+        def compute():
+            pred = model(idx, training=False)
+            return tf.reduce_mean(
+                loss_fn(tf.cast(y, tf.float32), tf.cast(pred, tf.float32))
+            )
+
+        self._compute = compute
+
+    def on_epoch_end(self, epoch, logs=None):
+        if logs is not None:
+            logs["val_loss"] = float(self._compute())
+
+
 class TrainingMixin:
     """Mixin class providing training functionality for Locator."""
 
@@ -516,7 +552,9 @@ class TrainingMixin:
         else:
             callbacks = self._create_callbacks()
 
-        self._build_datasets_and_fit(normalized_locs, callbacks, keras_verbose=0)
+        self._build_datasets_and_fit(
+            normalized_locs, callbacks, keras_verbose=0, fast_default=True
+        )
         self._save_training_artifacts(save=self.config.get("save_fold_models", True))
         return self.history
 
@@ -861,7 +899,9 @@ class TrainingMixin:
             na_mask=index_set.na_mask,
         )
 
-        self._build_datasets_and_fit(normalized_locs, callbacks, keras_verbose=0)
+        self._build_datasets_and_fit(
+            normalized_locs, callbacks, keras_verbose=0, fast_default=True
+        )
         return self.history
 
     def _calculate_sample_weights(self, train_indices, train_locs=None):
@@ -1012,6 +1052,7 @@ class TrainingMixin:
         normalized_locs,
         callbacks,
         keras_verbose=None,
+        fast_default=False,
     ):
         """Build tf.data pipelines and train the model.
 
@@ -1019,10 +1060,20 @@ class TrainingMixin:
         and self.sample_weights to be set before calling. SNP resampling
         (site_order) is handled inside the model, not the dataset.
 
+        When the fast path is active (``fast_default=True`` from a fold/window
+        caller, or ``config['fast_fold_fit']`` set explicitly), the training
+        dataset is repeated with a fixed ``steps_per_epoch`` so one iterator
+        serves the whole run, and validation is computed by an on-device
+        callback instead of a per-epoch Keras validation pass. For the small
+        holdout splits these paths use this is ~tens-fold faster per epoch with
+        the same EarlyStopping / ReduceLROnPlateau behavior.
+
         Args:
             normalized_locs: Full normalized location array
             callbacks: List of Keras callbacks
             keras_verbose: Verbosity for model.fit (default: from config)
+            fast_default: Default for the fast fold-fit path when
+                ``config['fast_fold_fit']`` is not set.
 
         Returns
         -------
@@ -1033,31 +1084,72 @@ class TrainingMixin:
         if keras_verbose is None:
             keras_verbose = self.config.get("keras_verbose", 1)
 
+        fast = self.config.get("fast_fold_fit", fast_default)
+        n_train = len(self.index_set.train)
+        # Under repeat() the stream is infinite, so batch() always emits a full
+        # batch; a split smaller than batch_size would otherwise be padded with
+        # duplicate samples inside one batch. Cap the batch to the split size so
+        # each batch is the split exactly once, and fix steps_per_epoch (there
+        # is no natural epoch boundary under repeat()).
+        train_batch = min(batch_size, n_train) if fast else batch_size
+        # ``train_batch`` is 0 only when the train split is empty; leave
+        # steps_per_epoch None so make_tf_dataset raises its clear "no samples"
+        # error instead of a ZeroDivisionError here.
+        if fast and train_batch:
+            steps_per_epoch = max(1, n_train // train_batch)
+        else:
+            steps_per_epoch = None
+
         train_dataset = make_tf_dataset(
             coordinates=normalized_locs,
             index_set=self.index_set,
             split="train",
-            batch_size=batch_size,
+            batch_size=train_batch,
             sample_weights=(
                 self.sample_weights["sample_weights"] if self.sample_weights else None
             ),
             training=True,
+            drop_remainder=True if fast else None,
+            repeat=fast,
         )
 
-        val_dataset = make_tf_dataset(
-            coordinates=normalized_locs,
-            index_set=self.index_set,
-            split="test",
-            batch_size=batch_size,
-            training=False,
-        )
+        if fast:
+            val_idx = np.asarray(self.index_set.get_split("test"))
+            val_callback = _OnDeviceValLoss(
+                val_indices=val_idx,
+                val_coords=normalized_locs[val_idx],
+                loss_fn=getattr(self, "_loss_fn", None) or euclidean_distance_loss,
+            )
+            callbacks = [val_callback, *callbacks]
+            val_dataset = None
+        else:
+            val_dataset = make_tf_dataset(
+                coordinates=normalized_locs,
+                index_set=self.index_set,
+                split="test",
+                batch_size=batch_size,
+                training=False,
+            )
 
         self.history = self._fit_model(
-            self.model, train_dataset, val_dataset, callbacks, keras_verbose
+            self.model,
+            train_dataset,
+            val_dataset,
+            callbacks,
+            keras_verbose,
+            steps_per_epoch=steps_per_epoch,
         )
         return self.history
 
-    def _fit_model(self, model, train_dataset, val_dataset, callbacks, keras_verbose):
+    def _fit_model(
+        self,
+        model,
+        train_dataset,
+        val_dataset,
+        callbacks,
+        keras_verbose,
+        steps_per_epoch=None,
+    ):
         """Fit a model, running a two-phase PCA fine-tune when enabled.
 
         With ``pca_components`` set and ``pca_finetune`` true: phase 1 trains
@@ -1088,6 +1180,7 @@ class TrainingMixin:
             validation_data=val_dataset,
             callbacks=callbacks,
             verbose=keras_verbose,
+            steps_per_epoch=steps_per_epoch,
         )
 
         pca_components = self.config.get("pca_components")
@@ -1106,6 +1199,7 @@ class TrainingMixin:
             validation_data=val_dataset,
             callbacks=callbacks,
             verbose=keras_verbose,
+            steps_per_epoch=steps_per_epoch,
         )
         return self._concat_histories(history, history2)
 
