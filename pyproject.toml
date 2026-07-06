@@ -34,7 +34,7 @@ dependencies = [
     "rasterstats",
     "shapely",
     "affine",
-    "numba>=0.59",
+    "numba>=0.66.0",
 ]
 
 [project.optional-dependencies]
