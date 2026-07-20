@@ -52,8 +52,8 @@ docs = [
     "sphinx-autobuild",
 ]
 ray = [
-    "ray[train]>=2.54.1",
-    "ray[data]>=2.54.1",
+    "ray[train]>=2.56.1",
+    "ray[data]>=2.56.1",
 ]
 fast-vcf = [
     "bio2zarr[vcf]",
